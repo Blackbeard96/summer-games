@@ -1,0 +1,121 @@
+/**
+ * MST Design Tokens — Masters of Space & Time
+ * Dark fantasy academy + cosmic RPG HUD.
+ * Prefer these variables over hard-coded hex in new UI.
+ */
+
+:root {
+  /* Backgrounds */
+  --mst-bg-primary: #05070d;
+  --mst-bg-secondary: #090d16;
+  --mst-bg-panel: #0e1420;
+  --mst-bg-elevated: #111827;
+  --mst-bg-overlay: rgba(5, 7, 13, 0.72);
+  --mst-bg-hero-overlay: linear-gradient(
+    105deg,
+    rgba(5, 7, 13, 0.88) 0%,
+    rgba(5, 7, 13, 0.55) 48%,
+    rgba(5, 7, 13, 0.35) 100%
+  );
+
+  /* Gold (prestige) */
+  --mst-gold: #d4a84f;
+  --mst-gold-bright: #f0c96a;
+  --mst-gold-muted: #8e6b31;
+  --mst-gold-soft: rgba(212, 168, 79, 0.16);
+
+  /* Purple (mystical / Manifest) */
+  --mst-purple: #6d3ef2;
+  --mst-purple-bright: #8b5cf6;
+  --mst-purple-muted: #4c1d95;
+  --mst-purple-soft: rgba(109, 62, 242, 0.18);
+
+  /* Text */
+  --mst-text-primary: #f4f0e6;
+  --mst-text-secondary: #d1d5db;
+  --mst-text-muted: #8e98a8;
+
+  /* Borders */
+  --mst-border: rgba(142, 152, 168, 0.22);
+  --mst-border-gold: rgba(212, 168, 79, 0.45);
+  --mst-border-purple: rgba(139, 92, 246, 0.4);
+
+  /* Semantic */
+  --mst-success: #3d9b6e;
+  --mst-danger: #c44b4b;
+  --mst-warning: #d4a84f;
+  --mst-info: #3b82c4;
+
+  /* Elements (accent only) */
+  --mst-element-fire: #e85d3a;
+  --mst-element-water: #3aa8d4;
+  --mst-element-earth: #5a9e5a;
+  --mst-element-air: #b8c5d6;
+  --mst-element-lightning: #e8c547;
+  --mst-element-light: #f5efd8;
+  --mst-element-shadow: #7c3aed;
+  --mst-element-metal: #c9b896;
+
+  /* Rarity */
+  --mst-rarity-common: #8e98a8;
+  --mst-rarity-uncommon: #3d9b6e;
+  --mst-rarity-rare: #3b82c4;
+  --mst-rarity-epic: #8b5cf6;
+  --mst-rarity-legendary: #d4a84f;
+  --mst-rarity-mythic: #f0c96a;
+
+  /* Typography */
+  --mst-font-display: 'Cinzel', 'Times New Roman', Georgia, serif;
+  --mst-font-body: 'Outfit', system-ui, -apple-system, sans-serif;
+  --mst-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  --mst-tracking-label: 0.12em;
+  --mst-tracking-title: 0.04em;
+
+  /* Spacing */
+  --mst-space-1: 0.25rem;
+  --mst-space-2: 0.5rem;
+  --mst-space-3: 0.75rem;
+  --mst-space-4: 1rem;
+  --mst-space-5: 1.5rem;
+  --mst-space-6: 2rem;
+  --mst-space-8: 3rem;
+
+  /* Radius — squared / premium, not bubbly */
+  --mst-radius-sm: 4px;
+  --mst-radius-md: 8px;
+  --mst-radius-lg: 12px;
+  --mst-radius-xl: 16px;
+
+  /* Shadows & glow (restrained) */
+  --mst-shadow-panel: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --mst-shadow-elevated: 0 12px 40px rgba(0, 0, 0, 0.55);
+  --mst-glow-gold: 0 0 20px rgba(212, 168, 79, 0.22);
+  --mst-glow-purple: 0 0 20px rgba(109, 62, 242, 0.25);
+  --mst-glow-selected: 0 0 0 1px rgba(212, 168, 79, 0.55), 0 0 18px rgba(212, 168, 79, 0.2);
+
+  /* Motion */
+  --mst-duration-fast: 150ms;
+  --mst-duration: 200ms;
+  --mst-duration-slow: 250ms;
+  --mst-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Layout */
+  --mst-nav-height: 64px;
+  /* Vault / Battle HUD semantics */
+  --mst-vault-bg: #080c14;
+  --mst-vault-panel: rgba(5, 10, 18, 0.92);
+  --mst-vault-panel-border: rgba(212, 168, 79, 0.4);
+  --mst-power: #d4a84f;
+  --mst-health: #c44b4b;
+  --mst-shield: #3aa8d4;
+  --mst-track: #141a24;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --mst-duration-fast: 0ms;
+    --mst-duration: 0ms;
+    --mst-duration-slow: 0ms;
+  }
+}

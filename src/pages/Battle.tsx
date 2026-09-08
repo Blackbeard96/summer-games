@@ -31,11 +31,14 @@ const BATTLE_ARENA_MAIN_TABS: ReadonlyArray<{
   label: string;
   icon: string;
   description: string;
+  /** CSS accent modifier for inactive outline / hover */
+  accent: 'battle' | 'vault' | 'moves' | 'cards';
 }> = [
   {
     id: 'battle',
     label: 'Player Battle',
     icon: '⚔️',
+    accent: 'battle',
     description:
       'Start PvP, vault siege, or practice. View your vault row, Live Battle toggle, PP sync, recent battle history, and quick-action cards—all in one place.',
   },
@@ -43,6 +46,7 @@ const BATTLE_ARENA_MAIN_TABS: ReadonlyArray<{
     id: 'vault',
     label: 'Vault Management',
     icon: '🏦',
+    accent: 'vault',
     description:
       'Upgrade vault PP capacity, health, shields, and related systems. Spend Power Points to toughen your vault before fights.',
   },
@@ -50,6 +54,7 @@ const BATTLE_ARENA_MAIN_TABS: ReadonlyArray<{
     id: 'moves',
     label: 'Skills & Mastery',
     icon: '🎯',
+    accent: 'moves',
     description:
       'Manage Manifest and elemental moves: level skills with PP, unlock new abilities, Mindforge tweaks, and keep your combat loadout ready.',
   },
@@ -57,6 +62,7 @@ const BATTLE_ARENA_MAIN_TABS: ReadonlyArray<{
     id: 'cards',
     label: 'Action Cards',
     icon: '🃏',
+    accent: 'cards',
     description:
       'Configure action cards—buffs, heals, shields, and other effects—to use across battles and sharpen your toolkit.',
   },
@@ -463,34 +469,34 @@ const Battle: React.FC = () => {
   };
 
   return (
-    <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '2rem' }}>
+    <div
+      className="mst-battle-page"
+      style={{
+        maxWidth: '1200px',
+        margin: '0 auto',
+        padding: '1.5rem 1rem 2.5rem',
+        color: 'var(--mst-text-primary)',
+      }}
+    >
       <div style={{ 
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        color: 'white',
-        padding: '2rem',
-        borderRadius: '1rem',
-        marginBottom: '2rem',
-        textAlign: 'center'
+        background: 'linear-gradient(135deg, rgba(14,20,32,0.95) 0%, rgba(9,13,22,0.98) 100%)',
+        color: 'var(--mst-text-primary)',
+        padding: '1.75rem 1.5rem',
+        borderRadius: 'var(--mst-radius-lg)',
+        marginBottom: '1.5rem',
+        textAlign: 'center',
+        border: '1px solid var(--mst-border-gold)',
+        boxShadow: 'var(--mst-shadow-panel)',
       }}>
-        <h1 style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>⚔️ MST Battle Arena</h1>
-        <p style={{ fontSize: '1.1rem', opacity: 0.9, marginBottom: '1rem' }}>
-          "Master Space & Time" — Fight with your Manifest in the Now
-        </p>
-        <button
-          onClick={() => forceMigration(false)}
-          style={{
-            background: '#059669',
-            color: 'white',
-            border: 'none',
-            padding: '0.75rem 1.5rem',
-            borderRadius: '0.5rem',
-            fontSize: '0.875rem',
-            fontWeight: 'bold',
-            cursor: 'pointer'
-          }}
+        <h1
+          className="mst-display"
+          style={{ fontSize: 'clamp(1.75rem, 3vw, 2.35rem)', marginBottom: '0.5rem', color: 'var(--mst-gold-bright)' }}
         >
-          🔧 Force Migration (Update Cards)
-        </button>
+          ⚔️ MST Battle Arena
+        </h1>
+        <p style={{ fontSize: '1.05rem', color: 'var(--mst-text-secondary)', marginBottom: 0 }}>
+          Master Space & Time — Fight with your Manifest in the Now
+        </p>
       </div>
 
       {safeReturnMissionPath && (
@@ -562,15 +568,16 @@ const Battle: React.FC = () => {
       {/* Navigation Tabs */}
       <div style={{ 
         display: 'flex', 
-        borderBottom: '2px solid #e5e7eb',
-        marginBottom: '2rem',
+        borderBottom: '1px solid var(--mst-border-gold)',
+        marginBottom: '1.5rem',
         alignItems: 'center',
-        justifyContent: 'space-between'
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '0.75rem',
       }}>
-        <div style={{ display: 'flex' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap' }}>
           {BATTLE_ARENA_MAIN_TABS.map((tab) => {
             const isActive = activeTab === tab.id;
-            const isHovered = hoveredArenaTabId === tab.id && !isActive;
             const tabFocused = focusedArenaTabId === tab.id;
             const showTabTip = hoveredArenaTabId === tab.id || tabFocused;
             return (
@@ -590,25 +597,13 @@ const Battle: React.FC = () => {
                   onFocus={() => setFocusedArenaTabId(tab.id)}
                   onBlur={() => setFocusedArenaTabId(null)}
                   onClick={() => setActiveTab(tab.id as typeof activeTab)}
-                  style={{
-                    background: isActive ? '#4f46e5' : isHovered ? '#eef2ff' : 'transparent',
-                    color: isActive ? 'white' : isHovered ? '#4338ca' : '#6b7280',
-                    border: 'none',
-                    borderRadius: '0.5rem 0.5rem 0 0',
-                    padding: '1rem 1.5rem',
-                    fontSize: '1rem',
-                    fontWeight: 'bold',
-                    cursor: 'pointer',
-                    borderBottom: isActive ? '2px solid #4f46e5' : '2px solid transparent',
-                    transition: 'background 0.2s ease, color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease',
-                    transform: isHovered || isActive ? 'translateY(-1px)' : 'translateY(0)',
-                    boxShadow:
-                      isHovered && !isActive
-                        ? '0 6px 16px rgba(79, 70, 229, 0.18)'
-                        : isActive
-                          ? '0 2px 10px rgba(79, 70, 229, 0.25)'
-                          : 'none',
-                  }}
+                  className={[
+                    'mst-battle-tab',
+                    `mst-battle-tab--${tab.accent}`,
+                    isActive ? 'mst-battle-tab--active' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
                 >
                   {tab.icon} {tab.label}
                 </button>
@@ -648,44 +643,34 @@ const Battle: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'stretch', gap: '0.65rem', marginRight: '1rem', flexWrap: 'wrap' }}>
             {vault ? (
               <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  padding: '0.75rem 1.5rem',
-                  background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-                  borderRadius: '0.5rem',
-                  border: '2px solid #f59e0b',
-                }}
+                className="mst-resource-chip mst-interactive-card mst-card--power"
+                tabIndex={0}
               >
-                <span style={{ fontSize: '1.5rem' }}>⚡</span>
+                <span style={{ fontSize: '1.35rem' }} aria-hidden>
+                  ⚡
+                </span>
                 <div>
-                  <div style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: '500' }}>POWER POINTS</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#78350f' }}>
+                  <div className="mst-resource-label">Power Points</div>
+                  <div className="mst-resource-value">
                     {vault.currentPP?.toLocaleString() || 0} / {vault.capacity?.toLocaleString() || 0}
                   </div>
                 </div>
               </div>
             ) : null}
             <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-                padding: '0.75rem 1.25rem',
-                background: 'linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%)',
-                borderRadius: '0.5rem',
-                border: '2px solid #6366f1',
-              }}
+              className="mst-resource-chip mst-interactive-card mst-card--truth"
+              tabIndex={0}
             >
-              <span style={{ fontSize: '1.35rem' }} aria-hidden>
+              <span style={{ fontSize: '1.25rem' }} aria-hidden>
                 💎
               </span>
               <div>
-                <div style={{ fontSize: '0.75rem', color: '#3730a3', fontWeight: '600' }}>TRUTH METAL</div>
-                <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#312e81' }}>
+                <div className="mst-resource-label">Truth Metal</div>
+                <div className="mst-resource-value">
                   {truthMetalShards.toLocaleString()}{' '}
-                  <span style={{ fontWeight: 600, fontSize: '0.8rem' }}>shards</span>
+                  <span style={{ fontWeight: 600, fontSize: '0.8rem', color: 'var(--mst-text-muted)' }}>
+                    shards
+                  </span>
                 </div>
               </div>
             </div>
@@ -694,210 +679,76 @@ const Battle: React.FC = () => {
       </div>
 
       {/* Battle Arena Instructions */}
-      <div style={{ 
-        background: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)',
-        border: '2px solid #3b82f6',
-        borderRadius: '0.75rem',
-        padding: '1.5rem',
-        marginBottom: '2rem'
-      }}>
-        <h3 style={{ 
-          fontSize: '1.25rem', 
-          fontWeight: 'bold', 
-          marginBottom: '1rem',
-          color: '#1e40af',
-          textAlign: 'center'
-        }}>
-          🎯 Battle Arena Instructions
+      <section className="mst-battle-instructions" aria-label="Battle Arena Instructions">
+        <h3 className="mst-battle-instructions-title">
+          <span aria-hidden>🎯</span> Battle Arena Instructions
         </h3>
         
         {activeTab === 'moves' ? (
-          // Skills & Mastery Instructions
-          <div style={{ 
-            background: 'rgba(255, 255, 255, 0.7)',
-            padding: '1.5rem',
-            borderRadius: '0.5rem',
-            border: '1px solid #93c5fd'
-          }}>
-            <div style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              gap: '0.5rem',
-              marginBottom: '1rem'
-            }}>
-              <span style={{ fontSize: '1.5rem' }}>🎯</span>
-              <strong style={{ color: '#1e40af', fontSize: '1.1rem' }}>Skills & Mastery</strong>
+          <div className="mst-battle-info-grid">
+            <div className="mst-battle-info-card mst-interactive-card mst-card--manifest" tabIndex={0}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                <span style={{ fontSize: '1.2rem' }} aria-hidden>⚡</span>
+                <h4>Manage Skills</h4>
+              </div>
+              <p>
+                In this section, players can manage and upgrade their Manifest and Elemental Moves.
+              </p>
             </div>
-            <div style={{ 
-              display: 'grid', 
-              gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', 
-              gap: '1rem',
-              marginBottom: '1rem'
-            }}>
-              <div style={{ 
-                background: 'rgba(255, 255, 255, 0.5)',
-                padding: '1rem',
-                borderRadius: '0.5rem',
-                border: '1px solid #bfdbfe'
-              }}>
-                <div style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '0.5rem',
-                  marginBottom: '0.5rem'
-                }}>
-                  <span style={{ fontSize: '1.2rem' }}>⚡</span>
-                  <strong style={{ color: '#1e40af' }}>Manage Skills</strong>
-                </div>
-                <p style={{ 
-                  fontSize: '0.875rem', 
-                  color: '#1e40af',
-                  margin: 0,
-                  lineHeight: '1.4'
-                }}>
-                  In this section, players can manage and upgrade their Manifest and Elemental Moves.
-                </p>
+            <div className="mst-battle-info-card mst-interactive-card mst-card--power" tabIndex={0}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                <span style={{ fontSize: '1.2rem' }} aria-hidden>📈</span>
+                <h4>Level Up</h4>
               </div>
-              
-              <div style={{ 
-                background: 'rgba(255, 255, 255, 0.5)',
-                padding: '1rem',
-                borderRadius: '0.5rem',
-                border: '1px solid #bfdbfe'
-              }}>
-                <div style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '0.5rem',
-                  marginBottom: '0.5rem'
-                }}>
-                  <span style={{ fontSize: '1.2rem' }}>📈</span>
-                  <strong style={{ color: '#1e40af' }}>Level Up</strong>
-                </div>
-                <p style={{ 
-                  fontSize: '0.875rem', 
-                  color: '#1e40af',
-                  margin: 0,
-                  lineHeight: '1.4'
-                }}>
-                  Use PP to level up your moves and increase their power and effectiveness.
-                </p>
+              <p>
+                Use PP to level up your moves and increase their power and effectiveness.
+              </p>
+            </div>
+            <div className="mst-battle-info-card mst-interactive-card mst-card--support" tabIndex={0}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                <span style={{ fontSize: '1.2rem' }} aria-hidden>🛒</span>
+                <h4>Purchase New</h4>
               </div>
-              
-              <div style={{ 
-                background: 'rgba(255, 255, 255, 0.5)',
-                padding: '1rem',
-                borderRadius: '0.5rem',
-                border: '1px solid #bfdbfe'
-              }}>
-                <div style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '0.5rem',
-                  marginBottom: '0.5rem'
-                }}>
-                  <span style={{ fontSize: '1.2rem' }}>🛒</span>
-                  <strong style={{ color: '#1e40af' }}>Purchase New</strong>
-                </div>
-                <p style={{ 
-                  fontSize: '0.875rem', 
-                  color: '#1e40af',
-                  margin: 0,
-                  lineHeight: '1.4'
-                }}>
-                  Use PP to also purchase new moves and expand your combat arsenal.
-                </p>
-              </div>
+              <p>
+                Use PP to also purchase new moves and expand your combat arsenal.
+              </p>
             </div>
           </div>
         ) : (
-          // Default Battle Mode Instructions
-          <div style={{ 
-            display: 'grid', 
-            gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', 
-            gap: '1rem' 
-          }}>
-            <div style={{ 
-              background: 'rgba(255, 255, 255, 0.7)',
-              padding: '1rem',
-              borderRadius: '0.5rem',
-              border: '1px solid #93c5fd'
-            }}>
-              <div style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '0.5rem',
-                marginBottom: '0.5rem'
-              }}>
-                <span style={{ fontSize: '1.2rem' }}>⚔️</span>
-                <strong style={{ color: '#1e40af' }}>Player Battles</strong>
+          <div className="mst-battle-info-grid">
+            <div className="mst-battle-info-card mst-interactive-card mst-card--attack" tabIndex={0}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                <span style={{ fontSize: '1.2rem' }} aria-hidden>⚔️</span>
+                <h4>Player Battles</h4>
               </div>
-              <p style={{ 
-                fontSize: '0.875rem', 
-                color: '#1e40af',
-                margin: 0,
-                lineHeight: '1.4'
-              }}>
+              <p>
                 Engage in epic player battles with classmates! Choose from PvP battles, vault siege, or practice mode to hone your skills.
               </p>
             </div>
-            
-            <div style={{ 
-              background: 'rgba(255, 255, 255, 0.7)',
-              padding: '1rem',
-              borderRadius: '0.5rem',
-              border: '1px solid #93c5fd'
-            }}>
-              <div style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '0.5rem',
-                marginBottom: '0.5rem'
-              }}>
-                <span style={{ fontSize: '1.2rem' }}>📊</span>
-                <strong style={{ color: '#1e40af' }}>Battle Dashboard</strong>
+            <div className="mst-battle-info-card mst-interactive-card mst-card--dashboard" tabIndex={0}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                <span style={{ fontSize: '1.2rem' }} aria-hidden>📊</span>
+                <h4>Battle Dashboard</h4>
               </div>
-              <p style={{ 
-                fontSize: '0.875rem', 
-                color: '#1e40af',
-                margin: 0,
-                lineHeight: '1.4'
-              }}>
+              <p>
                 Monitor your vault stats, battle history, and quick actions all in one place. Manage your Power Points, shields, and battle skills efficiently.
               </p>
             </div>
           </div>
         )}
         
-        <div style={{ 
-          marginTop: '1rem',
-          padding: '0.75rem',
-          background: 'rgba(255, 255, 255, 0.5)',
-          borderRadius: '0.5rem',
-          border: '1px solid #93c5fd'
-        }}>
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            gap: '0.5rem',
-            marginBottom: '0.5rem'
-          }}>
-            <span style={{ fontSize: '1rem' }}>💡</span>
-            <strong style={{ color: '#1e40af', fontSize: '0.875rem' }}>Tip:</strong>
+        <div className="mst-battle-tip">
+          <div className="mst-battle-tip-title">
+            <span aria-hidden>💡</span> Tip
           </div>
-          <p style={{ 
-            fontSize: '0.8rem', 
-            color: '#1e40af',
-            margin: 0,
-            lineHeight: '1.4'
-          }}>
+          <p>
             {activeTab === 'moves' 
               ? 'Focus on upgrading your most powerful skills first, then expand your skill collection to have more strategic options in battle!'
               : 'Monitor your vault stats and battle history to track your progress. Use quick actions to enhance your abilities before engaging in player battles!'
             }
           </p>
         </div>
-      </div>
+      </section>
 
       {/* Tab Content */}
       <div style={{ minHeight: '400px' }}>
@@ -922,9 +773,11 @@ const Battle: React.FC = () => {
                 <h2 style={{
                   fontSize: '1.75rem',
                   fontWeight: 'bold',
-                  color: '#1f2937',
+                  color: 'var(--mst-gold-bright)',
                   marginBottom: '1.5rem',
-                  textAlign: 'center'
+                  textAlign: 'center',
+                  fontFamily: 'var(--mst-font-display)',
+                  letterSpacing: '0.04em',
                 }}>
                   Battle Modes
                 </h2>
@@ -1828,12 +1681,15 @@ const Battle: React.FC = () => {
                   }}
                   onMouseEnter={(e) => {
                     if (card.unlocked) {
-                      e.currentTarget.style.transform = 'translateY(-8px) scale(1.02)';
-                      e.currentTarget.style.boxShadow = '0 20px 40px -10px rgba(0, 0, 0, 0.4)';
+                      const accent = getRarityColor();
+                      e.currentTarget.style.transform = 'translateY(-3px)';
+                      e.currentTarget.style.borderColor = accent;
+                      e.currentTarget.style.boxShadow = `0 0 0 1px ${accent}33, 0 8px 28px ${accent}40`;
                     }
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.borderColor = '#ffffff';
                     e.currentTarget.style.boxShadow = '0 10px 25px -5px rgba(0, 0, 0, 0.3)';
                   }}>
                     

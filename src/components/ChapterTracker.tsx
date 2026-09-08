@@ -203,7 +203,6 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
       case 'completed': return 'Completed';
       case 'active': return 'Active';
       case 'available': return 'Available';
-      case 'coming_soon': return 'Coming Soon';
       case 'locked': return 'Locked';
       default: return 'Unknown';
     }
@@ -211,360 +210,145 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
 
   if (loading) {
     return (
-      <div className="bg-white rounded-xl shadow-xl p-8">
-        <div className="flex flex-col items-center justify-center py-12">
-          <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-blue-600 rounded-full flex items-center justify-center mb-4">
-            <div className="animate-spin rounded-full h-8 w-8 border-2 border-white border-t-transparent"></div>
-          </div>
-          <h3 className="text-lg font-semibold mb-2" style={{ color: '#ffffff', textShadow: '1px 1px 2px rgba(0, 0, 0, 0.7)' }}>Loading Your Journey</h3>
-          <p className="text-center" style={{ color: '#e5e7eb', textShadow: '1px 1px 2px rgba(0, 0, 0, 0.7)' }}>Preparing your epic quest through the Nine Knowings Universe...</p>
-        </div>
+      <div className="mst-journey-loading">
+        <div className="mst-journey-loading-spinner" aria-hidden="true" />
+        <h3 className="mst-journey-loading-title">Loading your Journey...</h3>
+        <p className="mst-journey-loading-copy">Preparing your epic quest through the Nine Knowings Universe...</p>
       </div>
     );
   }
 
   return (
-    <div className="bg-white rounded-xl shadow-xl p-16 mx-12 my-16 max-w-5xl mx-auto">
-      {/* Player's Journey Header */}
-      <div className="bg-gradient-to-r from-purple-600 to-blue-600 text-white p-4 mb-6 rounded-lg text-center font-bold">
-      </div>
-      
-      <div className="mb-10 text-center">
-        <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-purple-500 to-blue-600 rounded-full mb-6">
-          <span className="text-2xl">🏛️</span>
+    <div className="mst-journey-page">
+      <header className="mst-journey-hero">
+        <div className="mst-journey-hero-main">
+          <div className="mst-journey-compass" aria-hidden="true">◈</div>
+          <h2 className="mst-journey-title">YOUR JOURNEY</h2>
+          <p className="mst-journey-motto">DISCOVER. GROW. MASTER. LEAVE A LEGACY.</p>
+          <p className="mst-journey-desc">
+            Embark on your epic quest through the Nine Knowings Universe. Each chapter reveals new mysteries, challenges, and opportunities for growth.
+          </p>
         </div>
-        <h2 className="text-3xl font-bold text-white mb-4" style={{ 
-          textShadow: '2px 2px 4px rgba(0, 0, 0, 0.8), 0 0 20px rgba(139, 92, 246, 0.5)',
-          background: 'linear-gradient(135deg, #ffffff 0%, #e0e7ff 100%)',
-          WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent',
-          backgroundClip: 'text'
-        }}>
-          The Player's Journey
-        </h2>
-        <p className="text-lg max-w-3xl mx-auto leading-relaxed" style={{ 
-          color: '#f3f4f6',
-          textShadow: '1px 1px 2px rgba(0, 0, 0, 0.7)'
-        }}>
-          Embark on your epic quest through the Nine Knowings Universe. Each chapter reveals new mysteries, challenges, and opportunities for growth.
-        </p>
-      </div>
+        <div className="mst-journey-side-motto" aria-hidden="true">
+          ONE UNIVERSE{'\n'}MANY PATHS{'\n'}ONE PURPOSE
+        </div>
+      </header>
 
-      {/* Progress Summary Cards - Inline Styles */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem', marginBottom: '3rem' }}>
-        <div style={{ background: 'linear-gradient(135deg, #dbeafe 0%, #c7d2fe 100%)', padding: '1rem', borderRadius: '12px', border: '1px solid #93c5fd' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <p style={{ fontSize: '0.875rem', color: '#2563eb', fontWeight: '500' }}>Total Chapters</p>
-              <p style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#1e40af' }}>{CHAPTERS.length}</p>
-            </div>
-            <div style={{ width: '40px', height: '40px', backgroundColor: '#3b82f6', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ color: 'white', fontSize: '1.125rem' }}>📖</span>
-            </div>
+      <div className="mst-journey-stats">
+        <div className="mst-journey-stat mst-journey-stat--chapters">
+          <div>
+            <p className="mst-journey-stat-label">Total Chapters</p>
+            <p className="mst-journey-stat-value">{CHAPTERS.length}</p>
           </div>
+          <div className="mst-journey-stat-icon" aria-hidden="true">📖</div>
         </div>
-        
-        <div style={{ background: 'linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%)', padding: '1rem', borderRadius: '12px', border: '1px solid #c084fc' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <p style={{ fontSize: '0.875rem', color: '#7c3aed', fontWeight: '500' }}>Story Episodes</p>
-              <p style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#6d28d9' }}>Integrated</p>
-            </div>
-            <div style={{ width: '40px', height: '40px', backgroundColor: '#8b5cf6', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ color: 'white', fontSize: '1.125rem' }}>🎭</span>
-            </div>
+
+        <div className="mst-journey-stat mst-journey-stat--story">
+          <div>
+            <p className="mst-journey-stat-label">Story Episodes</p>
+            <p className="mst-journey-stat-value">Integrated</p>
           </div>
+          <div className="mst-journey-stat-icon" aria-hidden="true">🎭</div>
         </div>
-        
-        <div style={{ background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)', padding: '1rem', borderRadius: '12px', border: '1px solid #6ee7b7' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <p style={{ fontSize: '0.875rem', color: '#059669', fontWeight: '500' }}>Completed</p>
-              <p style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#047857' }}>{getCompletedChapters()}</p>
-            </div>
-            <div style={{ width: '40px', height: '40px', backgroundColor: '#10b981', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ color: 'white', fontSize: '1.125rem' }}>✓</span>
-            </div>
+
+        <div className="mst-journey-stat mst-journey-stat--completed">
+          <div>
+            <p className="mst-journey-stat-label">Completed</p>
+            <p className="mst-journey-stat-value">{getCompletedChapters()}</p>
           </div>
+          <div className="mst-journey-stat-icon" aria-hidden="true">✓</div>
         </div>
-        
-        <div style={{ background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)', padding: '1rem', borderRadius: '12px', border: '1px solid #f59e0b' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <p style={{ fontSize: '0.875rem', color: '#d97706', fontWeight: '500' }}>Available</p>
-              <p style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#b45309' }}>
-                {CHAPTERS.filter(ch => getChapterStatus(ch) === 'available').length}
-              </p>
-            </div>
-            <div style={{ width: '40px', height: '40px', backgroundColor: '#f59e0b', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ color: 'white', fontSize: '1.125rem' }}>🔓</span>
-            </div>
+
+        <div className="mst-journey-stat mst-journey-stat--available">
+          <div>
+            <p className="mst-journey-stat-label">Available</p>
+            <p className="mst-journey-stat-value">
+              {CHAPTERS.filter(ch => getChapterStatus(ch) === 'available').length}
+            </p>
           </div>
+          <div className="mst-journey-stat-icon" aria-hidden="true">🔓</div>
         </div>
-        
-        <div style={{ background: 'linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%)', padding: '1rem', borderRadius: '12px', border: '1px solid #c084fc' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <p style={{ fontSize: '0.875rem', color: '#7c3aed', fontWeight: '500' }}>Progress</p>
-              <p style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#6d28d9' }}>
-                {Math.round((getCompletedChapters() / CHAPTERS.length) * 100)}%
-              </p>
-            </div>
-            <div style={{ width: '40px', height: '40px', backgroundColor: '#8b5cf6', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ color: 'white', fontSize: '1.125rem' }}>📊</span>
-            </div>
+
+        <div className="mst-journey-stat mst-journey-stat--progress">
+          <div>
+            <p className="mst-journey-stat-label">Progress</p>
+            <p className="mst-journey-stat-value">
+              {Math.round((getCompletedChapters() / CHAPTERS.length) * 100)}%
+            </p>
           </div>
+          <div className="mst-journey-stat-icon" aria-hidden="true">📊</div>
         </div>
       </div>
 
-      {/* Chapter Cards Grid */}
-      <div className="mb-8">
-          <h3 className="text-xl font-bold mb-6 flex items-center" style={{ 
-            color: '#1f2937',
-            textShadow: 'none'
-          }}>
-          <span className="mr-2">📚</span>
-          Your Journey Chapters
-        </h3>
+      <div className="mst-journey-section">
+        <h3 className="mst-journey-section-title">YOUR JOURNEY CHAPTERS</h3>
+        <p className="mst-journey-section-sub">EXPLORE NEW REALMS. UNLOCK YOUR POTENTIAL.</p>
+        <div className="mst-journey-section-divider" aria-hidden="true" />
       </div>
-      
 
-      
-      {/* Chapter Cards - Inline Styles */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '2rem' }}>
-        {CHAPTERS.map((chapter, index) => {
+      <div className="mst-journey-chapters">
+        {CHAPTERS.map((chapter) => {
           const status = getChapterStatus(chapter);
           const progress = getChapterProgressPercent(chapter);
-          
-          // Determine card styling based on status
-          let cardStyle = {};
-          let badgeStyle = {};
-          
-          if (status === 'locked') {
-            cardStyle = {
-              background: 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)',
-              border: '2px solid #e5e7eb',
-              opacity: 0.6,
-              cursor: 'not-allowed'
-            };
-            badgeStyle = {
-              background: 'linear-gradient(135deg, #9ca3af 0%, #6b7280 100%)'
-            };
-          } else if (status === 'active') {
-            cardStyle = {
-              background: 'linear-gradient(135deg, #dbeafe 0%, #c7d2fe 100%)',
-              border: '2px solid #60a5fa',
-              boxShadow: '0 10px 15px -3px rgba(59, 130, 246, 0.1)',
-              cursor: 'pointer'
-            };
-            badgeStyle = {
-              background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)'
-            };
-          } else if (status === 'completed') {
-            cardStyle = {
-              background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)',
-              border: '2px solid #34d399',
-              boxShadow: '0 10px 15px -3px rgba(16, 185, 129, 0.1)',
-              cursor: 'pointer'
-            };
-            badgeStyle = {
-              background: 'linear-gradient(135deg, #10b981 0%, #047857 100%)'
-            };
-          } else {
-            cardStyle = {
-              background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-              border: '2px solid #f59e0b',
-              boxShadow: '0 10px 15px -3px rgba(245, 158, 11, 0.1)',
-              cursor: 'pointer'
-            };
-            badgeStyle = {
-              background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
-            };
-          }
-          
+          const chapterArt =
+            (chapter as Chapter & { artwork?: string; imageUrl?: string }).artwork ||
+            (chapter as Chapter & { artwork?: string; imageUrl?: string }).imageUrl;
+          const chapterStyle = chapterArt
+            ? ({ ['--journey-chapter-art' as string]: `url(${chapterArt})` } as React.CSSProperties)
+            : undefined;
+
           return (
             <div
               key={chapter.id}
-              style={{
-                position: 'relative',
-                padding: '1.5rem',
-                borderRadius: '12px',
-                transition: 'all 0.3s ease',
-                transform: 'scale(1)',
-                ...cardStyle
-              }}
+              className={`mst-journey-chapter mst-journey-chapter--${status}`}
+              style={chapterStyle}
               onClick={() => handleChapterClick(chapter)}
             >
-              {/* Chapter Number Badge */}
-              <div style={{
-                position: 'absolute',
-                top: '-16px',
-                left: '-16px',
-                width: '48px',
-                height: '48px',
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '1.125rem',
-                fontWeight: 'bold',
-                color: 'white',
-                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                ...badgeStyle
-              }}>
-                {chapter.id}
-              </div>
+              <div className="mst-journey-chapter-overlay" aria-hidden="true" />
+              <div className="mst-journey-medallion">{chapter.id}</div>
 
-              {/* Status Badge */}
-              <div style={{ position: 'absolute', top: '16px', right: '16px' }}>
-                <span style={{
-                  padding: '4px 12px',
-                  borderRadius: '9999px',
-                  fontSize: '0.75rem',
-                  fontWeight: '600',
-                  backgroundColor: status === 'completed' ? '#dcfce7' : 
-                                status === 'active' ? '#dbeafe' : 
-                                status === 'available' ? '#fef3c7' : '#f3f4f6',
-                  color: status === 'completed' ? '#166534' : 
-                        status === 'active' ? '#1e40af' : 
-                        status === 'available' ? '#92400e' : '#374151',
-                  border: `1px solid ${status === 'completed' ? '#86efac' : 
-                                    status === 'active' ? '#93c5fd' : 
-                                    status === 'available' ? '#fde047' : '#d1d5db'}`
-                }}>
+              <div className="mst-journey-badges">
+                {(chapter.id >= 1 && chapter.id <= 9) && (
+                  <span className="mst-journey-badge mst-journey-badge--story">Story</span>
+                )}
+                <span className={`mst-journey-badge mst-journey-badge--${status}`}>
                   {getStatusText(status)}
                 </span>
               </div>
 
-              {/* Story Mode Badge for Chapters with Integrated Story Content */}
-              {(chapter.id >= 1 && chapter.id <= 9) && (
-                <div style={{ position: 'absolute', top: '16px', right: '120px' }}>
-                  <span style={{
-                    padding: '4px 8px',
-                    borderRadius: '9999px',
-                    fontSize: '0.625rem',
-                    fontWeight: '600',
-                    backgroundColor: '#f3e8ff',
-                    color: '#7c3aed',
-                    border: '1px solid #c084fc'
-                  }}>
-                    📖 Story
-                  </span>
-                </div>
-              )}
-
-              <div style={{ marginLeft: '32px', display: 'flex', flexDirection: 'column', height: '100%' }}>
-                {/* Chapter Header */}
-                <div style={{ marginBottom: '1rem' }}>
-                  <h3 style={{ 
-                    fontSize: '1.125rem', 
-                    fontWeight: 'bold', 
-                    color: '#111827', 
-                    marginBottom: '4px',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap'
-                  }}>
-                    {chapter.title}
-                  </h3>
-                  <p style={{ 
-                    fontSize: '0.875rem', 
-                    color: '#4b5563', 
-                    fontStyle: 'italic', 
-                    fontWeight: '500' 
-                  }}>
-                    {chapter.subtitle}
-                  </p>
+              <div className="mst-journey-chapter-body">
+                <div>
+                  <h3 className="mst-journey-chapter-title">{chapter.title}</h3>
+                  <p className="mst-journey-chapter-subtitle">{chapter.subtitle}</p>
                 </div>
 
-                {/* Description */}
-                <p style={{ 
-                  color: '#1f2937', 
-                  marginBottom: '1rem', 
-                  lineHeight: '1.6', 
-                  fontSize: '0.875rem',
-                  flex: 1,
-                  overflow: 'hidden',
-                  display: '-webkit-box',
-                  WebkitLineClamp: 3,
-                  WebkitBoxOrient: 'vertical'
-                }}>
-                  {chapter.description}
-                </p>
+                <p className="mst-journey-chapter-desc">{chapter.description}</p>
 
-                {/* Progress Bar */}
                 {status !== 'locked' && (
-                  <div style={{ marginBottom: '1rem' }}>
-                    <div style={{ 
-                      display: 'flex', 
-                      justifyContent: 'space-between', 
-                      fontSize: '0.875rem', 
-                      fontWeight: '500', 
-                      color: '#374151', 
-                      marginBottom: '8px' 
-                    }}>
+                  <div className="mst-journey-progress">
+                    <div className="mst-journey-progress-meta">
                       <span>Progress</span>
                       <span>{Math.round(progress)}%</span>
                     </div>
-                    <div style={{
-                      width: '100%',
-                      backgroundColor: '#e5e7eb',
-                      borderRadius: '9999px',
-                      height: '8px',
-                      overflow: 'hidden'
-                    }}>
-                      <div style={{
-                        height: '100%',
-                        borderRadius: '9999px',
-                        transition: 'width 0.5s ease-out',
-                        width: `${progress}%`,
-                        background: status === 'completed' ? 'linear-gradient(90deg, #10b981 0%, #047857 100%)' :
-                                  status === 'active' ? 'linear-gradient(90deg, #3b82f6 0%, #1d4ed8 100%)' :
-                                  'linear-gradient(90deg, #f59e0b 0%, #d97706 100%)'
-                      }}></div>
+                    <div className="mst-journey-progress-track">
+                      <div
+                        className="mst-journey-progress-fill"
+                        style={{ width: `${progress}%` }}
+                      />
                     </div>
                   </div>
                 )}
 
-                {/* Requirements */}
                 {status === 'locked' && !(chapter.id === 2 && journeyProgress?.chapters?.[1]?.isCompleted) && (
-                  <div style={{ 
-                    marginBottom: '1rem', 
-                    padding: '12px', 
-                    backgroundColor: '#fef2f2', 
-                    borderRadius: '8px', 
-                    border: '1px solid #fecaca' 
-                  }}>
-                    <h4 style={{ 
-                      fontSize: '0.875rem', 
-                      fontWeight: '600', 
-                      color: '#991b1b', 
-                      marginBottom: '8px',
-                      display: 'flex',
-                      alignItems: 'center'
-                    }}>
-                      <span style={{ 
-                        width: '12px', 
-                        height: '12px', 
-                        backgroundColor: '#ef4444', 
-                        borderRadius: '50%', 
-                        marginRight: '8px' 
-                      }}></span>
+                  <div className="mst-journey-info mst-journey-info--requirements">
+                    <h4 className="mst-journey-info-title">
+                      <span className="mst-journey-info-dot" aria-hidden="true" />
                       Requirements
                     </h4>
-                    <ul style={{ fontSize: '0.75rem', color: '#991b1b' }}>
+                    <ul className="mst-journey-info-list">
                       {chapter.requirements.slice(0, 2).map((req, idx) => (
-                        <li key={idx} style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '4px' }}>
-                          <span style={{ 
-                            width: '6px', 
-                            height: '6px', 
-                            backgroundColor: '#f87171', 
-                            borderRadius: '50%', 
-                            marginRight: '8px', 
-                            marginTop: '6px',
-                            flexShrink: 0
-                          }}></span>
-                          <span style={{ 
+                        <li key={idx}>
+                          <span style={{
                             overflow: 'hidden',
                             display: '-webkit-box',
                             WebkitLineClamp: 2,
@@ -575,7 +359,7 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
                         </li>
                       ))}
                       {chapter.requirements.length > 2 && (
-                        <li style={{ fontSize: '0.75rem', color: '#dc2626', fontStyle: 'italic' }}>
+                        <li className="mst-journey-info-more">
                           +{chapter.requirements.length - 2} more requirements
                         </li>
                       )}
@@ -583,45 +367,16 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
                   </div>
                 )}
 
-                {/* Rewards */}
                 {status !== 'locked' && (
-                  <div style={{ 
-                    marginBottom: '1rem', 
-                    padding: '12px', 
-                    backgroundColor: '#f0fdf4', 
-                    borderRadius: '8px', 
-                    border: '1px solid #bbf7d0' 
-                  }}>
-                    <h4 style={{ 
-                      fontSize: '0.875rem', 
-                      fontWeight: '600', 
-                      color: '#166534', 
-                      marginBottom: '8px',
-                      display: 'flex',
-                      alignItems: 'center'
-                    }}>
-                      <span style={{ 
-                        width: '12px', 
-                        height: '12px', 
-                        backgroundColor: '#22c55e', 
-                        borderRadius: '50%', 
-                        marginRight: '8px' 
-                      }}></span>
+                  <div className="mst-journey-info mst-journey-info--rewards">
+                    <h4 className="mst-journey-info-title">
+                      <span className="mst-journey-info-dot" aria-hidden="true" />
                       Rewards
                     </h4>
-                    <ul style={{ fontSize: '0.75rem', color: '#166534' }}>
+                    <ul className="mst-journey-info-list">
                       {chapter.rewards.slice(0, 2).map((reward, idx) => (
-                        <li key={idx} style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '4px' }}>
-                          <span style={{ 
-                            width: '6px', 
-                            height: '6px', 
-                            backgroundColor: '#4ade80', 
-                            borderRadius: '50%', 
-                            marginRight: '8px', 
-                            marginTop: '6px',
-                            flexShrink: 0
-                          }}></span>
-                          <span style={{ 
+                        <li key={idx}>
+                          <span style={{
                             overflow: 'hidden',
                             display: '-webkit-box',
                             WebkitLineClamp: 2,
@@ -632,7 +387,7 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
                         </li>
                       ))}
                       {chapter.rewards.length > 2 && (
-                        <li style={{ fontSize: '0.75rem', color: '#16a34a', fontStyle: 'italic' }}>
+                        <li className="mst-journey-info-more">
                           +{chapter.rewards.length - 2} more rewards
                         </li>
                       )}
@@ -640,59 +395,31 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
                   </div>
                 )}
 
-                {/* Footer */}
-                <div style={{ marginTop: 'auto' }}>
-                  <div style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'space-between' 
-                  }}>
-                    <div style={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      fontSize: '0.75rem', 
-                      color: '#4b5563' 
-                    }}>
-                      <span style={{ 
-                        width: '12px', 
-                        height: '12px', 
-                        backgroundColor: '#d1d5db', 
-                        borderRadius: '50%', 
-                        marginRight: '4px', 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        justifyContent: 'center' 
-                      }}>
-                        <span style={{ fontSize: '0.75rem' }}>👥</span>
-                      </span>
-                      {chapter.teamSize} {chapter.teamSize === 1 ? 'player' : 'players'}
-                    </div>
-                    {status === 'active' && (
-                      <button style={{
-                        padding: '6px 12px',
-                        backgroundColor: '#2563eb',
-                        color: 'white',
-                        borderRadius: '8px',
-                        fontSize: '0.75rem',
-                        fontWeight: '500',
-                        border: 'none',
-                        cursor: 'pointer'
-                      }}>
-                        Continue
-                      </button>
-                    )}
-                    {status === 'completed' && (
-                      <div style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        fontSize: '0.75rem', 
-                        color: '#16a34a' 
-                      }}>
-                        <span style={{ marginRight: '4px' }}>✓</span>
-                        Completed
-                      </div>
-                    )}
+                <div className="mst-journey-footer">
+                  <div className="mst-journey-team">
+                    <span aria-hidden="true">👥</span>
+                    {chapter.teamSize} {chapter.teamSize === 1 ? 'player' : 'players'}
                   </div>
+                  {status === 'active' && (
+                    <button type="button" className="mst-journey-cta mst-journey-cta--continue">
+                      Continue Chapter
+                    </button>
+                  )}
+                  {status === 'available' && (
+                    <button type="button" className="mst-journey-cta mst-journey-cta--begin">
+                      Begin Chapter
+                    </button>
+                  )}
+                  {status === 'completed' && (
+                    <button type="button" className="mst-journey-cta mst-journey-cta--review">
+                      Review Chapter
+                    </button>
+                  )}
+                  {status === 'locked' && (
+                    <button type="button" className="mst-journey-cta mst-journey-cta--locked" disabled>
+                      Complete Previous Chapters to Unlock
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

@@ -543,10 +543,10 @@ const AppContent = () => {
 
   if (!authReady) {
     return (
-      <div className="App" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <div className="App mst-app mst-app-shell" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
         <NavBar />
         <Banner />
-        <main style={{ flex: 1 }}>
+        <main className="mst-main" style={{ flex: 1 }}>
           <PageLoader />
         </main>
       </div>
@@ -554,10 +554,10 @@ const AppContent = () => {
   }
 
   return (
-    <div className="App" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div className="App mst-app mst-app-shell" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <NavBar />
       <Banner />
-      <main style={{ flex: 1 }}>
+      <main className="mst-main" style={{ flex: 1 }}>
         <RouteTransition>
           <Routes>
             <Route path="/" element={

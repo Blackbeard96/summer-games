@@ -1,0 +1,931 @@
+/**
+ * MST Journey — Chapter Tracker cinematic chrome (presentational only)
+ */
+
+/* —— Full-page shell (darkens existing PlayerJourney artwork) —— */
+.mst-journey-shell {
+  position: relative;
+  min-height: 100vh;
+  padding: 4rem 0 3rem;
+  overflow-x: hidden;
+  background: #05070d;
+}
+
+.mst-journey-shell-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  filter: brightness(0.28) saturate(0.7) contrast(1.05);
+}
+
+.mst-journey-shell-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 70% 50% at 50% 0%, rgba(109, 62, 242, 0.12), transparent 55%),
+    linear-gradient(180deg, rgba(5, 7, 13, 0.55) 0%, rgba(5, 7, 13, 0.72) 40%, rgba(5, 7, 13, 0.88) 100%);
+}
+
+.mst-journey-shell-content {
+  position: relative;
+  z-index: 1;
+}
+
+/* —— Page panel —— */
+.mst-journey-page {
+  position: relative;
+  max-width: 72rem;
+  margin: 2rem auto;
+  padding: clamp(1.5rem, 3.5vw, 2.75rem);
+  color: var(--mst-text-primary);
+  font-family: var(--mst-font-body);
+  border: 1px solid var(--mst-border-gold);
+  border-radius: var(--mst-radius-lg);
+  box-shadow: var(--mst-shadow-panel);
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 65% 45% at 18% 8%, rgba(109, 62, 242, 0.14), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 88% 12%, rgba(212, 168, 79, 0.08), transparent 50%),
+    radial-gradient(ellipse 55% 45% at 70% 85%, rgba(58, 168, 212, 0.06), transparent 55%),
+    linear-gradient(168deg, #0b101a 0%, #05070d 48%, #080c14 100%);
+}
+
+.mst-journey-page::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.45;
+  background-image:
+    radial-gradient(1px 1px at 10% 16%, rgba(244, 240, 230, 0.4), transparent),
+    radial-gradient(1.5px 1.5px at 28% 42%, rgba(212, 168, 79, 0.35), transparent),
+    radial-gradient(1px 1px at 62% 22%, rgba(139, 92, 246, 0.35), transparent),
+    radial-gradient(1px 1px at 78% 68%, rgba(244, 240, 230, 0.28), transparent),
+    radial-gradient(1.5px 1.5px at 44% 78%, rgba(58, 168, 212, 0.3), transparent),
+    linear-gradient(
+      115deg,
+      transparent 0%,
+      rgba(212, 168, 79, 0.03) 38%,
+      transparent 62%
+    );
+  z-index: 0;
+}
+
+.mst-journey-page::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(5, 7, 13, 0.35) 0%, transparent 18%, transparent 72%, rgba(5, 7, 13, 0.55) 100%);
+  z-index: 0;
+}
+
+.mst-journey-page > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* —— Loading / error —— */
+.mst-journey-loading,
+.mst-journey-error {
+  position: relative;
+  max-width: 36rem;
+  margin: 3rem auto;
+  padding: 2.5rem 2rem;
+  text-align: center;
+  border-radius: var(--mst-radius-lg);
+  border: 1px solid var(--mst-border-gold);
+  background: rgba(8, 13, 23, 0.94);
+  box-shadow: var(--mst-shadow-panel);
+  color: var(--mst-text-primary);
+  overflow: hidden;
+}
+
+.mst-journey-loading::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 60% 50% at 50% 0%, rgba(109, 62, 242, 0.18), transparent 60%);
+}
+
+.mst-journey-loading-spinner {
+  width: 3rem;
+  height: 3rem;
+  margin: 0 auto 1.25rem;
+  border-radius: 50%;
+  border: 2px solid rgba(212, 168, 79, 0.25);
+  border-top-color: var(--mst-gold-bright);
+  animation: mst-journey-spin 0.85s linear infinite;
+}
+
+.mst-journey-loading-title {
+  margin: 0 0 0.5rem;
+  font-family: var(--mst-font-display);
+  font-size: 1.15rem;
+  letter-spacing: 0.06em;
+  color: var(--mst-gold-bright);
+}
+
+.mst-journey-loading-copy {
+  margin: 0;
+  color: var(--mst-text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.mst-journey-error {
+  border-color: rgba(196, 75, 75, 0.55);
+  background:
+    radial-gradient(ellipse 70% 50% at 50% 0%, rgba(196, 75, 75, 0.16), transparent 55%),
+    rgba(8, 13, 23, 0.96);
+}
+
+.mst-journey-error-title {
+  margin: 0 0 0.5rem;
+  font-family: var(--mst-font-display);
+  color: #f0a0a0;
+  letter-spacing: 0.04em;
+}
+
+@keyframes mst-journey-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* —— Hero —— */
+.mst-journey-hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1.5rem;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding: 1.5rem 1.25rem 1.75rem;
+  border-bottom: 1px solid var(--mst-border-gold);
+  background:
+    radial-gradient(ellipse 55% 120% at 72% 40%, rgba(212, 168, 79, 0.08), transparent 58%),
+    radial-gradient(ellipse 40% 80% at 12% 80%, rgba(109, 62, 242, 0.1), transparent 55%);
+}
+
+.mst-journey-hero-main {
+  text-align: center;
+  max-width: 44rem;
+  margin: 0 auto;
+  justify-self: center;
+  grid-column: 1 / -1;
+}
+
+.mst-journey-compass {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.25rem;
+  height: 3.25rem;
+  margin-bottom: 0.85rem;
+  border-radius: 50%;
+  border: 1px solid var(--mst-border-gold);
+  background:
+    radial-gradient(circle at 40% 35%, rgba(212, 168, 79, 0.22), transparent 55%),
+    rgba(8, 13, 23, 0.9);
+  box-shadow: var(--mst-glow-gold);
+  color: var(--mst-gold-bright);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.mst-journey-title {
+  margin: 0 0 0.45rem;
+  font-family: var(--mst-font-display);
+  font-size: clamp(1.75rem, 3.4vw, 2.35rem);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--mst-gold-bright);
+  text-shadow: 0 0 24px rgba(212, 168, 79, 0.22);
+}
+
+.mst-journey-motto {
+  margin: 0 0 0.85rem;
+  font-family: var(--mst-font-display);
+  font-size: clamp(0.7rem, 1.4vw, 0.82rem);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(212, 168, 79, 0.78);
+}
+
+.mst-journey-desc {
+  margin: 0 auto;
+  max-width: 38rem;
+  color: var(--mst-text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+.mst-journey-side-motto {
+  display: none;
+  position: absolute;
+  right: 0.35rem;
+  top: 1.25rem;
+  bottom: 1.25rem;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  font-family: var(--mst-font-display);
+  font-size: 0.62rem;
+  letter-spacing: 0.2em;
+  color: rgba(212, 168, 79, 0.42);
+  pointer-events: none;
+  user-select: none;
+  white-space: pre-line;
+  text-align: center;
+}
+
+@media (min-width: 960px) {
+  .mst-journey-side-motto {
+    display: block;
+  }
+
+  .mst-journey-hero-main {
+    padding-right: 2.5rem;
+  }
+}
+
+/* —— Stats —— */
+.mst-journey-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 2.5rem;
+}
+
+.mst-journey-stat {
+  --journey-accent: var(--mst-gold);
+  --journey-glow: rgba(212, 168, 79, 0.2);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1.1rem;
+  border-radius: var(--mst-radius-md);
+  border: 1px solid color-mix(in srgb, var(--journey-accent) 42%, transparent);
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--journey-accent) 14%, transparent), transparent 55%),
+    rgba(8, 13, 23, 0.94);
+  box-shadow: var(--mst-shadow-panel);
+  overflow: hidden;
+  transition:
+    transform var(--mst-duration) var(--mst-ease),
+    box-shadow var(--mst-duration) var(--mst-ease),
+    border-color var(--mst-duration) var(--mst-ease);
+}
+
+.mst-journey-stat::before,
+.mst-journey-stat::after {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-color: color-mix(in srgb, var(--journey-accent) 55%, transparent);
+  border-style: solid;
+  pointer-events: none;
+  transition: border-color var(--mst-duration) var(--mst-ease);
+}
+
+.mst-journey-stat::before {
+  top: 5px;
+  left: 5px;
+  border-width: 1px 0 0 1px;
+}
+
+.mst-journey-stat::after {
+  bottom: 5px;
+  right: 5px;
+  border-width: 0 1px 1px 0;
+}
+
+.mst-journey-stat--chapters {
+  --journey-accent: #3aa8d4;
+  --journey-glow: rgba(58, 168, 212, 0.28);
+}
+
+.mst-journey-stat--story {
+  --journey-accent: #8b5cf6;
+  --journey-glow: rgba(139, 92, 246, 0.3);
+}
+
+.mst-journey-stat--completed {
+  --journey-accent: #3d9b6e;
+  --journey-glow: rgba(61, 155, 110, 0.28);
+}
+
+.mst-journey-stat--available {
+  --journey-accent: #d4a84f;
+  --journey-glow: rgba(212, 168, 79, 0.28);
+}
+
+.mst-journey-stat--progress {
+  --journey-accent: #a78bfa;
+  --journey-glow: rgba(167, 139, 250, 0.28);
+}
+
+.mst-journey-stat-label {
+  margin: 0 0 0.2rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--journey-accent) 88%, #fff);
+}
+
+.mst-journey-stat-value {
+  margin: 0;
+  font-size: 1.45rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--mst-text-primary);
+  line-height: 1.15;
+}
+
+.mst-journey-stat-icon {
+  flex-shrink: 0;
+  width: 2.4rem;
+  height: 2.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--journey-accent) 50%, transparent);
+  background: color-mix(in srgb, var(--journey-accent) 22%, rgba(8, 13, 23, 0.9));
+  color: #fff;
+  font-size: 1rem;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .mst-journey-stat:hover {
+    transform: translateY(-3px);
+    border-color: var(--journey-accent);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--journey-accent) 18%, transparent),
+      0 10px 28px var(--journey-glow);
+  }
+
+  .mst-journey-stat:hover::before,
+  .mst-journey-stat:hover::after {
+    border-color: var(--journey-accent);
+  }
+}
+
+/* —— Section header —— */
+.mst-journey-section {
+  margin-bottom: 1.5rem;
+}
+
+.mst-journey-section-title {
+  margin: 0 0 0.4rem;
+  font-family: var(--mst-font-display);
+  font-size: clamp(1.15rem, 2.2vw, 1.4rem);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--mst-gold);
+  text-transform: uppercase;
+}
+
+.mst-journey-section-sub {
+  margin: 0 0 0.85rem;
+  color: var(--mst-text-muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+}
+
+.mst-journey-section-divider {
+  height: 1px;
+  width: 100%;
+  max-width: 14rem;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(212, 168, 79, 0.65),
+    transparent
+  );
+}
+
+/* —— Chapter grid —— */
+.mst-journey-chapters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: 1.75rem;
+}
+
+/* —— Chapter card —— */
+.mst-journey-chapter {
+  --journey-accent: var(--mst-gold);
+  --journey-glow: rgba(212, 168, 79, 0.2);
+  --journey-chapter-art: none;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 18rem;
+  padding: 1.5rem 1.35rem 1.25rem;
+  border-radius: var(--mst-radius-md);
+  border: 1px solid color-mix(in srgb, var(--journey-accent) 40%, transparent);
+  background-color: rgba(8, 13, 23, 0.96);
+  background-image:
+    linear-gradient(
+      165deg,
+      rgba(8, 13, 23, 0.88) 0%,
+      rgba(5, 7, 13, 0.94) 45%,
+      rgba(8, 13, 23, 0.97) 100%
+    ),
+    var(--journey-chapter-art);
+  background-size: cover, cover;
+  background-position: center, center;
+  box-shadow: var(--mst-shadow-panel);
+  overflow: hidden;
+  cursor: pointer;
+  transition:
+    transform var(--mst-duration) var(--mst-ease),
+    box-shadow var(--mst-duration) var(--mst-ease),
+    border-color var(--mst-duration) var(--mst-ease);
+}
+
+.mst-journey-chapter::before,
+.mst-journey-chapter::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-color: color-mix(in srgb, var(--journey-accent) 55%, transparent);
+  border-style: solid;
+  pointer-events: none;
+  z-index: 2;
+  transition: border-color var(--mst-duration) var(--mst-ease);
+}
+
+.mst-journey-chapter::before {
+  top: 6px;
+  left: 6px;
+  border-width: 1px 0 0 1px;
+}
+
+.mst-journey-chapter::after {
+  bottom: 6px;
+  right: 6px;
+  border-width: 0 1px 1px 0;
+}
+
+.mst-journey-chapter-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--journey-accent) 12%, transparent), transparent 50%),
+    linear-gradient(180deg, rgba(5, 7, 13, 0.35) 0%, rgba(5, 7, 13, 0.72) 100%);
+}
+
+.mst-journey-chapter-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  margin-left: 1.75rem;
+  padding-top: 0.35rem;
+}
+
+.mst-journey-chapter--completed {
+  --journey-accent: #3d9b6e;
+  --journey-glow: rgba(61, 155, 110, 0.28);
+}
+
+.mst-journey-chapter--active {
+  --journey-accent: #3b82c4;
+  --journey-glow: rgba(59, 130, 196, 0.3);
+}
+
+.mst-journey-chapter--available {
+  --journey-accent: #d4a84f;
+  --journey-glow: rgba(212, 168, 79, 0.28);
+}
+
+.mst-journey-chapter--locked {
+  --journey-accent: #6b7280;
+  --journey-glow: rgba(107, 114, 128, 0.15);
+  opacity: 0.72;
+  cursor: not-allowed;
+  filter: saturate(0.75);
+}
+
+.mst-journey-chapter--coming_soon {
+  --journey-accent: #6b7280;
+  --journey-glow: rgba(107, 114, 128, 0.12);
+  opacity: 0.68;
+  cursor: not-allowed;
+  filter: saturate(0.65);
+}
+
+/* Medallion */
+.mst-journey-medallion {
+  position: absolute;
+  top: -0.65rem;
+  left: -0.35rem;
+  z-index: 3;
+  width: 2.85rem;
+  height: 2.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mst-font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #fff;
+  clip-path: polygon(30% 0%, 70% 0%, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0% 70%, 0% 30%);
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--journey-accent) 85%, #fff) 0%,
+    color-mix(in srgb, var(--journey-accent) 55%, #0a0f1a) 100%
+  );
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  border: 1px solid color-mix(in srgb, var(--journey-accent) 70%, #fff);
+}
+
+/* Badges */
+.mst-journey-badges {
+  position: absolute;
+  top: 0.9rem;
+  right: 0.9rem;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  max-width: calc(100% - 4.5rem);
+}
+
+.mst-journey-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--mst-radius-sm);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  background: rgba(8, 13, 23, 0.88);
+}
+
+.mst-journey-badge--story {
+  color: #c4b5fd;
+  border-color: rgba(139, 92, 246, 0.55);
+  background: rgba(76, 29, 149, 0.35);
+}
+
+.mst-journey-badge--completed {
+  color: #86efac;
+  border-color: rgba(61, 155, 110, 0.55);
+  background: rgba(16, 80, 50, 0.4);
+}
+
+.mst-journey-badge--active {
+  color: #93c5fd;
+  border-color: rgba(59, 130, 196, 0.55);
+  background: rgba(30, 64, 120, 0.45);
+}
+
+.mst-journey-badge--available {
+  color: #f0c96a;
+  border-color: rgba(212, 168, 79, 0.55);
+  background: rgba(90, 65, 20, 0.45);
+}
+
+.mst-journey-badge--locked,
+.mst-journey-badge--coming_soon {
+  color: #9ca3af;
+  border-color: rgba(107, 114, 128, 0.5);
+  background: rgba(30, 35, 45, 0.7);
+}
+
+.mst-journey-chapter-title {
+  margin: 0 0 0.2rem;
+  font-family: var(--mst-font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--mst-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mst-journey-chapter-subtitle {
+  margin: 0 0 0.75rem;
+  font-size: 0.8rem;
+  font-style: italic;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--journey-accent) 75%, var(--mst-text-muted));
+}
+
+.mst-journey-chapter-desc {
+  margin: 0 0 1rem;
+  flex: 1;
+  color: var(--mst-text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.6;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* Progress */
+.mst-journey-progress {
+  margin-bottom: 1rem;
+}
+
+.mst-journey-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mst-text-muted);
+}
+
+.mst-journey-progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--mst-track);
+  border: 1px solid rgba(244, 240, 230, 0.06);
+}
+
+.mst-journey-progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s var(--mst-ease);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--journey-accent) 70%, #fff) 0%,
+    var(--journey-accent) 100%
+  );
+  box-shadow: 0 0 10px var(--journey-glow);
+}
+
+/* Info panels */
+.mst-journey-info {
+  margin-bottom: 1rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: var(--mst-radius-sm);
+  border: 1px solid rgba(142, 152, 168, 0.22);
+  background: rgba(5, 10, 18, 0.72);
+}
+
+.mst-journey-info--requirements {
+  border-color: rgba(196, 75, 75, 0.4);
+  background: rgba(60, 18, 22, 0.45);
+}
+
+.mst-journey-info--rewards {
+  border-color: rgba(61, 155, 110, 0.4);
+  background: rgba(12, 40, 28, 0.4);
+}
+
+.mst-journey-info-title {
+  margin: 0 0 0.45rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mst-text-secondary);
+}
+
+.mst-journey-info--requirements .mst-journey-info-title {
+  color: #f0a0a0;
+}
+
+.mst-journey-info--rewards .mst-journey-info-title {
+  color: #86efac;
+}
+
+.mst-journey-info-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: currentColor;
+}
+
+.mst-journey-info-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.72rem;
+  color: var(--mst-text-muted);
+}
+
+.mst-journey-info--requirements .mst-journey-info-list {
+  color: #e8b4b4;
+}
+
+.mst-journey-info--rewards .mst-journey-info-list {
+  color: #b7e0c8;
+}
+
+.mst-journey-info-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin-bottom: 0.3rem;
+}
+
+.mst-journey-info-list li::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  margin-top: 0.35rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: currentColor;
+  opacity: 0.7;
+}
+
+.mst-journey-info-more {
+  font-style: italic;
+  opacity: 0.85;
+}
+
+/* Footer / CTAs */
+.mst-journey-footer {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.mst-journey-team {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  color: var(--mst-text-muted);
+}
+
+.mst-journey-cta {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--mst-radius-sm);
+  font-family: var(--mst-font-body);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition:
+    transform var(--mst-duration-fast) var(--mst-ease),
+    box-shadow var(--mst-duration) var(--mst-ease),
+    border-color var(--mst-duration) var(--mst-ease),
+    background var(--mst-duration) var(--mst-ease),
+    color var(--mst-duration) var(--mst-ease);
+}
+
+.mst-journey-cta--review {
+  color: #d1fae5;
+  background: linear-gradient(180deg, rgba(61, 155, 110, 0.45), rgba(20, 70, 45, 0.85));
+  border-color: rgba(212, 168, 79, 0.45);
+}
+
+.mst-journey-cta--continue {
+  color: #eff6ff;
+  background: linear-gradient(180deg, rgba(59, 130, 196, 0.55), rgba(30, 64, 120, 0.9));
+  border-color: rgba(96, 165, 250, 0.5);
+}
+
+.mst-journey-cta--begin {
+  color: #fff8eb;
+  background: linear-gradient(180deg, rgba(212, 168, 79, 0.45), rgba(90, 65, 20, 0.9));
+  border-color: rgba(240, 201, 106, 0.55);
+}
+
+.mst-journey-cta--locked {
+  color: #9ca3af;
+  background: rgba(30, 35, 45, 0.85);
+  border-color: rgba(107, 114, 128, 0.45);
+  cursor: not-allowed;
+  opacity: 0.85;
+}
+
+.mst-journey-completed-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #86efac;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .mst-journey-chapter:not(.mst-journey-chapter--locked):not(.mst-journey-chapter--coming_soon):hover {
+    transform: translateY(-3px);
+    border-color: var(--journey-accent);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--journey-accent) 16%, transparent),
+      0 12px 32px var(--journey-glow);
+  }
+
+  .mst-journey-chapter:not(.mst-journey-chapter--locked):not(.mst-journey-chapter--coming_soon):hover::before,
+  .mst-journey-chapter:not(.mst-journey-chapter--locked):not(.mst-journey-chapter--coming_soon):hover::after {
+    border-color: var(--journey-accent);
+  }
+
+  .mst-journey-chapter--locked:hover,
+  .mst-journey-chapter--coming_soon:hover {
+    transform: none;
+    box-shadow: var(--mst-shadow-panel);
+    border-color: color-mix(in srgb, var(--journey-accent) 48%, transparent);
+  }
+
+  .mst-journey-cta--review:hover,
+  .mst-journey-cta--continue:hover,
+  .mst-journey-cta--begin:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 0 16px var(--journey-glow);
+  }
+}
+
+/* —— Responsive —— */
+@media (max-width: 1100px) {
+  .mst-journey-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .mst-journey-page {
+    margin: 1rem;
+    padding: 1.15rem 1rem 1.5rem;
+  }
+
+  .mst-journey-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mst-journey-chapters {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+
+  .mst-journey-chapter-body {
+    margin-left: 1.35rem;
+  }
+
+  .mst-journey-side-motto {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .mst-journey-stats {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mst-journey-loading-spinner {
+    animation: none;
+    border-top-color: var(--mst-gold);
+  }
+
+  .mst-journey-stat,
+  .mst-journey-chapter,
+  .mst-journey-cta,
+  .mst-journey-progress-fill {
+    transition: none;
+  }
+
+  .mst-journey-stat:hover,
+  .mst-journey-chapter:hover,
+  .mst-journey-cta:hover {
+    transform: none;
+  }
+}

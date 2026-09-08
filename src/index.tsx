@@ -3,6 +3,12 @@ import './firestoreErrorSuppression';
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import './styles/mst-tokens.css';
+import './styles/mst-base.css';
+import './styles/mst-vault.css';
+import './styles/mst-siege.css';
+import './styles/mst-journey.css';
+import './styles/mst-profile.css';
 import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';

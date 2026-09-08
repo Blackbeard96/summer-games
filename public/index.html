@@ -4,12 +4,12 @@
     <meta charset="utf-8" />
     <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no, user-scalable=no" />
-    <meta name="theme-color" content="#4f46e5" />
+    <meta name="theme-color" content="#05070D" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Xiotein School" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="msapplication-TileColor" content="#4f46e5" />
+    <meta name="msapplication-TileColor" content="#05070D" />
     <meta name="msapplication-tap-highlight" content="no" />
     <meta
       name="description"
@@ -48,7 +48,13 @@
       work correctly both with client-side routing and a non-root public URL.
       Learn how to configure a non-root public URL by running `npm run build`.
     -->
-    <title>Xiotein School - Manifestation Game</title>
+    <title>Masters of Space &amp; Time — Xiotein School</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Outfit:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
     <!-- Run before any bundle: suppress Firestore ca9 so dev overlay never sees it -->
     <script>
 (function() {
@@ -107,16 +113,15 @@
 })();
     </script>
     <style>
-      /* Prevent flash of unstyled content */
+      /* Prevent flash of unstyled content — MST dark foundation */
       body {
         margin: 0;
         padding: 0;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-          'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-          sans-serif;
+        font-family: 'Outfit', system-ui, -apple-system, sans-serif;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
-        background-color: #f9fafb;
+        background-color: #05070d;
+        color: #f4f0e6;
         overflow-x: hidden;
       }
       
@@ -130,8 +135,8 @@
       }
       
       .spinner {
-        border: 4px solid #f3f4f6;
-        border-top: 4px solid #4f46e5;
+        border: 4px solid rgba(244, 240, 230, 0.15);
+        border-top: 4px solid #d4a84f;
         border-radius: 50%;
         width: 40px;
         height: 40px;

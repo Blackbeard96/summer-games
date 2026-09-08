@@ -1,0 +1,201 @@
+/* MST global base — layered cosmic foundation + chrome */
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: var(--mst-font-body);
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--mst-text-primary);
+  background-color: var(--mst-bg-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: var(--mst-font-mono);
+}
+
+#root,
+.App.mst-app {
+  min-height: 100vh;
+  background-color: var(--mst-bg-primary);
+  color: var(--mst-text-primary);
+}
+
+/* Layered ambient background (subtle — not busy behind text) */
+.mst-app-shell {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--mst-bg-primary);
+  color: var(--mst-text-primary);
+}
+
+.mst-app-shell::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(109, 62, 242, 0.12), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 100% 100%, rgba(212, 168, 79, 0.06), transparent 50%),
+    var(--mst-bg-primary);
+}
+
+.mst-app-shell::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.35;
+  background-image:
+    radial-gradient(1px 1px at 20px 30px, rgba(244, 240, 230, 0.35), transparent),
+    radial-gradient(1px 1px at 80px 120px, rgba(244, 240, 230, 0.25), transparent),
+    radial-gradient(1.5px 1.5px at 160px 80px, rgba(212, 168, 79, 0.3), transparent),
+    radial-gradient(1px 1px at 240px 200px, rgba(244, 240, 230, 0.2), transparent),
+    radial-gradient(1px 1px at 320px 40px, rgba(139, 92, 246, 0.35), transparent);
+  background-size: 360px 260px;
+}
+
+.mst-main {
+  flex: 1;
+  position: relative;
+  width: 100%;
+}
+
+.mst-display {
+  font-family: var(--mst-font-display);
+  letter-spacing: var(--mst-tracking-title);
+  font-weight: 600;
+  color: var(--mst-text-primary);
+}
+
+.mst-label {
+  font-family: var(--mst-font-body);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: var(--mst-tracking-label);
+  text-transform: uppercase;
+  color: var(--mst-gold);
+}
+
+/* Focus — accessible gold ring */
+:focus-visible {
+  outline: 2px solid var(--mst-gold);
+  outline-offset: 2px;
+}
+
+/* Navbar HUD */
+.mst-navbar {
+  background: linear-gradient(
+    180deg,
+    rgba(14, 20, 32, 0.96) 0%,
+    rgba(9, 13, 22, 0.92) 100%
+  ) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--mst-border-gold) !important;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4) !important;
+  color: var(--mst-text-primary);
+}
+
+.mst-navbar a {
+  color: var(--mst-text-secondary);
+  transition: color var(--mst-duration) var(--mst-ease);
+}
+
+.mst-navbar a:hover {
+  color: var(--mst-gold-bright);
+}
+
+.mst-nav-brand-mark {
+  background: linear-gradient(145deg, var(--mst-gold-muted), var(--mst-gold)) !important;
+  color: var(--mst-bg-primary) !important;
+  border: 1px solid var(--mst-gold-bright);
+  box-shadow: var(--mst-glow-gold);
+  border-radius: var(--mst-radius-md) !important;
+  font-family: var(--mst-font-display);
+}
+
+.mst-nav-brand-title {
+  font-family: var(--mst-font-display) !important;
+  color: var(--mst-text-primary) !important;
+  letter-spacing: 0.06em;
+  font-weight: 600 !important;
+}
+
+.mst-nav-item-active {
+  color: var(--mst-gold-bright) !important;
+  box-shadow: inset 0 -2px 0 var(--mst-gold);
+}
+
+.mst-nav-dropdown {
+  background: var(--mst-bg-elevated) !important;
+  border: 1px solid var(--mst-border-gold) !important;
+  border-radius: var(--mst-radius-md) !important;
+  box-shadow: var(--mst-shadow-elevated) !important;
+}
+
+.mst-btn-admin {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.85rem;
+  background: var(--mst-gold-soft);
+  color: var(--mst-gold-bright) !important;
+  border: 1px solid var(--mst-border-gold);
+  border-radius: var(--mst-radius-sm);
+  font-family: var(--mst-font-body);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition:
+    background var(--mst-duration) var(--mst-ease),
+    box-shadow var(--mst-duration) var(--mst-ease),
+    transform var(--mst-duration-fast) var(--mst-ease);
+}
+
+.mst-btn-admin:hover {
+  background: rgba(212, 168, 79, 0.28);
+  box-shadow: var(--mst-glow-gold);
+  transform: translateY(-1px);
+}
+
+.mst-btn-logout {
+  background: transparent !important;
+  color: var(--mst-text-secondary) !important;
+  border: 1px solid var(--mst-border) !important;
+  border-radius: var(--mst-radius-sm) !important;
+  transition:
+    border-color var(--mst-duration) var(--mst-ease),
+    color var(--mst-duration) var(--mst-ease);
+}
+
+.mst-btn-logout:hover {
+  border-color: var(--mst-border-gold) !important;
+  color: var(--mst-gold-bright) !important;
+}
+
+.mst-notif-badge {
+  background: var(--mst-danger) !important;
+  color: var(--mst-text-primary) !important;
+  border: 1px solid rgba(244, 240, 230, 0.2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mst-btn-admin:hover,
+  .mst-btn-logout:hover {
+    transform: none;
+  }
+}

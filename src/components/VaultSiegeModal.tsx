@@ -9,7 +9,7 @@ import { getMoveDamageSync, getMoveNameSync, getMoveDescriptionSync, loadMoveOve
 import { calculateDamageRange, formatDamageRange } from '../utils/damageCalculator';
 import { getEffectiveMasteryLevel } from '../utils/artifactUtils';
 import { trackMoveUsage } from '../utils/manifestTracking';
-import { loadVaultSiegePlayerList } from '../utils/vaultSiegeTargets';
+import { loadVaultSiegePlayerList, loadVaultSiegeClassmateIds } from '../utils/vaultSiegeTargets';
 import type { ElementType } from '../types/elementTypes';
 import { elementTypeEmoji, elementTypeLabel } from '../utils/elementTypeUi';
 import { parseFirestoreDate, vaultHealthCooldownEnd } from '../utils/vaultDisplayNormalize';
@@ -44,7 +44,8 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
   
   const [players, setPlayers] = useState<Player[]>([]);
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [filterType, setFilterType] = useState<string>('none'); // 'none', 'most-vulnerable', 'lowest-shield', 'highest-pp'
+  const [filterType, setFilterType] = useState<string>('none'); // 'none', 'my-class', 'most-vulnerable', 'lowest-shield', 'highest-pp'
+  const [classmateIds, setClassmateIds] = useState<Set<string>>(() => new Set());
   const [selectedTarget, setSelectedTarget] = useState<string>('');
   const [selectedMoves, setSelectedMoves] = useState<string[]>([]);
   const [selectedActionCards, setSelectedActionCards] = useState<string[]>([]);
@@ -250,6 +251,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
       setSelectedTarget('');
       setSearchQuery('');
       setFilterType('none');
+      setClassmateIds(new Set());
       setPlayerListError(null);
       // Only clear attackResults when modal FIRST opens (not on every render)
       setAttackResults(null);
@@ -274,6 +276,10 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
     
     // Apply sorting/filtering based on filter type
     switch (filterType) {
+      case 'my-class':
+        filtered = filtered.filter((player) => classmateIds.has(player.uid));
+        filtered.sort((a, b) => a.displayName.localeCompare(b.displayName));
+        break;
       case 'most-vulnerable':
         // Most vulnerable = lowest shield percentage + lowest PP
         filtered.sort((a, b) => {
@@ -304,7 +310,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
     }
     
     return filtered;
-  }, [players, searchQuery, filterType]);
+  }, [players, searchQuery, filterType, classmateIds]);
 
   // Load available players (excluding current user)
   useEffect(() => {
@@ -315,7 +321,11 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
       setPlayerListError(null);
       try {
         console.log('VaultSiegeModal: Loading players...');
-        const { players: basePlayers, loadError } = await loadVaultSiegePlayerList(currentUser.uid);
+        const [{ players: basePlayers, loadError }, classmateIdSet] = await Promise.all([
+          loadVaultSiegePlayerList(currentUser.uid),
+          loadVaultSiegeClassmateIds(currentUser.uid),
+        ]);
+        setClassmateIds(classmateIdSet);
         if (loadError && basePlayers.length === 0) {
           setPlayerListError(loadError);
         }
@@ -828,6 +838,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
   const attackResultsPopup = attackResults ? (
     <div
       data-attack-results-popup="true"
+      className="mst-siege-result-overlay"
       onClick={(e) => {
         // Close if clicking outside the popup
         if (e.target === e.currentTarget) {
@@ -835,163 +846,85 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
           setAttackResults(null);
         }
       }}
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.6)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 9999999,
-        animation: 'fadeIn 0.2s ease-out'
-      }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{
-          background: attackResults.success ? 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)' : 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)',
-          border: `4px solid ${attackResults.success ? '#10b981' : '#ef4444'}`,
-          color: attackResults.success ? '#065f46' : '#991b1b',
-          padding: '2rem',
-          borderRadius: '16px',
-          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2)',
-          maxWidth: '600px',
-          width: '90%',
-          position: 'relative',
-          animation: 'slideInUp 0.3s ease-out',
-          transform: 'scale(1)'
-        }}
+        className={`mst-siege-result-modal ${attackResults.success ? 'mst-siege-result-modal--success' : 'mst-siege-result-modal--fail'}`}
       >
         {/* Close Button */}
         <button
           onClick={() => setAttackResults(null)}
-          style={{
-            position: 'absolute',
-            top: '1rem',
-            right: '1rem',
-            background: 'rgba(255, 255, 255, 0.8)',
-            border: 'none',
-            fontSize: '1.5rem',
-            cursor: 'pointer',
-            color: attackResults.success ? '#065f46' : '#991b1b',
-            padding: '0.25rem',
-            width: '32px',
-            height: '32px',
-            borderRadius: '50%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            transition: 'all 0.2s',
-            fontWeight: 'bold'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = 'rgba(255, 255, 255, 1)';
-            e.currentTarget.style.transform = 'scale(1.1)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.8)';
-            e.currentTarget.style.transform = 'scale(1)';
-          }}
+          className="mst-siege-result-close"
+          style={{ top: '1rem', right: '1rem', width: '32px', height: '32px', fontSize: '1.5rem' }}
         >
           ×
         </button>
 
         {/* Popup Content */}
         <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-          <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>
+          <div className="mst-siege-result-modal-icon">
             {attackResults.success ? '🎉' : '❌'}
           </div>
-          <h2 style={{ 
-            fontSize: '1.75rem',
-            fontWeight: 'bold',
-            marginBottom: '0.5rem',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '0.5rem'
-          }}>
+          <h2 className="mst-siege-result-modal-title">
             {attackResults.success ? '✅ Attack Successful!' : '❌ Attack Failed'}
           </h2>
-          <p style={{ fontSize: '1.1rem', marginBottom: '1.5rem', fontWeight: 500 }}>
+          <p className="mst-siege-result-modal-message">
             {attackResults.message}
           </p>
         </div>
 
         {attackResults.success && (
-          <div style={{
-            background: 'rgba(255, 255, 255, 0.5)',
-            borderRadius: '12px',
-            padding: '1.5rem',
-            marginBottom: '1.5rem'
-          }}>
+          <div className="mst-siege-result-modal-body">
             <p style={{ marginBottom: '1rem', fontSize: '1rem' }}>
               Used <strong>{attackResults.movesUsed}</strong> moves and <strong>{attackResults.cardsUsed}</strong> action cards.
             </p>
             
             {attackResults.usedMoves && attackResults.usedMoves.length > 0 && (
               <div style={{ marginBottom: '1rem' }}>
-                <p style={{ color: '#7c3aed', fontWeight: 'bold', fontSize: '1rem', marginBottom: '0.5rem' }}>
+                <p className="mst-siege-result-stat mst-siege-result-stat--moves" style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>
                   ⚔️ Moves Used:
                 </p>
-                <p style={{ color: '#7c3aed', fontSize: '0.95rem' }}>
+                <p className="mst-siege-result-stat mst-siege-result-stat--moves" style={{ fontSize: '0.95rem', fontWeight: 500 }}>
                   {attackResults.usedMoves.join(', ')}
                 </p>
               </div>
             )}
             
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
+            <div className="mst-siege-result-stat-grid">
               {attackResults.ppGained > 0 && (
-                <div style={{
-                  background: 'rgba(5, 150, 105, 0.1)',
-                  padding: '1rem',
-                  borderRadius: '8px',
-                  textAlign: 'center'
-                }}>
+                <div className="mst-siege-result-stat-tile mst-siege-result-stat-tile--pp">
                   <div style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>💰</div>
-                  <div style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#059669' }}>
+                  <div className="mst-siege-result-stat mst-siege-result-stat--pp" style={{ fontSize: '1.1rem' }}>
                     {attackResults.ppGained} PP
                   </div>
-                  <div style={{ fontSize: '0.875rem', color: '#065f46' }}>Stolen</div>
+                  <div style={{ fontSize: '0.875rem', color: 'var(--mst-text-muted)' }}>Stolen</div>
                 </div>
               )}
               
               {attackResults.xpGained > 0 && (
-                <div style={{
-                  background: 'rgba(251, 191, 36, 0.1)',
-                  padding: '1rem',
-                  borderRadius: '8px',
-                  textAlign: 'center'
-                }}>
+                <div className="mst-siege-result-stat-tile mst-siege-result-stat-tile--xp">
                   <div style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>⚡</div>
-                  <div style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#fbbf24' }}>
+                  <div className="mst-siege-result-stat mst-siege-result-stat--xp" style={{ fontSize: '1.1rem' }}>
                     {attackResults.xpGained} XP
                   </div>
-                  <div style={{ fontSize: '0.875rem', color: '#92400e' }}>Earned</div>
+                  <div style={{ fontSize: '0.875rem', color: 'var(--mst-text-muted)' }}>Earned</div>
                 </div>
               )}
               
               {attackResults.shieldDamage > 0 && (
-                <div style={{
-                  background: 'rgba(239, 68, 68, 0.1)',
-                  padding: '1rem',
-                  borderRadius: '8px',
-                  textAlign: 'center'
-                }}>
+                <div className="mst-siege-result-stat-tile mst-siege-result-stat-tile--shield">
                   <div style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>🛡️</div>
-                  <div style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#ef4444' }}>
+                  <div className="mst-siege-result-stat mst-siege-result-stat--shield" style={{ fontSize: '1.1rem' }}>
                     {attackResults.shieldDamage}
                   </div>
-                  <div style={{ fontSize: '0.875rem', color: '#991b1b' }}>Shield Damage</div>
+                  <div style={{ fontSize: '0.875rem', color: 'var(--mst-text-muted)' }}>Shield Damage</div>
                 </div>
               )}
             </div>
 
             {attackResults.details && (
-              <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid rgba(0, 0, 0, 0.1)' }}>
-                <p style={{ fontSize: '0.875rem', color: '#6b7280', fontStyle: 'italic' }}>
+              <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--mst-border)' }}>
+                <p className="mst-siege-result-detail" style={{ fontStyle: 'italic' }}>
                   {attackResults.details}
                 </p>
               </div>
@@ -1000,29 +933,10 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         )}
 
         {/* Action Buttons */}
-        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+        <div className="mst-siege-result-continue-row">
           <button
             onClick={() => setAttackResults(null)}
-            style={{
-              background: attackResults.success ? '#10b981' : '#ef4444',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem 2rem',
-              borderRadius: '8px',
-              fontSize: '1rem',
-              fontWeight: 'bold',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.transform = 'scale(1.05)';
-              e.currentTarget.style.boxShadow = '0 6px 8px rgba(0, 0, 0, 0.2)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.transform = 'scale(1)';
-              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1)';
-            }}
+            className="mst-siege-result-continue"
           >
             Continue
           </button>
@@ -1033,78 +947,24 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
 
   const modalContent = (
     <>
-      <style>
-        {`
-          .vault-siege-scroll::-webkit-scrollbar {
-            height: 8px;
-          }
-          .vault-siege-scroll::-webkit-scrollbar-track {
-            background: #f1f5f9;
-            border-radius: 4px;
-          }
-          .vault-siege-scroll::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
-            border-radius: 4px;
-          }
-          .vault-siege-scroll::-webkit-scrollbar-thumb:hover {
-            background: #94a3b8;
-          }
-        `}
-      </style>
-      <div 
+      <div
         ref={modalRef}
-        style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.6)',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 999999,
-          pointerEvents: 'auto',
-          width: '100vw',
-          height: '100vh',
-        }}>
-      <div style={{
-        background: '#fff',
-        borderRadius: '12px',
-        padding: '2rem',
-        maxWidth: '800px',
-        maxHeight: '90vh',
-        overflow: 'auto',
-        width: '90%',
-        boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1)',
-        position: 'relative',
-        zIndex: 1000000,
-        color: '#1f2937',
-      }}>
+        className="mst-siege-overlay"
+      >
+      <div className="mst-siege-modal">
+        <div className="mst-siege-modal-inner">
         
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-          <div>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.5rem' }}>🏰 Vault Siege</h2>
-            <div style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              gap: '1rem',
-              fontSize: '0.875rem'
-            }}>
-              <div style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '0.5rem',
-                color: getRemainingOfflineMoves() > 0 ? '#059669' : '#dc2626'
-              }}>
-                <span style={{ fontWeight: 'bold' }}>Offline Moves:</span>
-                <span style={{ 
-                  background: getRemainingOfflineMoves() > 0 ? '#d1fae5' : '#fee2e2',
-                  color: getRemainingOfflineMoves() > 0 ? '#065f46' : '#991b1b',
-                  padding: '0.25rem 0.5rem',
-                  borderRadius: '0.25rem',
-                  fontWeight: 'bold'
-                }}>
+        <div className="mst-siege-hero">
+          <div className="mst-siege-hero-copy">
+            <h2 className="mst-siege-hero-title">
+              <span className="mst-siege-hero-icon" aria-hidden>🏰</span>
+              VAULT SIEGE
+            </h2>
+            <p className="mst-siege-hero-subtitle">Strategy. Discipline. Take what matters.</p>
+            <div className="mst-siege-hero-status-row">
+              <div className="mst-siege-status">
+                <span className="mst-siege-status-label">Offline Moves</span>
+                <span className={`mst-siege-status-count ${getRemainingOfflineMoves() > 0 ? 'mst-siege-status-count--ok' : 'mst-siege-status-count--empty'}`}>
                   {remainingMoves}/3
                 </span>
                 
@@ -1123,32 +983,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                     }
                   }}
                 disabled={loading || !vault || vault.currentPP < calculateRestoreCost()}
-                style={{
-                  background: vault && vault.currentPP >= calculateRestoreCost() ? '#10b981' : '#9ca3af',
-                  color: 'white',
-                  border: 'none',
-                  padding: '0.5rem 1rem',
-                  borderRadius: '0.5rem',
-                  cursor: vault && vault.currentPP >= calculateRestoreCost() ? 'pointer' : 'not-allowed',
-                  fontSize: '0.875rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.25rem',
-                  fontWeight: 'bold',
-                  transition: 'all 0.2s ease'
-                }}
-                onMouseEnter={(e) => {
-                  const cost = calculateRestoreCost();
-                  if (vault && vault.currentPP >= cost) {
-                    e.currentTarget.style.transform = 'scale(1.05)';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  const cost = calculateRestoreCost();
-                  if (vault && vault.currentPP >= cost) {
-                    e.currentTarget.style.transform = 'scale(1)';
-                  }
-                }}
+                className="mst-siege-restore-btn"
               >
                 ⚡ Restore Move ({calculateRestoreCost()} PP)
               </button>
@@ -1160,13 +995,8 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
           </div>
           <button
             onClick={onClose}
-            style={{
-              background: 'none',
-              border: 'none',
-              fontSize: '1.5rem',
-              cursor: 'pointer',
-              color: '#6b7280',
-            }}
+            className="mst-siege-close"
+            aria-label="Close"
           >
             ×
           </button>
@@ -1176,29 +1006,11 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         {attackResults && (
           <div 
             key={`attack-result-popup-${Date.now()}`}
-            style={{
-              background: attackResults.success ? '#d1fae5' : '#fee2e2',
-              border: `3px solid ${attackResults.success ? '#10b981' : '#ef4444'}`,
-              color: attackResults.success ? '#065f46' : '#991b1b',
-              padding: '1.5rem',
-              borderRadius: '12px',
-              marginBottom: '1.5rem',
-              marginTop: '1rem',
-              boxShadow: '0 8px 16px rgba(0, 0, 0, 0.2)',
-              position: 'relative',
-              zIndex: 1000,
-              animation: 'slideIn 0.3s ease-out'
-            }}>
+            className={`mst-siege-result ${attackResults.success ? 'mst-siege-result--success' : 'mst-siege-result--fail'}`}
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div style={{ flex: 1 }}>
-                <h3 style={{ 
-                  marginBottom: '0.5rem', 
-                  fontSize: '1.25rem',
-                  fontWeight: 'bold',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem'
-                }}>
+              <div style={{ flex: 1, paddingRight: '1.5rem' }}>
+                <h3 className="mst-siege-result-title">
                   {attackResults.success ? '✅ Attack Successful!' : '❌ Attack Failed'}
                 </h3>
                 <p>{attackResults.message}</p>
@@ -1206,27 +1018,27 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                   <div>
                     <p>Used {attackResults.movesUsed} moves and {attackResults.cardsUsed} action cards.</p>
                     {attackResults.usedMoves && attackResults.usedMoves.length > 0 && (
-                      <p style={{ color: '#7c3aed', fontWeight: 'bold', fontSize: '0.875rem' }}>
+                      <p className="mst-siege-result-stat mst-siege-result-stat--moves" style={{ fontSize: '0.875rem' }}>
                         ⚔️ Moves Used: {attackResults.usedMoves.join(', ')}
                       </p>
                     )}
                     {attackResults.ppGained > 0 && (
-                      <p style={{ color: '#059669', fontWeight: 'bold' }}>
+                      <p className="mst-siege-result-stat mst-siege-result-stat--pp">
                         💰 Stole {attackResults.ppGained} PP!
                       </p>
                     )}
                     {attackResults.xpGained > 0 && (
-                      <p style={{ color: '#fbbf24', fontWeight: 'bold' }}>
+                      <p className="mst-siege-result-stat mst-siege-result-stat--xp">
                         ⚡ Earned {attackResults.xpGained} XP!
                       </p>
                     )}
                     {attackResults.shieldDamage > 0 && (
-                      <p style={{ color: '#ef4444', fontWeight: 'bold' }}>
+                      <p className="mst-siege-result-stat mst-siege-result-stat--shield">
                         🛡️ Dealt {attackResults.shieldDamage} shield damage!
                       </p>
                     )}
                     {attackResults.details && (
-                      <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>
+                      <p className="mst-siege-result-detail">
                         {attackResults.details}
                       </p>
                     )}
@@ -1248,90 +1060,45 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                     });
                   }
                 }}
-                style={{
-                  position: 'absolute',
-                  top: '0.75rem',
-                  right: '0.75rem',
-                  background: 'transparent',
-                  border: 'none',
-                  fontSize: '1.5rem',
-                  cursor: 'pointer',
-                  color: attackResults.success ? '#065f46' : '#991b1b',
-                  padding: '0.25rem',
-                  lineHeight: 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: '24px',
-                  height: '24px',
-                  borderRadius: '50%',
-                  transition: 'background 0.2s'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'rgba(0, 0, 0, 0.1)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'transparent';
-                }}
+                className="mst-siege-result-close"
               >
                 ×
               </button>
+            </div>
               {attackResults.success && (
-                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+                <div className="mst-siege-result-actions">
                   <button
                     onClick={handleRestoreMove}
                     disabled={loading || !vault || vault.currentPP < calculateRestoreCost()}
-                    style={{
-                      background: vault && vault.currentPP >= calculateRestoreCost() ? '#10b981' : '#9ca3af',
-                      color: 'white',
-                      border: 'none',
-                      padding: '0.5rem 1rem',
-                      borderRadius: '4px',
-                      cursor: vault && vault.currentPP >= calculateRestoreCost() ? 'pointer' : 'not-allowed',
-                      fontSize: '0.875rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.25rem',
-                    }}
+                    className="mst-siege-restore-btn"
                   >
                     ⚡ Restore Move ({calculateRestoreCost()} PP)
                   </button>
                   <button
                     onClick={syncVaultPP}
-                    style={{
-                      background: '#3b82f6',
-                      color: 'white',
-                      border: 'none',
-                      padding: '0.5rem 1rem',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      fontSize: '0.875rem',
-                    }}
+                    className="mst-siege-sync-btn"
                   >
                     🔄 Refresh PP
                   </button>
                 </div>
               )}
-            </div>
           </div>
         )}
 
         {/* Target Selection */}
-        <div style={{ marginBottom: '2rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h3 style={{ fontSize: '1.1rem', color: '#374151' }}>Select Target Vault</h3>
-            <div style={{ 
-              fontSize: '0.875rem', 
-              color: '#6b7280',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem'
-            }}>
+        <div className="mst-siege-section">
+          <div className="mst-siege-section-head">
+            <h3 className="mst-siege-section-title">
+              <span className="mst-siege-section-title-icon" aria-hidden>⌖</span>
+              Select Target Vault
+            </h3>
+            <div className="mst-siege-meta">
               <span>Players: {filteredPlayers.length}</span>
               {filterType !== 'none' && (
                 <>
                   <span>•</span>
                   <span>
+                    {filterType === 'my-class' && 'My Class(es)'}
                     {filterType === 'most-vulnerable' && 'Most Vulnerable'}
                     {filterType === 'lowest-shield' && 'Lowest Shield'}
                     {filterType === 'highest-pp' && 'Highest PP'}
@@ -1348,133 +1115,52 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
           </div>
           
           {/* Filter Buttons */}
-          <div style={{ 
-            display: 'flex', 
-            gap: '0.5rem', 
-            marginBottom: '1rem',
-            flexWrap: 'wrap'
-          }}>
+          <div className="mst-siege-filters">
             <button
               onClick={() => setFilterType('none')}
-              style={{
-                padding: '0.5rem 1rem',
-                border: '2px solid #e5e7eb',
-                borderRadius: '0.5rem',
-                fontSize: '0.875rem',
-                fontWeight: '500',
-                backgroundColor: filterType === 'none' ? '#4f46e5' : 'white',
-                color: filterType === 'none' ? 'white' : '#374151',
-                cursor: 'pointer',
-                transition: 'all 0.2s ease'
-              }}
+              className={`mst-siege-filter${filterType === 'none' ? ' mst-siege-filter--active' : ''}`}
             >
               All Players
             </button>
             <button
+              onClick={() => setFilterType('my-class')}
+              className={`mst-siege-filter mst-siege-filter--class${filterType === 'my-class' ? ' mst-siege-filter--active' : ''}`}
+            >
+              🏫 My Class(es)
+            </button>
+            <button
               onClick={() => setFilterType('most-vulnerable')}
-              style={{
-                padding: '0.5rem 1rem',
-                border: '2px solid #e5e7eb',
-                borderRadius: '0.5rem',
-                fontSize: '0.875rem',
-                fontWeight: '500',
-                backgroundColor: filterType === 'most-vulnerable' ? '#dc2626' : 'white',
-                color: filterType === 'most-vulnerable' ? 'white' : '#374151',
-                cursor: 'pointer',
-                transition: 'all 0.2s ease'
-              }}
+              className={`mst-siege-filter mst-siege-filter--vulnerable${filterType === 'most-vulnerable' ? ' mst-siege-filter--active' : ''}`}
             >
               🛡️ Most Vulnerable
             </button>
             <button
               onClick={() => setFilterType('lowest-shield')}
-              style={{
-                padding: '0.5rem 1rem',
-                border: '2px solid #e5e7eb',
-                borderRadius: '0.5rem',
-                fontSize: '0.875rem',
-                fontWeight: '500',
-                backgroundColor: filterType === 'lowest-shield' ? '#f59e0b' : 'white',
-                color: filterType === 'lowest-shield' ? 'white' : '#374151',
-                cursor: 'pointer',
-                transition: 'all 0.2s ease'
-              }}
+              className={`mst-siege-filter mst-siege-filter--shield${filterType === 'lowest-shield' ? ' mst-siege-filter--active' : ''}`}
             >
               🛡️ Lowest Shield
             </button>
             <button
               onClick={() => setFilterType('highest-pp')}
-              style={{
-                padding: '0.5rem 1rem',
-                border: '2px solid #e5e7eb',
-                borderRadius: '0.5rem',
-                fontSize: '0.875rem',
-                fontWeight: '500',
-                backgroundColor: filterType === 'highest-pp' ? '#10b981' : 'white',
-                color: filterType === 'highest-pp' ? 'white' : '#374151',
-                cursor: 'pointer',
-                transition: 'all 0.2s ease'
-              }}
+              className={`mst-siege-filter mst-siege-filter--pp${filterType === 'highest-pp' ? ' mst-siege-filter--active' : ''}`}
             >
               ⚡ Highest PP
             </button>
           </div>
 
           {/* Search Input */}
-          <div style={{ marginBottom: '1rem', position: 'relative' }}>
+          <div className="mst-siege-search-wrap">
             <input
               type="text"
               placeholder="Search players by name or email..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '0.75rem 1rem',
-                paddingRight: searchQuery ? '3rem' : '1rem',
-                border: '2px solid #e5e7eb',
-                borderRadius: '0.5rem',
-                fontSize: '0.875rem',
-                backgroundColor: 'white',
-                color: '#374151',
-                outline: 'none',
-                transition: 'border-color 0.2s ease',
-                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
-              }}
-              onFocus={(e) => {
-                e.target.style.borderColor = '#4f46e5';
-                e.target.style.boxShadow = '0 0 0 3px rgba(79, 70, 229, 0.1)';
-              }}
-              onBlur={(e) => {
-                e.target.style.borderColor = '#e5e7eb';
-                e.target.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
-              }}
+              className="mst-siege-search"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                style={{
-                  position: 'absolute',
-                  right: '0.75rem',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  background: 'none',
-                  border: 'none',
-                  color: '#6b7280',
-                  cursor: 'pointer',
-                  padding: '0.25rem',
-                  borderRadius: '0.25rem',
-                  fontSize: '1rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  transition: 'color 0.2s ease'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.color = '#374151';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.color = '#6b7280';
-                }}
+                className="mst-siege-search-clear"
                 title="Clear search"
               >
                 ×
@@ -1482,70 +1168,44 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
             )}
           </div>
           {loading ? (
-            <div style={{ 
-              textAlign: 'center', 
-              padding: '2rem', 
-              color: '#6b7280',
-              background: '#f9fafb',
-              borderRadius: '8px'
-            }}>
-              🔄 Loading available players...
+            <div className="mst-siege-loading">
+              <div className="mst-siege-loading-title">
+                Scanning the Xiotein network for available players...
+              </div>
+              <div className="mst-siege-loading-sub">
+                The universe is vast. Every vault leaves a signature.
+              </div>
             </div>
           ) : filteredPlayers.length === 0 ? (
-            <div style={{ 
-              textAlign: 'center', 
-              padding: '2rem', 
-              color: '#6b7280',
-              background: '#f9fafb',
-              borderRadius: '8px'
-            }}>
+            <div className="mst-siege-empty">
               <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>
-                {searchQuery ? '🔍' : '👥'}
+                {searchQuery ? '🔍' : filterType === 'my-class' ? '🏫' : '👥'}
               </div>
-              <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
-                {searchQuery ? 'No Players Found' : 'No Players Available'}
+              <div className="mst-siege-empty-title">
+                {searchQuery
+                  ? 'No Players Found'
+                  : filterType === 'my-class'
+                    ? 'No Classmates Found'
+                    : 'No Players Available'}
               </div>
-              <div style={{ fontSize: '0.875rem' }}>
+              <div className="mst-siege-empty-body">
                 {searchQuery
                   ? `No players match your search for "${searchQuery}". Try a different search term.`
-                  : playerListError
-                    ? playerListError
-                    : 'There are no other players in the system to attack. If your class uses roster-based access, ensure your student profile has a class and that classmates have student documents.'}
+                  : filterType === 'my-class'
+                    ? classmateIds.size === 0
+                      ? 'You are not enrolled in any classes yet, or class rosters could not be loaded. Join a class to siege classmates.'
+                      : 'None of the loaded players are in your class(es). Try All Players, or check that classmates have student profiles.'
+                    : playerListError
+                      ? playerListError
+                      : 'There are no other players in the system to attack. If your class uses roster-based access, ensure your student profile has a class and that classmates have student documents.'}
               </div>
             </div>
           ) : (
-            <div 
-              className="vault-siege-scroll"
-              style={{ 
-                display: 'flex', 
-                gap: '1rem',
-                overflowX: 'auto',
-                paddingBottom: '0.5rem',
-                scrollbarWidth: 'thin',
-                scrollbarColor: '#cbd5e1 #f1f5f9',
-                scrollBehavior: 'smooth',
-                WebkitOverflowScrolling: 'touch'
-              }}>
+            <div className="mst-siege-scroll">
               {filteredPlayers.map(player => {
                 const isSelected = selectedTarget === player.uid;
                 const shieldPercentage = ((player.shieldStrength || 0) / (player.maxShieldStrength || 50)) * 100;
                 
-                // Determine card background based on shield status and overshield
-                const getCardBackground = () => {
-                  if (isSelected) {
-                    return 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)';
-                  } else if ((player.overshield || 0) > 0) {
-                    // Special golden background for overshield
-                    return 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)';
-                  } else if (shieldPercentage >= 80) {
-                    return 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
-                  } else if (shieldPercentage >= 50) {
-                    return 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)';
-                  } else {
-                    return 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
-                  }
-                };
-
                 // Get shield status icon
                 const getShieldIcon = () => {
                   if ((player.overshield || 0) > 0) return '✨';
@@ -1565,6 +1225,12 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       }
                       return null;
                     })() : null;
+
+                const targetVariant =
+                  (player.overshield || 0) > 0 ? 'overshield'
+                  : shieldPercentage >= 80 ? 'safe'
+                  : shieldPercentage >= 50 ? 'mid'
+                  : 'vulnerable';
 
                 return (
                   <div
@@ -1588,134 +1254,56 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                     onMouseUp={() => {
                       console.log('VaultSiegeModal: Player mouseup:', player.displayName);
                     }}
-                    style={{
-                      background: isOnCooldown ? 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)' : getCardBackground(),
-                      border: `2px solid ${isSelected ? '#ffffff' : isOnCooldown ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}`,
-                      borderRadius: '12px',
-                      padding: '1.25rem',
-                      cursor: isOnCooldown ? 'not-allowed' : 'pointer',
-                      transition: 'all 0.3s ease',
-                      boxShadow: isSelected ? '0 8px 25px rgba(79, 70, 229, 0.4)' : '0 4px 12px rgba(0, 0, 0, 0.15)',
-                      minHeight: '160px',
-                      minWidth: '280px',
-                      maxWidth: '280px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                      position: 'relative',
-                      overflow: 'hidden',
-                      flexShrink: 0,
-                      opacity: isOnCooldown ? 0.6 : 1
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!isSelected) {
-                        e.currentTarget.style.transform = 'translateY(-4px) scale(1.02)';
-                        e.currentTarget.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.25)';
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!isSelected) {
-                        e.currentTarget.style.transform = 'translateY(0) scale(1)';
-                        e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
-                      }
-                    }}
+                    className={[
+                      'mst-siege-target',
+                      `mst-siege-target--${targetVariant}`,
+                      isSelected ? 'mst-siege-target--selected' : '',
+                      isOnCooldown ? 'mst-siege-target--cooldown' : '',
+                    ].filter(Boolean).join(' ')}
                   >
                     {/* Selection Badge */}
                     {isSelected && (
-                      <div style={{
-                        position: 'absolute',
-                        top: '0.75rem',
-                        right: '0.75rem',
-                        background: 'rgba(255,255,255,0.95)',
-                        color: '#4f46e5',
-                        padding: '0.25rem 0.5rem',
-                        borderRadius: '0.5rem',
-                        fontSize: '0.75rem',
-                        fontWeight: 'bold',
-                        zIndex: 2
-                      }}>
+                      <div className="mst-siege-selected-badge">
                         ✓ SELECTED
                       </div>
                     )}
                     
                     {/* Cooldown Badge */}
                     {isOnCooldown && (
-                      <div style={{
-                        position: 'absolute',
-                        top: '0.75rem',
-                        left: '0.75rem',
-                        background: 'rgba(107, 114, 128, 0.95)',
-                        color: 'white',
-                        padding: '0.25rem 0.5rem',
-                        borderRadius: '0.5rem',
-                        fontSize: '0.75rem',
-                        fontWeight: 'bold',
-                        zIndex: 2
-                      }}>
+                      <div className="mst-siege-cooldown-badge">
                         ⏰ On Cooldown
                       </div>
                     )}
 
                     {/* Card Header */}
-                    <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
-                      <div style={{ 
-                        fontSize: '2rem', 
-                        marginBottom: '0.5rem'
-                      }}>
+                    <div className="mst-siege-target-header">
+                      <div className="mst-siege-target-icon">
                         {getShieldIcon()}
                       </div>
-                      <div style={{ 
-                        fontWeight: 'bold', 
-                        color: 'white',
-                        fontSize: '1.1rem',
-                        textShadow: '0 1px 2px rgba(0,0,0,0.5)',
-                        marginBottom: '0.25rem'
-                      }}>
+                      <div className="mst-siege-target-name">
                         {player.displayName}
                       </div>
-                      <div style={{ 
-                        color: 'rgba(255,255,255,0.9)',
-                        fontSize: '0.875rem',
-                        textShadow: '0 1px 2px rgba(0,0,0,0.5)'
-                      }}>
+                      <div className="mst-siege-target-level">
                         Level {player.level}
                       </div>
                     </div>
 
                     {/* Player Stats */}
-                    <div style={{ 
-                      background: 'rgba(255,255,255,0.95)',
-                      padding: '1rem',
-                      borderRadius: '0.75rem'
-                    }}>
-                      <div style={{ 
-                        display: 'grid',
-                        gridTemplateColumns: '1fr 1fr',
-                        gap: '0.75rem',
-                        marginBottom: '0.75rem'
-                      }}>
-                        <div style={{ textAlign: 'center' }}>
-                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>VAULT HEALTH</div>
-                          <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#10b981' }}>
+                    <div className="mst-siege-target-stats">
+                      <div className="mst-siege-stat-grid">
+                        <div>
+                          <div className="mst-siege-stat-label">VAULT HEALTH</div>
+                          <div className="mst-siege-stat-value mst-siege-stat-value--health">
                             {player.vaultHealth !== undefined ? player.vaultHealth : Math.floor((player.capacity || 1000) * 0.1)}/{player.maxVaultHealth !== undefined ? player.maxVaultHealth : Math.floor((player.capacity || 1000) * 0.1)}
                           </div>
                         </div>
                         <div style={{ textAlign: 'center' }}>
-                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>SHIELD STATUS</div>
-                          <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#059669' }}>
+                          <div className="mst-siege-stat-label">SHIELD STATUS</div>
+                          <div className="mst-siege-stat-value mst-siege-stat-value--shield">
                             {player.shieldStrength || 0}/{player.maxShieldStrength || 50}
                           </div>
                           {(player.overshield || 0) > 0 && (
-                            <div style={{ 
-                              marginTop: '0.25rem',
-                              padding: '0.125rem 0.375rem',
-                              backgroundColor: '#fbbf24',
-                              color: '#92400e',
-                              borderRadius: '0.25rem',
-                              fontSize: '0.625rem',
-                              fontWeight: 'bold',
-                              display: 'inline-block'
-                            }}>
+                            <div className="mst-siege-overshield-tag">
                               ✨ +1 Overshield
                             </div>
                           )}
@@ -1723,31 +1311,17 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       </div>
 
                       {/* Shield Bar */}
-                      <div style={{ 
-                        background: 'rgba(0,0,0,0.1)',
-                        borderRadius: '0.5rem',
-                        height: '0.5rem',
-                        overflow: 'hidden',
-                        marginBottom: '0.5rem'
-                      }}>
-                        <div style={{
-                          background: shieldPercentage >= 80 ? '#10b981' : shieldPercentage >= 50 ? '#f59e0b' : '#ef4444',
-                          height: '100%',
-                          width: `${shieldPercentage}%`,
-                          transition: 'width 0.3s ease',
-                          borderRadius: '0.5rem'
-                        }} />
+                      <div className="mst-siege-shield-bar">
+                        <div
+                          className={`mst-siege-shield-bar-fill ${shieldPercentage >= 80 ? 'mst-siege-shield-bar-fill--safe' : shieldPercentage >= 50 ? 'mst-siege-shield-bar-fill--mid' : ''}`}
+                          style={{ width: `${shieldPercentage}%` }}
+                        />
                       </div>
 
                       {/* Shield Status Text / Cooldown */}
-                      <div style={{ 
-                        textAlign: 'center',
-                        fontSize: '0.75rem',
-                        color: '#6b7280',
-                        fontWeight: '500'
-                      }}>
+                      <div className="mst-siege-shield-status-text">
                         {isOnCooldown && cooldownRemaining ? (
-                          <span style={{ color: '#6b7280', fontWeight: 'bold' }}>
+                          <span style={{ fontWeight: 'bold' }}>
                             ⏰ Cooldown: {cooldownRemaining.hours}h {cooldownRemaining.minutes}m
                           </span>
                         ) : shieldPercentage >= 80 ? '🛡️ Well Protected' : 
@@ -1764,105 +1338,50 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
 
         {/* Target Vault Info */}
         {targetVault && (
-          <div style={{ marginBottom: '2rem', padding: '1rem', background: '#f9fafb', borderRadius: '8px', border: '2px solid #e5e7eb' }}>
-            <h4 style={{ marginBottom: '0.75rem', color: '#374151', fontSize: '1.1rem', fontWeight: 'bold' }}>Target Vault Status</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1.5rem' }}>
+          <div className="mst-siege-vault-status">
+            <h4 className="mst-siege-vault-status-title">Target Vault Status</h4>
+            <div className="mst-siege-vault-status-grid">
               <div>
-                <span style={{ fontSize: '0.875rem', color: '#6b7280', display: 'block', marginBottom: '0.5rem' }}>Shield Strength</span>
+                <span className="mst-siege-vault-metric-label">Shield Strength</span>
                 <div style={{ position: 'relative' }}>
                   {targetVaultBefore && targetVaultBefore.shieldStrength !== undefined && (
-                    <div style={{ 
-                      position: 'absolute',
-                      top: '-1.5rem',
-                      left: 0,
-                      fontSize: '0.75rem',
-                      color: '#9ca3af',
-                      fontStyle: 'italic'
-                    }}>
+                    <div className="mst-siege-vault-metric-before">
                       Before: {targetVaultBefore.shieldStrength}
                     </div>
                   )}
-                  <div style={{ 
-                    fontWeight: 'bold', 
-                    color: '#2563eb',
-                    fontSize: '1.1rem',
-                    position: 'relative',
-                    padding: '0.5rem',
-                    background: 'white',
-                    borderRadius: '0.5rem',
-                    border: '2px solid #dbeafe'
-                  }}>
+                  <div className="mst-siege-vault-metric-value mst-siege-vault-metric-value--shield">
                     {targetVault.shieldStrength || 0} / {targetVault.maxShieldStrength || 50}
                     {targetVaultBefore && targetVaultBefore.shieldStrength !== undefined && targetVaultBefore.shieldStrength !== (targetVault.shieldStrength || 0) && (
-                      <div style={{
-                        position: 'absolute',
-                        right: '-2px',
-                        top: '50%',
-                        transform: 'translateY(-50%)',
-                        width: '3px',
-                        height: '100%',
-                        background: 'linear-gradient(to bottom, transparent, #ef4444, transparent)',
-                        borderRadius: '2px'
-                      }} />
+                      <div className="mst-siege-vault-delta-bar" />
                     )}
                   </div>
                   {targetVaultBefore && targetVaultBefore.shieldStrength !== undefined && targetVaultBefore.shieldStrength !== (targetVault.shieldStrength || 0) && (
-                    <div style={{ 
-                      marginTop: '0.25rem',
-                      fontSize: '0.75rem',
-                      color: '#ef4444',
-                      fontWeight: 'bold'
-                    }}>
+                    <div className="mst-siege-vault-delta">
                       {targetVaultBefore.shieldStrength > (targetVault.shieldStrength || 0) ? '↓' : '↑'} {Math.abs((targetVault.shieldStrength || 0) - targetVaultBefore.shieldStrength)}
                     </div>
                   )}
                 </div>
                 {(targetVault.overshield || 0) > 0 && (
-                  <div style={{ 
-                    marginTop: '0.5rem',
-                    padding: '0.125rem 0.375rem',
-                    backgroundColor: '#fbbf24',
-                    color: '#92400e',
-                    borderRadius: '0.25rem',
-                    fontSize: '0.625rem',
-                    fontWeight: 'bold',
-                    display: 'inline-block'
-                  }}>
+                  <div className="mst-siege-overshield-tag">
                     ✨ +1 Overshield
                   </div>
                 )}
               </div>
               <div>
-                <span style={{ fontSize: '0.875rem', color: '#6b7280', display: 'block', marginBottom: '0.5rem' }}>Generator</span>
-                <div style={{ fontWeight: 'bold', color: '#f59e0b', fontSize: '1.1rem', padding: '0.5rem', background: 'white', borderRadius: '0.5rem', border: '2px solid #fde68a' }}>
+                <span className="mst-siege-vault-metric-label">Generator</span>
+                <div className="mst-siege-vault-metric-value mst-siege-vault-metric-value--generator">
                   Level {targetVault.generatorLevel || 1}
                 </div>
               </div>
               <div>
-                <span style={{ fontSize: '0.875rem', color: '#6b7280', display: 'block', marginBottom: '0.5rem' }}>Vault Health</span>
+                <span className="mst-siege-vault-metric-label">Vault Health</span>
                 <div style={{ position: 'relative' }}>
                   {targetVaultBefore && targetVaultBefore.vaultHealth !== undefined && (
-                    <div style={{ 
-                      position: 'absolute',
-                      top: '-1.5rem',
-                      left: 0,
-                      fontSize: '0.75rem',
-                      color: '#9ca3af',
-                      fontStyle: 'italic'
-                    }}>
+                    <div className="mst-siege-vault-metric-before">
                       Before: {targetVaultBefore.vaultHealth}
                     </div>
                   )}
-                  <div style={{ 
-                    fontWeight: 'bold', 
-                    color: '#059669',
-                    fontSize: '1.1rem',
-                    position: 'relative',
-                    padding: '0.5rem',
-                    background: 'white',
-                    borderRadius: '0.5rem',
-                    border: '2px solid #d1fae5'
-                  }}>
+                  <div className="mst-siege-vault-metric-value mst-siege-vault-metric-value--health">
                     {(() => {
                       const maxVaultHealth = Math.floor((targetVault.capacity || 1000) * 0.1);
                       const currentVaultHealth = targetVault.vaultHealth !== undefined 
@@ -1877,16 +1396,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                         : Math.min(targetVault.currentPP || 0, maxVaultHealth);
                       return currentVaultHealth !== targetVaultBefore.vaultHealth;
                     })() && (
-                      <div style={{
-                        position: 'absolute',
-                        right: '-2px',
-                        top: '50%',
-                        transform: 'translateY(-50%)',
-                        width: '3px',
-                        height: '100%',
-                        background: 'linear-gradient(to bottom, transparent, #ef4444, transparent)',
-                        borderRadius: '2px'
-                      }} />
+                      <div className="mst-siege-vault-delta-bar" />
                     )}
                   </div>
                   {targetVaultBefore && targetVaultBefore.vaultHealth !== undefined && (() => {
@@ -1897,12 +1407,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                     const change = currentVaultHealth - targetVaultBefore.vaultHealth;
                     return change !== 0;
                   })() && (
-                    <div style={{ 
-                      marginTop: '0.25rem',
-                      fontSize: '0.75rem',
-                      color: '#ef4444',
-                      fontWeight: 'bold'
-                    }}>
+                    <div className="mst-siege-vault-delta">
                       ↓ {Math.abs((() => {
                         const maxVaultHealth = Math.floor((targetVault.capacity || 1000) * 0.1);
                         const currentVaultHealth = targetVault.vaultHealth !== undefined 
@@ -1919,33 +1424,19 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         )}
 
         {/* Move Selection */}
-        <div style={{ marginBottom: '2rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h3 style={{ fontSize: '1.1rem', color: '#374151' }}>Select Moves</h3>
-            <div style={{ 
-              fontSize: '0.875rem', 
-              color: '#6b7280',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem'
-            }}>
+        <div className="mst-siege-section">
+          <div className="mst-siege-section-head">
+            <h3 className="mst-siege-section-title">
+              <span className="mst-siege-section-title-icon" aria-hidden>⚔</span>
+              Select Moves
+            </h3>
+            <div className="mst-siege-meta">
               <span>Selected: {selectedMoves.length}</span>
               <span>•</span>
                                 <span>Available: {remainingMoves - selectedActionCards.length}</span>
             </div>
           </div>
-          <div 
-            className="vault-siege-scroll"
-            style={{ 
-              display: 'flex', 
-              gap: '1rem',
-              overflowX: 'auto',
-              paddingBottom: '0.5rem',
-              scrollbarWidth: 'thin',
-              scrollbarColor: '#cbd5e1 #f1f5f9',
-              scrollBehavior: 'smooth',
-              WebkitOverflowScrolling: 'touch'
-            }}>
+          <div className="mst-siege-scroll">
             {unlockedMoves.map(move => {
               const isSelected = selectedMoves.includes(move.id);
               
@@ -1974,18 +1465,14 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                 damageDisplay = formatDamageRange(damageRange);
               }
               
-              // Determine card background based on move category and selection
-              const getCardBackground = () => {
-                if (isSelected) {
-                  return 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)';
-                } else if (move.category === 'manifest') {
-                  return 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)';
-                } else if (move.category === 'elemental') {
-                  return 'linear-gradient(135deg, #ec4899 0%, #db2777 100%)';
-                } else {
-                  return 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)';
-                }
-              };
+              const elementKey = (move.elementalAffinity || '').toLowerCase();
+              const moveVariant =
+                move.category === 'manifest' ? 'manifest'
+                : move.category === 'elemental'
+                  ? (['fire', 'water', 'earth', 'air', 'lightning', 'light', 'shadow', 'metal'].includes(elementKey)
+                      ? elementKey
+                      : 'elemental')
+                  : 'elemental';
 
               // Get move type icon
               const getMoveIcon = () => {
@@ -2011,79 +1498,29 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                 <div
                   key={move.id}
                   onClick={() => handleMoveToggle(move.id)}
-                  style={{
-                    background: getCardBackground(),
-                    border: `2px solid ${isSelected ? '#ffffff' : 'rgba(255,255,255,0.2)'}`,
-                    borderRadius: '12px',
-                    padding: '1.25rem',
-                    cursor: 'pointer',
-                    transition: 'all 0.3s ease',
-                    boxShadow: isSelected ? '0 8px 25px rgba(79, 70, 229, 0.4)' : '0 4px 12px rgba(0, 0, 0, 0.15)',
-                    minHeight: '160px',
-                    minWidth: '280px',
-                    maxWidth: '280px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                    position: 'relative',
-                    overflow: 'hidden',
-                    opacity: move.unlocked ? 1 : 0.6,
-                    flexShrink: 0
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isSelected) {
-                      e.currentTarget.style.transform = 'translateY(-4px) scale(1.02)';
-                      e.currentTarget.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.25)';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isSelected) {
-                      e.currentTarget.style.transform = 'translateY(0) scale(1)';
-                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
-                    }
-                  }}
+                  className={[
+                    'mst-siege-move',
+                    `mst-siege-move--${moveVariant}`,
+                    isSelected ? 'mst-siege-move--selected' : '',
+                    move.unlocked ? '' : 'mst-siege-move--muted',
+                  ].filter(Boolean).join(' ')}
                 >
                   {/* Selection Badge */}
                   {isSelected && (
-                    <div style={{
-                      position: 'absolute',
-                      top: '0.75rem',
-                      right: '0.75rem',
-                      background: 'rgba(255,255,255,0.95)',
-                      color: '#4f46e5',
-                      padding: '0.25rem 0.5rem',
-                      borderRadius: '0.5rem',
-                        fontSize: '0.75rem',
-                        fontWeight: 'bold',
-                        zIndex: 2
-                    }}>
+                    <div className="mst-siege-selected-badge">
                       ✓ SELECTED
                     </div>
                   )}
 
                   {/* Card Header */}
-                  <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
-                    <div style={{
-                      fontSize: '2rem',
-                      marginBottom: '0.5rem'
-                    }}>
+                  <div className="mst-siege-move-header">
+                    <div className="mst-siege-move-icon">
                       {getMoveIcon()}
                     </div>
-                    <div style={{ 
-                      fontWeight: 'bold', 
-                      color: 'white',
-                      fontSize: '1.1rem',
-                      textShadow: '0 1px 2px rgba(0,0,0,0.5)',
-                      marginBottom: '0.25rem'
-                    }}>
+                    <div className="mst-siege-move-name">
                       {displayName} [Level {effectiveMasteryLevel}]
                     </div>
-                    <div style={{ 
-                      color: 'rgba(255,255,255,0.9)',
-                      fontSize: '0.875rem',
-                      textShadow: '0 1px 2px rgba(0,0,0,0.5)',
-                      textTransform: 'uppercase'
-                    }}>
+                    <div className="mst-siege-move-type">
                       {move.category === 'manifest'
                         ? (move.manifestType ? `${move.manifestType.charAt(0).toUpperCase() + move.manifestType.slice(1)} Manifest` : 'Manifest')
                         : move.category === 'elemental'
@@ -2094,45 +1531,22 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                   </div>
 
                   {/* Move Stats */}
-                  <div style={{ 
-                    background: 'rgba(255,255,255,0.95)',
-                    padding: '1rem',
-                    borderRadius: '0.75rem'
-                  }}>
-                    <div style={{ 
-                      fontSize: '0.875rem',
-                      color: '#374151',
-                      lineHeight: '1.4',
-                      marginBottom: '0.75rem',
-                      textAlign: 'center'
-                    }}>
+                  <div className="mst-siege-move-body">
+                    <div className="mst-siege-move-desc">
                       {displayDescription}
                     </div>
                     
                     {damageDisplay && (
-                      <div style={{ 
-                        display: 'grid',
-                        gridTemplateColumns: '1fr',
-                        gap: '0.75rem',
-                        marginBottom: '0.75rem'
-                      }}>
-                        <div style={{ textAlign: 'center' }}>
-                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>DAMAGE RANGE</div>
-                          <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#dc2626' }}>
-                            {damageDisplay}
-                          </div>
+                      <div>
+                        <div className="mst-siege-move-damage-label">DAMAGE RANGE</div>
+                        <div className="mst-siege-move-damage-value">
+                          {damageDisplay}
                         </div>
                       </div>
                     )}
 
                     {/* Move Type Badge */}
-                    <div style={{ 
-                      textAlign: 'center',
-                      fontSize: '0.75rem',
-                      color: '#6b7280',
-                      fontWeight: '500',
-                      textTransform: 'uppercase'
-                    }}>
+                    <div className="mst-siege-move-meta">
                       {move.type} • {move.category === 'manifest'
                         ? (move.manifestType || 'MANIFEST').toUpperCase()
                         : move.category === 'elemental'
@@ -2148,33 +1562,19 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         </div>
 
         {/* Action Card Selection */}
-        <div style={{ marginBottom: '2rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h3 style={{ fontSize: '1.1rem', color: '#374151' }}>Select Action Cards</h3>
-            <div style={{ 
-              fontSize: '0.875rem', 
-              color: '#6b7280',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem'
-            }}>
+        <div className="mst-siege-section">
+          <div className="mst-siege-section-head">
+            <h3 className="mst-siege-section-title">
+              <span className="mst-siege-section-title-icon" aria-hidden>🂠</span>
+              Select Action Cards
+            </h3>
+            <div className="mst-siege-meta">
               <span>Selected: {selectedActionCards.length}</span>
               <span>•</span>
                                 <span>Available: {remainingMoves - selectedMoves.length}</span>
             </div>
           </div>
-          <div 
-            className="vault-siege-scroll"
-            style={{ 
-              display: 'flex', 
-              gap: '1rem',
-              overflowX: 'auto',
-              paddingBottom: '0.5rem',
-              scrollbarWidth: 'thin',
-              scrollbarColor: '#cbd5e1 #f1f5f9',
-              scrollBehavior: 'smooth',
-              WebkitOverflowScrolling: 'touch'
-            }}>
+          <div className="mst-siege-scroll">
             {unlockedCards.map(card => {
               const isSelected = selectedActionCards.includes(card.id);
               
@@ -2196,154 +1596,65 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                   damageDisplay = cardDamageValue.toString();
                 }
               }
-              
-              // Determine card background based on selection
-              const getCardBackground = () => {
-                if (isSelected) {
-                  return 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)';
-                } else {
-                  return 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)';
-                }
-              };
 
               return (
                 <div
                   key={card.id}
                   onClick={() => handleActionCardToggle(card.id)}
-                  style={{
-                    background: getCardBackground(),
-                    border: `2px solid ${isSelected ? '#ffffff' : 'rgba(255,255,255,0.2)'}`,
-                    borderRadius: '12px',
-                    padding: '1.25rem',
-                    cursor: 'pointer',
-                    transition: 'all 0.3s ease',
-                    boxShadow: isSelected ? '0 8px 25px rgba(79, 70, 229, 0.4)' : '0 4px 12px rgba(0, 0, 0, 0.15)',
-                    minHeight: '160px',
-                    minWidth: '280px',
-                    maxWidth: '280px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                    position: 'relative',
-                    overflow: 'hidden',
-                    opacity: card.unlocked ? 1 : 0.6,
-                    flexShrink: 0
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isSelected) {
-                      e.currentTarget.style.transform = 'translateY(-4px) scale(1.02)';
-                      e.currentTarget.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.25)';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isSelected) {
-                      e.currentTarget.style.transform = 'translateY(0) scale(1)';
-                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
-                    }
-                  }}
+                  className={[
+                    'mst-siege-action-card',
+                    isSelected ? 'mst-siege-action-card--selected' : '',
+                    card.unlocked ? '' : 'mst-siege-action-card--muted',
+                  ].filter(Boolean).join(' ')}
                 >
                   {/* Selection Badge */}
                   {isSelected && (
-                    <div style={{
-                      position: 'absolute',
-                      top: '0.75rem',
-                      right: '0.75rem',
-                      background: 'rgba(255,255,255,0.95)',
-                      color: '#4f46e5',
-                      padding: '0.25rem 0.5rem',
-                      borderRadius: '0.5rem',
-                        fontSize: '0.75rem',
-                        fontWeight: 'bold',
-                        zIndex: 2
-                    }}>
+                    <div className="mst-siege-selected-badge">
                       ✓ SELECTED
                     </div>
                   )}
 
                   {/* Card Header */}
-                  <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
-                    <div style={{
-                      fontSize: '2rem',
-                      marginBottom: '0.5rem'
-                    }}>
+                  <div className="mst-siege-move-header">
+                    <div className="mst-siege-move-icon">
                       🃏
                     </div>
-                    <div style={{ 
-                      fontWeight: 'bold', 
-                      color: 'white',
-                      fontSize: '1.1rem',
-                      textShadow: '0 1px 2px rgba(0,0,0,0.5)',
-                      marginBottom: '0.25rem'
-                    }}>
+                    <div className="mst-siege-move-name">
                       {card.name}
                     </div>
                     {card.elementalAffinity ? (
                       <div
-                        style={{
-                          fontSize: '0.78rem',
-                          color: 'rgba(255,255,255,0.95)',
-                          marginBottom: '0.35rem',
-                          fontWeight: 600,
-                          textShadow: '0 1px 2px rgba(0,0,0,0.5)',
-                        }}
+                        className="mst-siege-action-affinity"
                         title={elementTypeLabel(card.elementalAffinity as ElementType)}
                       >
                         {elementTypeEmoji(card.elementalAffinity as ElementType)}{' '}
                         {elementTypeLabel(card.elementalAffinity as ElementType)}
                       </div>
                     ) : null}
-                    <div style={{ 
-                      color: 'rgba(255,255,255,0.9)',
-                      fontSize: '0.875rem',
-                      textShadow: '0 1px 2px rgba(0,0,0,0.5)',
-                      textTransform: 'uppercase'
-                    }}>
+                    <div className="mst-siege-move-type">
                       Action Card
                     </div>
                   </div>
 
                   {/* Card Stats */}
-                  <div style={{ 
-                    background: 'rgba(255,255,255,0.95)',
-                    padding: '1rem',
-                    borderRadius: '0.75rem'
-                  }}>
-                    <div style={{ 
-                      fontSize: '0.875rem',
-                      color: '#374151',
-                      lineHeight: '1.4',
-                      marginBottom: '0.75rem',
-                      textAlign: 'center'
-                    }}>
+                  <div className="mst-siege-move-body">
+                    <div className="mst-siege-move-desc">
                       {card.description}
                     </div>
                     
                     {damageDisplay && (
-                      <div style={{ 
-                        display: 'grid',
-                        gridTemplateColumns: '1fr',
-                        gap: '0.75rem',
-                        marginBottom: '0.75rem'
-                      }}>
-                        <div style={{ textAlign: 'center' }}>
-                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>
-                            {typeof cardDamageValue === 'object' ? 'DAMAGE RANGE' : 'DAMAGE'}
-                          </div>
-                          <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#dc2626' }}>
-                            {damageDisplay}
-                          </div>
+                      <div>
+                        <div className="mst-siege-move-damage-label">
+                          {typeof cardDamageValue === 'object' ? 'DAMAGE RANGE' : 'DAMAGE'}
+                        </div>
+                        <div className="mst-siege-move-damage-value">
+                          {damageDisplay}
                         </div>
                       </div>
                     )}
 
                     {/* Card Info */}
-                    <div style={{ 
-                      textAlign: 'center',
-                      fontSize: '0.75rem',
-                      color: '#6b7280',
-                      fontWeight: '500',
-                      textTransform: 'uppercase'
-                    }}>
+                    <div className="mst-siege-move-meta">
                       Uses: {card.uses}/{card.maxUses} • {card.rarity}
                     </div>
                   </div>
@@ -2354,7 +1665,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         </div>
 
         {/* Sync and Attack Buttons */}
-        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+        <div className="mst-siege-footer">
           <button
             onClick={async () => {
               console.log('🔄 Manual sync button clicked');
@@ -2388,28 +1699,13 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                 });
               }
             }}
-            style={{
-              background: '#10b981',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem 1rem',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontWeight: 'bold',
-            }}
+            className="mst-siege-btn-sync"
           >
             🔄 Sync Target PP
           </button>
           <button
             onClick={onClose}
-            style={{
-              background: '#6b7280',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem 1.5rem',
-              borderRadius: '6px',
-              cursor: 'pointer',
-            }}
+            className="mst-siege-btn-cancel"
           >
             Cancel
           </button>
@@ -2434,18 +1730,11 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
               handleAttack();
             }}
                               disabled={!selectedTarget || (!selectedMoves.length && !selectedActionCards.length) || loading || remainingMoves === 0}
-            style={{
-                              background: !selectedTarget || (!selectedMoves.length && !selectedActionCards.length) || loading || remainingMoves === 0 ? '#9ca3af' : '#dc2626',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem 1.5rem',
-              borderRadius: '6px',
-                              cursor: !selectedTarget || (!selectedMoves.length && !selectedActionCards.length) || loading || remainingMoves === 0 ? 'not-allowed' : 'pointer',
-              fontWeight: 'bold',
-            }}
+            className="mst-siege-btn-confirm"
           >
                           {loading ? 'Executing Attack...' : remainingMoves === 0 ? 'No Offline Moves Remaining' : 'Launch Vault Siege!'}
           </button>
+        </div>
         </div>
       </div>
     </div>
@@ -2455,27 +1744,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
   // Always render popup portal if attackResults exists, even if modal is closed
   // This ensures the popup shows even if the modal closes after attack
   const popupPortal = attackResults && attackResultsPopup ? createPortal(
-    <>
-      <style>
-        {`
-          @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-          }
-          @keyframes slideInUp {
-            from {
-              opacity: 0;
-              transform: translateY(30px) scale(0.95);
-            }
-            to {
-              opacity: 1;
-              transform: translateY(0) scale(1);
-            }
-          }
-        `}
-      </style>
-      {attackResultsPopup}
-    </>,
+    attackResultsPopup,
     document.body
   ) : null;
 

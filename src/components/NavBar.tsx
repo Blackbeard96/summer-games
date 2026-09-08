@@ -35,10 +35,10 @@ const tooltipStyle: CSSProperties = {
 // Responsive nav item style function
 const getNavItemStyle = (screenSize: 'mobile' | 'tablet' | 'desktop'): CSSProperties => {
   const baseStyle: CSSProperties = {
-    color: 'white',
+    color: 'var(--mst-text-secondary)',
     textDecoration: 'none',
-    borderRadius: '0.25rem',
-    transition: 'background-color 0.2s ease',
+    borderRadius: 'var(--mst-radius-sm)',
+    transition: 'color var(--mst-duration) var(--mst-ease), background-color var(--mst-duration) var(--mst-ease)',
     position: 'relative' as CSSProperties['position'],
     display: 'inline-block',
     cursor: 'pointer',
@@ -780,10 +780,10 @@ const NavBar = memo(() => {
           Role: {userRole || 'loading...'}
         </div>
       )}
-      <nav className="nav" style={{
-        backgroundColor: '#1f2937',
+      <nav className="nav mst-navbar" style={{
+        backgroundColor: 'var(--mst-bg-panel)',
         padding: screenSize === 'mobile' ? '0.75rem 1rem' : screenSize === 'tablet' ? '0.875rem 1rem' : '0.875rem 1.25rem',
-        boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+        boxShadow: 'var(--mst-shadow-panel)',
         position: 'sticky',
         top: 0,
         zIndex: 50
@@ -802,25 +802,25 @@ const NavBar = memo(() => {
       }}>
         {/* Logo/Brand */}
         <div style={{ display: 'flex', alignItems: 'center', gap: screenSize === 'tablet' ? '0.5rem' : '0.75rem', flexShrink: 0 }}>
-          <div style={{
+          <div className="mst-nav-brand-mark" style={{
             width: screenSize === 'mobile' ? '32px' : screenSize === 'tablet' ? '36px' : '40px',
             height: screenSize === 'mobile' ? '32px' : screenSize === 'tablet' ? '36px' : '40px',
-            backgroundColor: '#4f46e5',
+            backgroundColor: 'var(--mst-gold)',
             borderRadius: '0.5rem',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: 'white',
+            color: 'var(--mst-bg-primary)',
             fontSize: screenSize === 'mobile' ? '1rem' : screenSize === 'tablet' ? '1.125rem' : '1.25rem',
             fontWeight: 'bold'
           }}>
             X
           </div>
           {screenSize === 'desktop' && (
-            <span style={{
+            <span className="mst-nav-brand-title" style={{
               fontSize: '1.125rem',
               fontWeight: 'bold',
-              color: 'white',
+              color: 'var(--mst-text-primary)',
               whiteSpace: 'nowrap',
               flexShrink: 0
             }}>
@@ -855,8 +855,9 @@ const NavBar = memo(() => {
                 }} 
                 onMouseEnter={(e) => {
                   showTooltip(e);
-                  e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)';
-                  e.currentTarget.style.setProperty('background-color', 'rgba(255,255,255,0.2)', 'important');
+                  e.currentTarget.style.backgroundColor = 'var(--mst-gold-soft)';
+                  e.currentTarget.style.setProperty('background-color', 'var(--mst-gold-soft)', 'important');
+                  e.currentTarget.style.color = 'var(--mst-gold-bright)';
                   if (item.hasDropdown && item.children && item.children.length > 0) {
                     // Clear any pending timeout
                     if (dropdownTimeoutRef.current) {
@@ -872,6 +873,7 @@ const NavBar = memo(() => {
                   hideTooltip(e);
                   e.currentTarget.style.backgroundColor = 'transparent';
                   e.currentTarget.style.setProperty('background-color', 'transparent', 'important');
+                  e.currentTarget.style.color = 'var(--mst-text-secondary)';
                   if (item.hasDropdown && item.children && item.children.length > 0) {
                     // Add delay before hiding dropdown (300ms gives time to move to dropdown)
                     dropdownTimeoutRef.current = setTimeout(() => {
@@ -897,15 +899,15 @@ const NavBar = memo(() => {
                 
                 {/* Dropdown Menu (Play, Learn, Community, Profile) */}
                 {item.hasDropdown && item.children && item.children.length > 0 && openDropdown === item.path && (
-                  <div style={{
+                  <div className="mst-nav-dropdown" style={{
                     position: 'absolute',
                     top: '100%',
                     left: '0',
                     marginTop: '0.5rem',
-                    backgroundColor: '#1f2937',
-                    borderRadius: '0.5rem',
-                    boxShadow: '0 10px 25px rgba(0,0,0,0.3)',
-                    border: '1px solid #374151',
+                    backgroundColor: 'var(--mst-bg-elevated)',
+                    borderRadius: 'var(--mst-radius-md)',
+                    boxShadow: 'var(--mst-shadow-elevated)',
+                    border: '1px solid var(--mst-border-gold)',
                     zIndex: 1001,
                     minWidth: '220px',
                     maxWidth: '280px',
@@ -1172,6 +1174,7 @@ const NavBar = memo(() => {
                   // This allows re-granting access if role gets lost
                   return (
                     <button
+                      className="mst-btn-admin"
                       onClick={() => {
                         // If already admin, navigate to admin panel
                         // Otherwise, grant admin access
@@ -1186,28 +1189,14 @@ const NavBar = memo(() => {
                         alignItems: 'center',
                         gap: '0.375rem',
                         padding: screenSize === 'mobile' ? '0.25rem 0.5rem' : screenSize === 'tablet' ? '0.25rem 0.5rem' : '0.375rem 0.625rem',
-                        backgroundColor: isAdminUser ? 'rgba(139, 92, 246, 0.2)' : 'rgba(139, 92, 246, 0.3)',
-                        border: isAdminUser ? '1px solid rgba(139, 92, 246, 0.4)' : '1px solid rgba(139, 92, 246, 0.6)',
-                        borderRadius: '0.375rem',
                         fontSize: screenSize === 'mobile' ? '0.75rem' : screenSize === 'tablet' ? '0.75rem' : '0.8125rem',
-                        color: '#c4b5fd',
-                        fontWeight: '500',
                         whiteSpace: 'nowrap',
                         flexShrink: 0,
                         cursor: 'pointer',
-                        transition: 'all 0.2s ease'
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = 'rgba(139, 92, 246, 0.5)';
-                        e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.8)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = isAdminUser ? 'rgba(139, 92, 246, 0.2)' : 'rgba(139, 92, 246, 0.3)';
-                        e.currentTarget.style.borderColor = isAdminUser ? 'rgba(139, 92, 246, 0.4)' : 'rgba(139, 92, 246, 0.6)';
                       }}
                       title={isAdminUser ? "Click to open Admin Panel" : "Click to grant admin access"}
                     >
-                      <span>👑</span>
+                      <span aria-hidden>♛</span>
                       {screenSize === 'desktop' && <span>Admin</span>}
                     </button>
                   );
@@ -1531,7 +1520,7 @@ const NavBar = memo(() => {
               <span style={{ 
                 fontSize: isMobile ? '0.875rem' : '1rem',
                 fontWeight: '500',
-                color: 'white'
+                color: 'var(--mst-text-primary)'
               }}>
                 {screenSize === 'mobile' 
                   ? displayNameWithRole.substring(0, 8) + '...' 
@@ -1540,22 +1529,21 @@ const NavBar = memo(() => {
                     : displayNameWithRole}
               </span>
               <button
+                className="mst-btn-logout"
                 onClick={handleLogout}
                 disabled={isLoggingOut}
                 style={{
-                  background: 'rgba(255,255,255,0.1)',
-                  border: '1px solid rgba(255,255,255,0.2)',
-                  color: 'white',
+                  background: 'transparent',
+                  border: '1px solid var(--mst-border)',
+                  color: 'var(--mst-text-secondary)',
                   padding: screenSize === 'mobile' ? '0.5rem 0.75rem' : screenSize === 'tablet' ? '0.5rem 0.875rem' : '0.5rem 1rem',
-                  borderRadius: '0.25rem',
+                  borderRadius: 'var(--mst-radius-sm)',
                   cursor: 'pointer',
                   fontSize: screenSize === 'mobile' ? '0.75rem' : screenSize === 'tablet' ? '0.8125rem' : '0.875rem',
-                  transition: 'all 0.2s',
+                  transition: 'all var(--mst-duration) var(--mst-ease)',
                   minWidth: screenSize === 'mobile' ? '60px' : 'auto',
                   minHeight: screenSize === 'mobile' ? '36px' : 'auto'
                 }}
-                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
-                onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
               >
                 {isLoggingOut ? '...' : 'Logout'}
               </button>

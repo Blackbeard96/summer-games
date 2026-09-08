@@ -90,10 +90,10 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   rarity,
   style,
   description,
-  cardBgColor = 'linear-gradient(135deg, #e0e7ff 0%, #fbbf24 100%)',
+  cardBgColor = '#0B1220',
   cardFrameShape = 'circular',
-  cardBorderColor = '#a78bfa',
-  cardImageBorderColor = '#a78bfa',
+  cardBorderColor = '#D4AF37',
+  cardImageBorderColor = '#D4AF37',
   moves = [],
   badges = [],
   xp = 0,
@@ -151,9 +151,38 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
     }
   }, [showSkillTree, onSkillTreeToggle]);
 
-  const background = useMemo(() => {
-    return cardBgColor.startsWith('linear') ? cardBgColor : `linear-gradient(135deg, ${cardBgColor} 0%, #fbbf24 100%)`;
+  const MST_GOLD = '#D4AF37';
+  const LEGACY_BORDERS = new Set(['#a78bfa', '#A78BFA', '#8b5cf6', '#8B5CF6']);
+  const LEGACY_BG = new Set([
+    '#e0e7ff',
+    '#E0E7FF',
+    'linear-gradient(135deg, #e0e7ff 0%, #fbbf24 100%)',
+    'linear-gradient(135deg, #E0E7FF 0%, #FBBF24 100%)',
+  ]);
+
+  const effectiveBorderColor = useMemo(() => {
+    if (!cardBorderColor || LEGACY_BORDERS.has(cardBorderColor)) return MST_GOLD;
+    return cardBorderColor;
+  }, [cardBorderColor]);
+
+  const effectiveImageBorderColor = useMemo(() => {
+    if (!cardImageBorderColor || LEGACY_BORDERS.has(cardImageBorderColor)) return MST_GOLD;
+    return cardImageBorderColor;
+  }, [cardImageBorderColor]);
+
+  const hasCustomAccent = useMemo(() => {
+    if (!cardBgColor) return false;
+    if (LEGACY_BG.has(cardBgColor)) return false;
+    if (cardBgColor === '#0B1220' || cardBgColor === '#0b1220') return false;
+    if (cardBgColor.startsWith('linear') && (cardBgColor.includes('#fbbf24') || cardBgColor.includes('#e0e7ff'))) {
+      return false;
+    }
+    return true;
   }, [cardBgColor]);
+
+  const customAccent = hasCustomAccent
+    ? (cardBgColor.startsWith('linear') ? undefined : cardBgColor)
+    : undefined;
 
   const xpProgress = useMemo(() => {
     if (typeof xp === 'number') {
@@ -166,6 +195,21 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
     () => powerStatsProp ?? createDefaultPlayerPowerStats(),
     [powerStatsProp]
   );
+
+  // Function to get element CSS class for MST semantic colors
+  const getElementClass = (elementName: string) => {
+    const map: Record<string, string> = {
+      Fire: 'mst-element-fire',
+      Water: 'mst-element-water',
+      Earth: 'mst-element-earth',
+      Air: 'mst-element-air',
+      Lightning: 'mst-element-lightning',
+      Light: 'mst-element-light',
+      Shadow: 'mst-element-shadow',
+      Metal: 'mst-element-metal',
+    };
+    return map[elementName] || '';
+  };
 
   // Function to get manifest color
   const getManifestColor = (manifestName: string) => {
@@ -181,22 +225,22 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
       'Language': '#EC4899',
       'Art': '#6366F1',
     };
-    return manifestColors[manifestName] || '#6b7280';
+    return manifestColors[manifestName] || '#8B5CF6';
   };
 
-  // Function to get element color
+  // Function to get element color (fallback when class not used)
   const getElementColor = (elementName: string) => {
     const elementColors: { [key: string]: string } = {
-      'Fire': '#EF4444',
-      'Water': '#3B82F6', 
-      'Air': '#10B981',
-      'Earth': '#F59E0B',
-      'Lightning': '#8B5CF6',
-      'Light': '#FBBF24',
-      'Shadow': '#6B7280',
-      'Metal': '#9CA3AF'
+      'Fire': '#e85d3a',
+      'Water': '#3aa8d4', 
+      'Air': '#b8c5d6',
+      'Earth': '#5a9e5a',
+      'Lightning': '#e8c547',
+      'Light': '#f5efd8',
+      'Shadow': '#7c3aed',
+      'Metal': '#c9b896'
     };
-    return elementColors[elementName] || '#6b7280';
+    return elementColors[elementName] || '#8e98a8';
   };
 
   const handleFlip = useCallback(() => {
@@ -325,14 +369,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
         `}
       </style>
       <div
-        style={{
-          perspective: 1200,
-          width: 320,
-          height: 480,
-          maxHeight: 'calc(100dvh - 9rem)',
-          margin: '0 auto',
-          cursor: 'pointer',
-        }}
+        className="mst-power-card"
         onClick={handleFlip}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
@@ -346,31 +383,16 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
         aria-pressed={flipped}
       >
         <div
-          style={{
-            width: '100%',
-            height: '100%',
-            position: 'relative',
-            transition: 'transform 0.7s cubic-bezier(.4,2,.6,1)',
-            transformStyle: 'preserve-3d',
-            transform: flipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
-          }}
+          className={`mst-power-card-inner${flipped ? ' is-flipped' : ''}`}
         >
           {/* Front */}
           <div
+            className={`mst-power-card-face mst-power-card-face--front${customAccent ? ' has-custom-accent' : ''}`}
             style={{
-              position: 'absolute',
-              width: '100%',
-              height: '100%',
-              backfaceVisibility: 'hidden',
-              background: background,
-              border: `4px solid ${cardBorderColor}`,
-              borderRadius: 24,
-              boxShadow: '0 8px 32px 0 rgba(31,41,55,0.25)',
-              display: 'flex',
-              flexDirection: 'column',
-              padding: 24,
-              zIndex: 2,
-              transform: 'rotateY(0deg)',
+              borderColor: effectiveBorderColor,
+              ...(customAccent
+                ? ({ ['--mst-power-card-accent' as string]: customAccent } as React.CSSProperties)
+                : {}),
             }}
           >
             {/* Top Row: Name, PP, TM, Level all aligned */}
@@ -378,13 +400,13 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
               {/* First row: Name, PP, TM, Lv badges */}
               <div style={{ display: 'flex', width: '100%', alignItems: 'center', marginBottom: 4 }}>
                 {/* Player Name - full width */}
-                <div style={{ fontSize: 20, fontWeight: 'bold', color: '#1f2937', textAlign: 'left', lineHeight: 1.2, display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                <div className="mst-power-name">
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
                   {ppBoostStatus.isActive && (
                     <span 
                       style={{ 
                         fontSize: '16px',
-                        color: '#f59e0b',
+                        color: 'var(--mst-gold)',
                         fontWeight: 'bold',
                         textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
                         animation: 'pulse 2s infinite',
@@ -399,7 +421,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                 {/* PP, TM, Lv badges - on same row as name */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', flexShrink: 0 }}>
                   <span 
-                    style={{ background: '#fbbf24', color: '#1f2937', borderRadius: 6, padding: '2px 8px', fontWeight: 'bold', fontSize: 12, display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }} 
+                    className="mst-power-pill mst-power-pill--pp"
                     title="Power Points"
                   >
                     PP: {powerPoints}
@@ -407,9 +429,8 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                       <span 
                         style={{ 
                           fontSize: '10px',
-                          color: '#f59e0b',
+                          color: 'var(--mst-gold-bright)',
                           fontWeight: 'bold',
-                          textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
                           animation: 'pulse 2s infinite'
                         }}
                         title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
@@ -419,13 +440,13 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                     )}
                   </span>
                   <span 
-                    style={{ background: '#9ca3af', color: '#ffffff', borderRadius: 6, padding: '2px 8px', fontWeight: 'bold', fontSize: 12, border: '1px solid #6b7280', boxShadow: '0 1px 2px rgba(0,0,0,0.2)', whiteSpace: 'nowrap' }}
+                    className="mst-power-pill mst-power-pill--tm"
                     title="Truth Metal Shards"
                   >
                     TM: {truthMetal}
                   </span>
                   {/* Level badge */}
-                  <span style={{ background: '#4f46e5', color: 'white', borderRadius: 6, padding: '2px 8px', fontWeight: 'bold', fontSize: 12, whiteSpace: 'nowrap' }}>Lv. {level}</span>
+                  <span className="mst-power-pill mst-power-pill--level">Lv. {level}</span>
                 </div>
               </div>
               {/* Second row: Rarity stars, Squad tag, and Power Level (aligned with PP above) */}
@@ -433,39 +454,19 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                 {/* Rarity stars */}
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                   {Array.from({ length: rarity }).map((_, i) => (
-                    <span key={i} style={{ color: '#fbbf24', fontSize: 16, marginRight: 2 }}>★</span>
+                    <span key={i} className="mst-power-rarity">★</span>
                   ))}
                 </div>
                 {/* Squad tag */}
                 {squadAbbreviation && (
-                  <span style={{
-                    fontSize: '14px',
-                    color: '#4f46e5',
-                    fontWeight: '600',
-                    background: 'rgba(79, 70, 229, 0.1)',
-                    padding: '2px 8px',
-                    borderRadius: 4,
-                    border: '1px solid rgba(79, 70, 229, 0.3)'
-                  }}>
+                  <span className="mst-power-squad">
                     [{squadAbbreviation}]
                   </span>
                 )}
                 {/* Power Level badge - aligned with PP above (same column position) */}
                 {powerLevel !== null && (
                   <span 
-                    style={{ 
-                      background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)', 
-                      color: 'white', 
-                      borderRadius: 6, 
-                      padding: '2px 8px', 
-                      fontWeight: 'bold', 
-                      fontSize: 12,
-                      boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '2px',
-                      whiteSpace: 'nowrap'
-                    }}
+                    className="mst-power-pill mst-power-pill--pl"
                     title={powerBreakdown ? `Base: ${powerBreakdown.base} | Skills: ${powerBreakdown.skills} | Artifacts: ${powerBreakdown.artifacts} | Ascension: ${powerBreakdown.ascension}` : 'Power Level'}
                   >
                     ⚡ PL: {powerLevel}
@@ -477,11 +478,11 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
             {/* Level Progress Bar */}
             {xpProgress && (
               <div style={{ margin: '8px 0 12px 0', width: '100%' }}>
-                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 2 }}>
+                <div className="mst-power-xp-label">
                   Level Progress: {xpProgress.currentLevelXP} / {Math.round(xpProgress.nextLevelXP)} XP
                 </div>
-                <div style={{ background: '#e5e7eb', borderRadius: 8, height: 10, width: '100%', overflow: 'hidden' }}>
-                  <div style={{ width: `${xpProgress.percent}%`, background: '#4f46e5', height: '100%', borderRadius: 8, transition: 'width 0.3s' }} />
+                <div className="mst-power-xp-track">
+                  <div className="mst-power-xp-fill" style={{ width: `${xpProgress.percent}%` }} />
                 </div>
               </div>
             )}
@@ -493,14 +494,10 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                   key={photoURL} // Force re-render when photoURL changes
                   src={photoURL}
                   alt={`Profile picture of ${name}`}
+                  className="mst-power-avatar"
                   style={{
-                    width: 120,
-                    height: 120,
                     borderRadius: cardFrameShape === 'circular' ? '50%' : '0.75rem',
-                    objectFit: 'cover',
-                    border: `4px solid ${cardImageBorderColor}`,
-                    marginBottom: 16,
-                    background: '#fff',
+                    border: `3px solid ${effectiveImageBorderColor}`,
                   }}
                   onLoad={(e) => {
                     console.log('Profile image loaded successfully:', photoURL);
@@ -521,19 +518,11 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
               {/* Fallback profile picture */}
               <div
                 key={`fallback-${name}`} // Force re-render when name changes
+                className="mst-power-avatar-fallback"
                 style={{
-                  width: 120,
-                  height: 120,
                   borderRadius: cardFrameShape === 'circular' ? '50%' : '0.75rem',
-                  border: `4px solid ${cardImageBorderColor}`,
-                  marginBottom: 16,
-                  background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
+                  border: `3px solid ${effectiveImageBorderColor}`,
                   display: (photoURL && photoURL.trim() !== '') ? 'none' : 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 48,
-                  color: 'white',
-                  fontWeight: 'bold',
                 }}
               >
                 {name.charAt(0).toUpperCase()}
@@ -541,50 +530,26 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
             </div>
 
             {/* Manifest and Element */}
-            <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, justifyContent: 'center' }}>
+            <div className="mst-power-meta-row">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 20 }}>{manifestIcons[manifest] || '✨'}</span>
-                <span style={{ fontWeight: 'bold', color: getManifestColor(manifest), fontSize: 14 }}>Manifest: {manifest}</span>
+                <span style={{ fontSize: 18 }}>{manifestIcons[manifest] || '✨'}</span>
+                <span className="mst-power-manifest" style={{ color: getManifestColor(manifest) || undefined }}>Manifest: {manifest}</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 20 }}>{styleIcons[style] || '🔮'}</span>
-                <span style={{ fontWeight: 'bold', color: getElementColor(style), fontSize: 14 }}>Element: {style}</span>
+                <span style={{ fontSize: 18 }}>{styleIcons[style] || '🔮'}</span>
+                <span className={`mst-power-element ${getElementClass(style)}`} style={!getElementClass(style) ? { color: getElementColor(style) } : undefined}>Element: {style}</span>
               </div>
             </div>
 
             {/* Divider */}
-            <div style={{ width: '80%', height: 2, background: '#e5e7eb', margin: '12px auto' }} />
+            <div className="mst-power-divider" />
 
             {/* Badges Button */}
-            <div style={{ margin: '12px 0', textAlign: 'center' }}>
+            <div className="mst-power-action-wrap">
               <button
                 onClick={handleBadgeClick}
-                style={{
-                  background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: 12,
-                  padding: '12px 20px',
-                  fontWeight: 'bold',
-                  fontSize: 14,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s ease',
-                  boxShadow: '0 4px 12px rgba(139, 92, 246, 0.3)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  width: '100%',
-                  margin: '0 auto'
-                }}
-                onMouseOver={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(139, 92, 246, 0.4)';
-                }}
-                onMouseOut={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(139, 92, 246, 0.3)';
-                }}
+                className="mst-power-action mst-power-action--badges"
+                type="button"
               >
                 <span>🏆</span>
                 Badges ({badges.length})
@@ -592,36 +557,11 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
             </div>
 
             {/* Power stats (Live Events) */}
-            <div style={{ margin: '12px 0', textAlign: 'center' }}>
+            <div className="mst-power-action-wrap">
               <button
                 type="button"
                 onClick={handlePowerStatsClick}
-                style={{
-                  background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: 12,
-                  padding: '12px 20px',
-                  fontWeight: 'bold',
-                  fontSize: 14,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s ease',
-                  boxShadow: '0 4px 12px rgba(245, 158, 11, 0.35)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  width: '100%',
-                  margin: '0 auto',
-                }}
-                onMouseOver={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(245, 158, 11, 0.45)';
-                }}
-                onMouseOut={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(245, 158, 11, 0.35)';
-                }}
+                className="mst-power-action mst-power-action--stats"
               >
                 <span>📊</span>
                 Player Stats
@@ -630,122 +570,48 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
 
             {/* Skill Tree Button - Only show if Chapter 2-4 is completed */}
             {hasSkillTreeAccess && (
-              <div style={{ margin: '12px 0', textAlign: 'center' }}>
+              <div className="mst-power-action-wrap">
                 <button
                   onClick={handleSkillTreeClick}
-                  style={{
-                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: 12,
-                    padding: '12px 20px',
-                    fontWeight: 'bold',
-                    fontSize: 14,
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease',
-                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '8px',
-                    width: '100%',
-                    margin: '0 auto'
-                  }}
-                  onMouseOver={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 6px 16px rgba(16, 185, 129, 0.4)';
-                  }}
-                  onMouseOut={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.3)';
-                  }}
+                  className="mst-power-action mst-power-action--tree"
+                  type="button"
                 >
                   <span>🌳</span>
                   Skill Tree
                 </button>
               </div>
             )}
+
+            <div className="mst-power-footer-motto" aria-hidden="true">
+              Ignite Your Purpose
+            </div>
             
           </div>
 
           {/* Back */}
           <div
+            className="mst-power-card-face mst-power-card-face--back"
             style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              height: '100%',
-              backfaceVisibility: 'hidden',
-              background: 'linear-gradient(135deg, #fbbf24 0%, #a78bfa 100%)',
-              border: `4px solid ${cardBorderColor}`,
-              borderRadius: 24,
-              boxShadow: '0 8px 32px 0 rgba(31,41,55,0.25)',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              padding: 24,
-              transform: 'rotateY(180deg)',
-              zIndex: 1,
-              overflowY: 'auto',
+              borderColor: effectiveBorderColor,
             }}
           >
             {/* Journey Stage Detail View */}
             {selectedJourneyStage ? (
               <>
-                <div style={{ 
-                  fontSize: 24, 
-                  fontWeight: 'bold', 
-                  color: '#1f2937', 
-                  marginBottom: 20,
-                  textAlign: 'center',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  width: '100%'
-                }}>
+                <div className="mst-power-back-title">
                   <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span>{journeyStages[selectedJourneyStage as keyof typeof journeyStages]?.icon}</span>
                     {journeyStages[selectedJourneyStage as keyof typeof journeyStages]?.title}
                   </span>
                   <button
                     onClick={handleReturnToJourneyList}
-                    style={{
-                      background: 'rgba(255, 255, 255, 0.2)',
-                      border: 'none',
-                      borderRadius: '50%',
-                      width: '36px',
-                      height: '36px',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '20px',
-                      color: '#1f2937',
-                      transition: 'all 0.2s ease'
-                    }}
-                    onMouseOver={(e) => {
-                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
-                    }}
-                    onMouseOut={(e) => {
-                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
-                    }}
+                    className="mst-power-back-close"
                   >
                     ←
                   </button>
                 </div>
                 
-                <div style={{
-                  background: '#fff',
-                  borderRadius: 12,
-                  padding: 16,
-                  boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
-                  width: '100%',
-                  maxHeight: 300,
-                  overflowY: 'auto',
-                  marginBottom: 16,
-                  flex: '1 1 auto',
-                }}>
+                <div className="mst-power-back-panel" style={{ maxHeight: 300, padding: 16 }}>
                   {(() => {
                     const stage = journeyStages[selectedJourneyStage as keyof typeof journeyStages];
                     const desc = stage?.description ?? '';
@@ -755,7 +621,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                       <>
                         <div style={{
                           fontSize: 16,
-                          color: '#1f2937',
+                          color: 'var(--mst-text-primary)',
                           lineHeight: '1.6',
                           marginBottom: isSameText ? 0 : 16,
                           fontStyle: 'italic'
@@ -765,7 +631,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                         {!isSameText && (
                           <div style={{
                             fontSize: 14,
-                            color: '#6b7280',
+                            color: 'var(--mst-text-muted)',
                             lineHeight: '1.5'
                           }}>
                             {content}
@@ -776,23 +642,13 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                   })()}
                 </div>
                 
-                <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
+                <div className="mst-power-back-hint">
                   Click to return to journey list
                 </div>
               </>
             ) : showBadges ? (
               <>
-                <div style={{ 
-                  fontSize: 24, 
-                  fontWeight: 'bold', 
-                  color: '#1f2937', 
-                  marginBottom: 20,
-                  textAlign: 'center',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  width: '100%'
-                }}>
+                <div className="mst-power-back-title">
                   <span>🏆 Your Badges</span>
                   <button
                     onClick={(e) => {
@@ -800,50 +656,17 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                       setShowBadges(false);
                       setFlipped(false);
                     }}
-                    style={{
-                      background: 'rgba(255, 255, 255, 0.2)',
-                      border: 'none',
-                      borderRadius: '50%',
-                      width: '36px',
-                      height: '36px',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '20px',
-                      color: '#1f2937',
-                      transition: 'all 0.2s ease'
-                    }}
-                    onMouseOver={(e) => {
-                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
-                    }}
-                    onMouseOut={(e) => {
-                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
-                    }}
+                    className="mst-power-back-close"
                   >
                     ←
                   </button>
                 </div>
                 
-                <div style={{
-                  background: '#fff',
-                  borderRadius: 12,
-                  padding: 12,
-                  boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
-                  width: '100%',
-                  maxHeight: 320,
-                  overflowY: 'auto',
-                  marginBottom: 16,
-                  flex: '1 1 auto',
-                }}>
+                <div className="mst-power-back-panel" style={{ maxHeight: 320 }}>
                   {badges.length === 0 ? (
-                    <div style={{
-                      textAlign: 'center',
-                      padding: '2rem 1rem',
-                      color: '#6b7280'
-                    }}>
+                    <div className="mst-power-empty">
                       <div style={{ fontSize: '48px', marginBottom: '1rem' }}>🏆</div>
-                      <h3 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: '#374151' }}>
+                      <h3>
                         No Badges Yet
                       </h3>
                       <p style={{ fontSize: '0.9rem', lineHeight: '1.5' }}>
@@ -859,26 +682,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                             e.stopPropagation();
                             setSelectedBadge(badge);
                           }}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            padding: '12px',
-                            background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
-                            borderRadius: 12,
-                            border: '2px solid #cbd5e1',
-                            transition: 'all 0.2s ease',
-                            cursor: 'pointer'
-                          }}
-                          onMouseOver={(e) => {
-                            e.currentTarget.style.background = 'linear-gradient(135deg, #f1f5f9 0%, #cbd5e1 100%)';
-                            e.currentTarget.style.transform = 'translateY(-2px)';
-                            e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)';
-                          }}
-                          onMouseOut={(e) => {
-                            e.currentTarget.style.background = 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)';
-                            e.currentTarget.style.transform = 'translateY(0)';
-                            e.currentTarget.style.boxShadow = 'none';
-                          }}
+                          className="mst-power-badge-item"
                         >
                           <div style={{
                             width: '48px',
@@ -908,21 +712,14 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                             )}
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{
-                              fontSize: '14px',
-                              fontWeight: 'bold',
-                              color: '#1f2937',
-                              marginBottom: '2px',
+                            <div className="mst-power-badge-name" style={{
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
                               whiteSpace: 'nowrap'
                             }}>
                               {badge.name}
                             </div>
-                            <div style={{
-                              fontSize: '12px',
-                              color: '#6b7280',
-                              lineHeight: '1.3',
+                            <div className="mst-power-badge-desc" style={{
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
                               display: '-webkit-box',
@@ -965,23 +762,13 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                   )}
                 </div>
                 
-                <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
+                <div className="mst-power-back-hint">
                   Click to return to front
                 </div>
               </>
             ) : showSkillTree ? (
               <>
-                <div style={{ 
-                  fontSize: 24, 
-                  fontWeight: 'bold', 
-                  color: '#1f2937', 
-                  marginBottom: 20,
-                  textAlign: 'center',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  width: '100%'
-                }}>
+                <div className="mst-power-back-title">
                   <span>🌳 Skill Tree</span>
                   <button
                     onClick={(e) => {
@@ -990,59 +777,20 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                       setSkillTreeMode('in-game'); // Reset to in-game mode when closing
                       setFlipped(false);
                     }}
-                    style={{
-                      background: 'rgba(255, 255, 255, 0.2)',
-                      border: 'none',
-                      borderRadius: '50%',
-                      width: '36px',
-                      height: '36px',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '20px',
-                      color: '#1f2937',
-                      transition: 'all 0.2s ease'
-                    }}
-                    onMouseOver={(e) => {
-                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
-                    }}
-                    onMouseOut={(e) => {
-                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
-                    }}
+                    className="mst-power-back-close"
                   >
                     ×
                   </button>
                 </div>
 
                 {/* Skill Tree Mode Tabs */}
-                <div style={{
-                  display: 'flex',
-                  gap: '8px',
-                  marginBottom: 16,
-                  background: '#f3f4f6',
-                  padding: '4px',
-                  borderRadius: 8
-                }}>
+                <div className="mst-power-tabs">
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       setSkillTreeMode('in-game');
                     }}
-                    style={{
-                      flex: 1,
-                      padding: '8px 16px',
-                      background: skillTreeMode === 'in-game' 
-                        ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' 
-                        : 'transparent',
-                      color: skillTreeMode === 'in-game' ? 'white' : '#6b7280',
-                      border: 'none',
-                      borderRadius: 6,
-                      fontWeight: 'bold',
-                      fontSize: 14,
-                      cursor: 'pointer',
-                      transition: 'all 0.2s ease'
-                    }}
+                    className={`mst-power-tab${skillTreeMode === 'in-game' ? ' is-active' : ''}`}
                   >
                     🎮 In Game
                   </button>
@@ -1051,44 +799,19 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                       e.stopPropagation();
                       setSkillTreeMode('irl');
                     }}
-                    style={{
-                      flex: 1,
-                      padding: '8px 16px',
-                      background: skillTreeMode === 'irl' 
-                        ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' 
-                        : 'transparent',
-                      color: skillTreeMode === 'irl' ? 'white' : '#6b7280',
-                      border: 'none',
-                      borderRadius: 6,
-                      fontWeight: 'bold',
-                      fontSize: 14,
-                      cursor: 'pointer',
-                      transition: 'all 0.2s ease'
-                    }}
+                    className={`mst-power-tab${skillTreeMode === 'irl' ? ' is-active is-active--irl' : ''}`}
                   >
                     🌍 IRL
                   </button>
                 </div>
 
-                <div
-                  style={{
-                    background: '#fff',
-                    borderRadius: 12,
-                    padding: 16,
-                    boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
-                    width: '100%',
-                    minHeight: 0,
-                    flex: '1 1 auto',
-                    overflowY: 'auto',
-                    marginBottom: 12,
-                  }}
-                >
+                <div className="mst-power-back-panel" style={{ minHeight: 0, padding: 16, marginBottom: 12 }}>
                   {candyType === 'on-off' ? (
                     <div>
                       <div style={{
                         fontSize: 18,
                         fontWeight: 'bold',
-                        color: '#1f2937',
+                        color: 'var(--mst-text-primary)',
                         marginBottom: 16,
                         textAlign: 'center'
                       }}>
@@ -1173,29 +896,29 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                         {/* Branch 3 */}
                         <div style={{
                           padding: '12px',
-                          background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
+                          background: 'rgba(17, 24, 39, 0.85)',
                           borderRadius: 8,
-                          border: '2px solid #cbd5e1',
+                          border: '1px solid var(--mst-border)',
                           textAlign: 'center'
                         }}>
                           <div style={{ fontSize: 18, marginBottom: 4 }}>⚙️</div>
-                          <div style={{ fontWeight: 'bold', color: '#1f2937' }}>Enhanced Control</div>
-                          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Level 2 - Improved power management</div>
-                          <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 4, fontStyle: 'italic' }}>Requires: Power Toggle</div>
+                          <div style={{ fontWeight: 'bold', color: 'var(--mst-text-primary)' }}>Enhanced Control</div>
+                          <div style={{ fontSize: 12, color: 'var(--mst-text-muted)', marginTop: 4 }}>Level 2 - Improved power management</div>
+                          <div style={{ fontSize: 10, color: 'var(--mst-text-muted)', marginTop: 4, fontStyle: 'italic' }}>Requires: Power Toggle</div>
                         </div>
 
                         {/* Branch 3 */}
                         <div style={{
                           padding: '12px',
-                          background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
+                          background: 'rgba(17, 24, 39, 0.85)',
                           borderRadius: 8,
-                          border: '2px solid #cbd5e1',
+                          border: '1px solid var(--mst-border)',
                           textAlign: 'center'
                         }}>
                           <div style={{ fontSize: 18, marginBottom: 4 }}>🌟</div>
-                          <div style={{ fontWeight: 'bold', color: '#1f2937' }}>Master Switch</div>
-                          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Level 3 - Ultimate power control</div>
-                          <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 4, fontStyle: 'italic' }}>Requires: Enhanced Control</div>
+                          <div style={{ fontWeight: 'bold', color: 'var(--mst-text-primary)' }}>Master Switch</div>
+                          <div style={{ fontSize: 12, color: 'var(--mst-text-muted)', marginTop: 4 }}>Level 3 - Ultimate power control</div>
+                          <div style={{ fontSize: 10, color: 'var(--mst-text-muted)', marginTop: 4, fontStyle: 'italic' }}>Requires: Enhanced Control</div>
                         </div>
                       </div>
                       ) : (
@@ -1249,37 +972,37 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                           {/* Branch 2 - IRL */}
                           <div style={{
                             padding: '12px',
-                            background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
+                            background: 'rgba(17, 24, 39, 0.85)',
                             borderRadius: 8,
-                            border: '2px solid #cbd5e1',
+                            border: '1px solid var(--mst-border)',
                             textAlign: 'center'
                           }}>
                             <div style={{ fontSize: 18, marginBottom: 4 }}>🧠</div>
-                            <div style={{ fontWeight: 'bold', color: '#1f2937' }}>Mindful Control</div>
-                            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Level 2 - Improved real-world awareness management</div>
-                            <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 4, fontStyle: 'italic' }}>Requires: Awareness Toggle</div>
+                            <div style={{ fontWeight: 'bold', color: 'var(--mst-text-primary)' }}>Mindful Control</div>
+                            <div style={{ fontSize: 12, color: 'var(--mst-text-muted)', marginTop: 4 }}>Level 2 - Improved real-world awareness management</div>
+                            <div style={{ fontSize: 10, color: 'var(--mst-text-muted)', marginTop: 4, fontStyle: 'italic' }}>Requires: Awareness Toggle</div>
                           </div>
 
                           {/* Branch 3 - IRL */}
                           <div style={{
                             padding: '12px',
-                            background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
+                            background: 'rgba(17, 24, 39, 0.85)',
                             borderRadius: 8,
-                            border: '2px solid #cbd5e1',
+                            border: '1px solid var(--mst-border)',
                             textAlign: 'center'
                           }}>
                             <div style={{ fontSize: 18, marginBottom: 4 }}>✨</div>
-                            <div style={{ fontWeight: 'bold', color: '#1f2937' }}>Reality Master</div>
-                            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Level 3 - Ultimate real-world power control</div>
-                            <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 4, fontStyle: 'italic' }}>Requires: Mindful Control</div>
+                            <div style={{ fontWeight: 'bold', color: 'var(--mst-text-primary)' }}>Reality Master</div>
+                            <div style={{ fontSize: 12, color: 'var(--mst-text-muted)', marginTop: 4 }}>Level 3 - Ultimate real-world power control</div>
+                            <div style={{ fontSize: 10, color: 'var(--mst-text-muted)', marginTop: 4, fontStyle: 'italic' }}>Requires: Mindful Control</div>
                           </div>
                         </div>
                       )}
                     </div>
                   ) : candyType === 'up-down' ? (
-                    <div style={{ textAlign: 'center', color: '#6b7280', padding: '2rem' }}>
+                    <div className="mst-power-empty" style={{ padding: '2rem' }}>
                       <div style={{ fontSize: 48, marginBottom: '1rem' }}>📈</div>
-                      <h3 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: '#374151' }}>
+                      <h3 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: 'var(--mst-text-secondary)' }}>
                         Up/Down Power Skill Tree
                       </h3>
                       <p style={{ fontSize: '0.9rem', lineHeight: '1.5' }}>
@@ -1287,9 +1010,9 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                       </p>
                     </div>
                   ) : (
-                    <div style={{ textAlign: 'center', color: '#6b7280', padding: '2rem' }}>
+                    <div className="mst-power-empty" style={{ padding: '2rem' }}>
                       <div style={{ fontSize: 48, marginBottom: '1rem' }}>⚙️</div>
-                      <h3 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: '#374151' }}>
+                      <h3 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: 'var(--mst-text-secondary)' }}>
                         Config Power Skill Tree
                       </h3>
                       <p style={{ fontSize: '0.9rem', lineHeight: '1.5' }}>
@@ -1299,25 +1022,13 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                   )}
                 </div>
                 
-                <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
+                <div className="mst-power-back-hint">
                   Click to return to front
                 </div>
               </>
             ) : showPowerStats ? (
               <>
-                <div
-                  style={{
-                    fontSize: 22,
-                    fontWeight: 'bold',
-                    color: '#1f2937',
-                    marginBottom: 12,
-                    textAlign: 'center',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    width: '100%',
-                  }}
-                >
+                <div className="mst-power-back-title" style={{ marginBottom: 12, fontSize: 20 }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span>📊</span>
                     Power stats
@@ -1329,43 +1040,12 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                       setShowPowerStats(false);
                       setFlipped(false);
                     }}
-                    style={{
-                      background: 'rgba(255, 255, 255, 0.2)',
-                      border: 'none',
-                      borderRadius: '50%',
-                      width: '36px',
-                      height: '36px',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '20px',
-                      color: '#1f2937',
-                      transition: 'all 0.2s ease',
-                    }}
-                    onMouseOver={(e) => {
-                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
-                    }}
-                    onMouseOut={(e) => {
-                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
-                    }}
+                    className="mst-power-back-close"
                   >
                     ←
                   </button>
                 </div>
-                <div
-                  style={{
-                    background: '#fff',
-                    borderRadius: 12,
-                    padding: 12,
-                    boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
-                    width: '100%',
-                    maxHeight: 380,
-                    overflow: 'visible',
-                    marginBottom: 16,
-                    flex: '1 1 auto',
-                  }}
-                >
+                <div className="mst-power-back-panel" style={{ maxHeight: 380, overflow: 'visible' }}>
                   <div
                     style={{
                       display: 'grid',
@@ -1390,30 +1070,18 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                           aria-label={label}
                           onMouseEnter={() => setPowerStatHover(key)}
                           onMouseLeave={() => setPowerStatHover(null)}
-                          style={{
-                            background: hovered ? '#f1f5f9' : '#f8fafc',
-                            borderRadius: 10,
-                            padding: '10px 8px',
-                            border: `1px solid ${hovered ? '#94a3b8' : '#e2e8f0'}`,
-                            textAlign: 'center',
-                            cursor: 'help',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'center',
-                            minHeight: 140,
-                            transition: 'background 0.15s ease, border-color 0.15s ease',
-                          }}
+                          className={`mst-power-stat-tile${hovered ? ' is-hovered' : ''}`}
                         >
                           <div style={{ fontSize: 18, marginBottom: 4 }}>{icon}</div>
-                          <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>{label}</div>
-                          <div style={{ fontSize: 16, fontWeight: 800, color: '#d97706', marginTop: 4 }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--mst-text-muted)' }}>{label}</div>
+                          <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--mst-gold)', marginTop: 4 }}>
                             Lv {st.level}
                           </div>
                           <PowerStatProgressBar branch={key} st={st} height={9} style={{ marginTop: 8 }} />
-                          <div style={{ fontSize: 10, color: '#64748b', marginTop: 6 }}>
+                          <div style={{ fontSize: 10, color: 'var(--mst-text-muted)', marginTop: 6 }}>
                             {st.xp} / {st.xpToNextLevel} XP
                           </div>
-                          <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 4 }}>Total {st.totalEarned}</div>
+                          <div style={{ fontSize: 9, color: 'var(--mst-text-muted)', marginTop: 4 }}>Total {st.totalEarned}</div>
                           <div
                             style={{
                               marginTop: 'auto',
@@ -1421,7 +1089,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                               minHeight: 40,
                               fontSize: 9,
                               lineHeight: 1.35,
-                              color: '#334155',
+                              color: 'var(--mst-text-secondary)',
                               textAlign: 'center',
                               opacity: hovered ? 1 : 0,
                               transition: 'opacity 0.15s ease',
@@ -1434,90 +1102,33 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                     })}
                   </div>
                 </div>
-                <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
+                <div className="mst-power-back-hint">
                   Click card or ← to return
                 </div>
               </>
             ) : (
               <>
-                <div style={{ 
-                  fontSize: 22, 
-                  fontWeight: 'bold', 
-                  color: '#1f2937', 
-                  marginBottom: 16,
-                  textAlign: 'center'
-                }}>
+                <div className="mst-power-back-title" style={{ justifyContent: 'center', marginBottom: 12 }}>
                   Description
                 </div>
-                <div style={{
-                  background: '#fff',
-                  color: '#1f2937',
-                  borderRadius: 12,
-                  padding: 16,
-                  fontSize: 16,
-                  minHeight: 80,
-                  boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
-                  width: '100%',
-                  textAlign: 'center',
-                  marginBottom: 16,
-                }}>
+                <div className="mst-power-back-panel" style={{ color: 'var(--mst-text-primary)', fontSize: 15, minHeight: 80, textAlign: 'center', padding: 16 }}>
                   {description || 'No description provided.'}
                 </div>
 
                 {/* Player's Journey Section */}
-                <div style={{
-                  fontSize: 22,
-                  fontWeight: 'bold',
-                  color: '#1f2937',
-                  marginBottom: 16,
-                  textAlign: 'center'
-                }}>
+                <div className="mst-power-back-title" style={{ justifyContent: 'center', marginBottom: 12 }}>
                   {name}'s Journey
                 </div>
 
                 {/* Scrollable Journey Content */}
-                <div style={{
-                  background: '#fff',
-                  borderRadius: 12,
-                  padding: 12,
-                  boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
-                  width: '100%',
-                  maxHeight: 180,
-                  overflowY: 'auto',
-                  marginBottom: 16,
-                  flex: '1 1 auto',
-                }}>
+                <div className="mst-power-back-panel" style={{ maxHeight: 180 }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {/* Hero's Journey Stages */}
                     {Object.entries(journeyStages).map(([key, stage], index) => (
                       <div
                         key={key}
                         onClick={(e) => handleJourneyStageClick(key, e)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          padding: '8px 12px',
-                          background: key === 'ordinary-world' ? 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)' : '#f3f4f6',
-                          borderRadius: 8,
-                          border: key === 'ordinary-world' ? '2px solid #3b82f6' : '2px solid transparent',
-                          color: key === 'ordinary-world' ? '#1e40af' : '#6b7280',
-                          fontWeight: 'bold',
-                          fontSize: 14,
-                          cursor: 'pointer',
-                          transition: 'all 0.2s ease'
-                        }}
-                        onMouseOver={(e) => {
-                          if (key !== 'ordinary-world') {
-                            e.currentTarget.style.background = '#e5e7eb';
-                            e.currentTarget.style.color = '#374151';
-                          }
-                        }}
-                        onMouseOut={(e) => {
-                          if (key !== 'ordinary-world') {
-                            e.currentTarget.style.background = '#f3f4f6';
-                            e.currentTarget.style.color = '#6b7280';
-                          }
-                        }}
+                        className={`mst-power-journey-item${key === 'ordinary-world' ? ' is-active' : ''}`}
                       >
                         <span style={{ marginRight: 8 }}>{stage.icon}</span>
                         <span>{index + 1}. {stage.title}</span>
@@ -1526,7 +1137,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                   </div>
                 </div>
                 
-                <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
+                <div className="mst-power-back-hint">
                   Click to return to front
                 </div>
               </>

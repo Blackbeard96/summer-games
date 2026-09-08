@@ -97,17 +97,13 @@ const Chapters: React.FC = () => {
   };
 
   return (
-    <div 
-      className="min-h-screen py-20 chapters-page"
-      style={{
-        backgroundImage: 'url(/images/PlayerJourney_BKG.png)',
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-        backgroundRepeat: 'no-repeat',
-        backgroundAttachment: 'fixed'
-      }}
-    >
-      <div className="max-w-6xl mx-auto px-16 chapters-container">
+    <div className="mst-journey-shell chapters-page">
+      <div
+        className="mst-journey-shell-bg"
+        aria-hidden="true"
+        style={{ backgroundImage: 'url(/images/PlayerJourney_BKG.png)' }}
+      />
+      <div className="max-w-6xl mx-auto px-4 sm:px-8 lg:px-12 chapters-container mst-journey-shell-content">
         {selectedChapter ? (
           <ChapterDetail 
             chapter={selectedChapter} 

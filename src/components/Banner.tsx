@@ -153,12 +153,12 @@ const Banner: React.FC = () => {
   return (
     <div
       style={{
-        backgroundColor: '#1f2937',
-        color: '#f9fafb',
+        backgroundColor: 'var(--mst-bg-secondary)',
+        color: 'var(--mst-text-primary)',
         padding: '0.75rem 0',
         overflow: 'hidden',
         position: 'relative',
-        borderBottom: '1px solid #374151',
+        borderBottom: '1px solid var(--mst-border-gold)',
         zIndex: 40,
         height: '40px',
         display: 'flex',
@@ -210,7 +210,7 @@ const Banner: React.FC = () => {
                 width: '6px',
                 height: '6px',
                 borderRadius: '50%',
-                backgroundColor: index === currentMessageIndex ? '#f9fafb' : '#6b7280',
+                backgroundColor: index === currentMessageIndex ? 'var(--mst-gold)' : 'var(--mst-text-muted)',
                 transition: 'background-color 0.3s ease',
                 cursor: 'pointer'
               }}

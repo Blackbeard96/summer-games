@@ -21,6 +21,7 @@ import {
   where,
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { getClassroomIdsForEnrolledStudent } from './classroomQueries';
 
 export interface VaultSiegePlayerBase {
   uid: string;
@@ -44,6 +45,62 @@ function addStudent(
     level: (data.level as number) || 1,
     email: typeof data.email === 'string' ? data.email : undefined,
   });
+}
+
+/**
+ * UIDs of classmates across all classrooms the current user is enrolled in
+ * (roster + matching `classId` / `class` fields). Excludes self.
+ */
+export async function loadVaultSiegeClassmateIds(currentUserUid: string): Promise<Set<string>> {
+  const classmateIds = new Set<string>();
+  const myClassIds = new Set<string>();
+
+  try {
+    const enrolled = await getClassroomIdsForEnrolledStudent(currentUserUid);
+    enrolled.forEach((id) => myClassIds.add(id));
+  } catch (e) {
+    console.warn('VaultSiege: enrolled class lookup failed:', e);
+  }
+
+  try {
+    const mySnap = await getDoc(doc(db, 'students', currentUserUid));
+    if (mySnap.exists()) {
+      const d = mySnap.data();
+      if (typeof d.classId === 'string' && d.classId) myClassIds.add(d.classId);
+      if (typeof d.class === 'string' && d.class) myClassIds.add(d.class);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  await Promise.all(
+    Array.from(myClassIds).map(async (classId) => {
+      try {
+        const classSnap = await getDoc(doc(db, 'classrooms', classId));
+        if (classSnap.exists()) {
+          const ids = (classSnap.data().students as string[]) || [];
+          ids.forEach((id) => {
+            if (typeof id === 'string' && id && id !== currentUserUid) classmateIds.add(id);
+          });
+        }
+      } catch (e) {
+        console.warn(`VaultSiege: classroom ${classId} roster load failed:`, e);
+      }
+
+      for (const field of ['classId', 'class'] as const) {
+        try {
+          const snap = await getDocs(query(collection(db, 'students'), where(field, '==', classId)));
+          snap.forEach((d) => {
+            if (d.id !== currentUserUid) classmateIds.add(d.id);
+          });
+        } catch (e) {
+          console.warn(`VaultSiege: classmates where(${field}) failed:`, e);
+        }
+      }
+    })
+  );
+
+  return classmateIds;
 }
 
 export async function loadVaultSiegePlayerList(

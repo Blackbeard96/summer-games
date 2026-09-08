@@ -219,10 +219,10 @@ const Profile = () => {
   const [manifest, setManifest] = useState(userData?.manifest || 'None');
   const [style, setStyle] = useState(userData?.manifestationType || '');
   const [rarity, setRarity] = useState(userData?.rarity || 1);
-  const [cardBgColor, setCardBgColor] = useState(userData?.cardBgColor || '#e0e7ff');
+  const [cardBgColor, setCardBgColor] = useState(userData?.cardBgColor || '#0B1220');
   const [cardFrameShape, setCardFrameShape] = useState<'circular' | 'rectangular'>('circular');
-  const [cardBorderColor, setCardBorderColor] = useState(userData?.cardBorderColor || '#a78bfa');
-  const [cardImageBorderColor, setCardImageBorderColor] = useState(userData?.cardImageBorderColor || '#a78bfa');
+  const [cardBorderColor, setCardBorderColor] = useState(userData?.cardBorderColor || '#D4AF37');
+  const [cardImageBorderColor, setCardImageBorderColor] = useState(userData?.cardImageBorderColor || '#D4AF37');
   const [moves, setMoves] = useState(userData?.moves || []);
   const [newMove, setNewMove] = useState({ name: '', description: '', icon: '' });
   const [badges, setBadges] = useState(userData?.badges || []);
@@ -395,7 +395,7 @@ const Profile = () => {
         setManifest(manifestId);
         setStyle(displayElement);
         setRarity(rarityValue);
-        setCardBgColor(userDataFromDB.cardBgColor || '#e0e7ff');
+        setCardBgColor(userDataFromDB.cardBgColor || '#0B1220');
         // Validate cardFrameShape to ensure it's either 'circular' or 'rectangular'
         const frameShape = userDataFromDB.cardFrameShape;
         setCardFrameShape(
@@ -403,8 +403,8 @@ const Profile = () => {
             ? frameShape 
             : 'circular'
         );
-        setCardBorderColor(userDataFromDB.cardBorderColor || '#a78bfa');
-        setCardImageBorderColor(userDataFromDB.cardImageBorderColor || '#a78bfa');
+        setCardBorderColor(userDataFromDB.cardBorderColor || '#D4AF37');
+        setCardImageBorderColor(userDataFromDB.cardImageBorderColor || '#D4AF37');
         // Use battle loadout moves (battleMoves) when available so Elemental Move Progress sees same moves as Battle/Skills & Mastery
         const battleMovesList = battleMovesSnap.exists() ? battleMovesSnap.data().moves : null;
         setMoves(Array.isArray(battleMovesList) && battleMovesList.length > 0 ? battleMovesList : (userDataFromDB.moves || []));
@@ -920,10 +920,10 @@ const Profile = () => {
         manifestationType: elementForSave,
         elementalAffinity: elementForSave,
         rarity: rarity || 1,
-        cardBgColor: cardBgColor || '#e0e7ff',
+        cardBgColor: cardBgColor || '#0B1220',
         cardFrameShape: cardFrameShape || 'circular',
-        cardBorderColor: cardBorderColor || '#a78bfa',
-        cardImageBorderColor: cardImageBorderColor || '#a78bfa',
+        cardBorderColor: cardBorderColor || '#D4AF37',
+        cardImageBorderColor: cardImageBorderColor || '#D4AF37',
         moves: moves || [],
         updatedAt: new Date()
       };
@@ -1115,7 +1115,7 @@ const Profile = () => {
 
   if (loading) {
     return (
-      <div style={{ padding: '1.5rem', textAlign: 'center' }}>
+      <div className="mst-profile-loading">
         <p>Loading profile...</p>
       </div>
     );
@@ -1138,7 +1138,7 @@ const Profile = () => {
   // Helper function to convert rarity number to stars
   const getRarityStars = (rarityLevel: number) => {
     return Array.from({ length: rarityLevel }, (_, i) => (
-      <span key={i} style={{ color: '#fbbf24', fontSize: '16px' }}>★</span>
+      <span key={i} className="mst-power-rarity">★</span>
     ));
   };
 
@@ -1151,23 +1151,10 @@ const Profile = () => {
   ];
 
   return (
-    <div style={{ padding: '1.5rem', maxWidth: '1400px', margin: '0 auto' }}>
+    <div className="mst-profile-page">
       {safeReturnMissionPath && (
-        <div
-          style={{
-            marginBottom: '1.25rem',
-            padding: '1rem 1.25rem',
-            borderRadius: '0.75rem',
-            background: 'linear-gradient(135deg, #eff6ff 0%, #e0e7ff 100%)',
-            border: '2px solid #4f46e5',
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '0.75rem',
-          }}
-        >
-          <div style={{ color: '#312e81', fontSize: '0.95rem', lineHeight: 1.45 }}>
+        <div className="mst-profile-mission">
+          <div className="mst-profile-mission-text">
             <strong>Mission: Power Card</strong>
             {missionPpGranted && Number(missionPpGranted) > 0 ? (
               <span>
@@ -1181,16 +1168,7 @@ const Profile = () => {
           <button
             type="button"
             onClick={() => navigate(safeReturnMissionPath)}
-            style={{
-              padding: '0.65rem 1.15rem',
-              background: 'linear-gradient(135deg, #1d4ed8 0%, #4f46e5 100%)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '0.5rem',
-              fontWeight: 800,
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-            }}
+            className="mst-profile-mission-btn"
           >
             Return to mission
           </button>
@@ -1198,54 +1176,29 @@ const Profile = () => {
       )}
 
       {/* Header with Level and Power Level */}
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        gap: '1rem',
-        marginBottom: '1.5rem',
-        flexWrap: 'wrap'
-      }}>
-        <h1 style={{
-          fontSize: '1.875rem',
-          fontWeight: 'bold',
-          margin: 0,
-          textAlign: 'center'
-        }}>
-          Your Profile
-        </h1>
+      <div className="mst-profile-hero">
+        <div className="mst-profile-hero-titles">
+          <h1 className="mst-profile-hero-title">Your Profile</h1>
+          <p className="mst-profile-hero-sub">Ignite Your Purpose</p>
+        </div>
+        <span className="mst-profile-hero-motto" aria-hidden="true">Knowledge is Power</span>
         {powerLevel !== null && (
-          <div 
+          <div
+            className="mst-profile-pl"
             onClick={() => setShowPowerBreakdown(!showPowerBreakdown)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
-              padding: '0.5rem 1rem',
-              borderRadius: '0.5rem',
-              boxShadow: '0 2px 8px rgba(139, 92, 246, 0.3)',
-              cursor: 'pointer',
-              transition: 'all 0.2s ease',
-              userSelect: 'none'
-            }}
-            onMouseOver={(e) => {
-              e.currentTarget.style.transform = 'scale(1.05)';
-              e.currentTarget.style.boxShadow = '0 4px 12px rgba(139, 92, 246, 0.4)';
-            }}
-            onMouseOut={(e) => {
-              e.currentTarget.style.transform = 'scale(1)';
-              e.currentTarget.style.boxShadow = '0 2px 8px rgba(139, 92, 246, 0.3)';
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setShowPowerBreakdown(!showPowerBreakdown);
+              }
             }}
           >
-            <span style={{ fontSize: '1.25rem' }}>⚡</span>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-              <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.8)', fontWeight: 500 }}>
-                Power Level
-              </div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#fff', lineHeight: 1 }}>
-                {powerLevel}
-              </div>
+            <span className="mst-profile-pl-icon">⚡</span>
+            <div className="mst-profile-pl-meta">
+              <div className="mst-profile-pl-label">Power Level</div>
+              <div className="mst-profile-pl-value">{powerLevel}</div>
             </div>
           </div>
         )}
@@ -1253,171 +1206,70 @@ const Profile = () => {
       
       {/* Power Level Breakdown Panel */}
       {showPowerBreakdown && powerBreakdown && (
-        <div style={{
-          background: 'linear-gradient(135deg, #1f2937 0%, #374151 100%)',
-          borderRadius: '0.75rem',
-          padding: '1.5rem',
-          marginBottom: '1.5rem',
-          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-          border: '2px solid #8b5cf6',
-          position: 'relative'
-        }}>
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: '1rem'
-          }}>
-            <h2 style={{
-              fontSize: '1.25rem',
-              fontWeight: 'bold',
-              color: '#fff',
-              margin: 0,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem'
-            }}>
+        <div className="mst-profile-breakdown">
+          <div className="mst-profile-breakdown-head">
+            <h2 className="mst-profile-breakdown-title">
               <span>⚡</span>
               Power Level Breakdown
             </h2>
             <button
               onClick={() => setShowPowerBreakdown(false)}
-              style={{
-                background: 'rgba(255, 255, 255, 0.1)',
-                border: 'none',
-                borderRadius: '50%',
-                width: '32px',
-                height: '32px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '20px',
-                color: '#fff',
-                transition: 'all 0.2s ease'
-              }}
-              onMouseOver={(e) => {
-                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
-              }}
-              onMouseOut={(e) => {
-                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
-              }}
+              className="mst-profile-breakdown-close"
+              type="button"
+              aria-label="Close power breakdown"
             >
               ×
             </button>
           </div>
           
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-            gap: '1rem'
-          }}>
-            <div style={{
-              background: 'rgba(255, 255, 255, 0.1)',
-              borderRadius: '0.5rem',
-              padding: '1rem',
-              border: '1px solid rgba(255, 255, 255, 0.2)'
-            }}>
-              <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.7)', marginBottom: '0.5rem' }}>
-                Base (Level)
-              </div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#fff' }}>
-                {powerBreakdown.base}
-              </div>
-              <div style={{ fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.5)', marginTop: '0.25rem' }}>
-                Level {level} × 10
-              </div>
+          <div className="mst-profile-breakdown-grid">
+            <div className="mst-profile-breakdown-cell">
+              <div className="mst-profile-breakdown-cell-label">Base (Level)</div>
+              <div className="mst-profile-breakdown-cell-value">{powerBreakdown.base}</div>
+              <div className="mst-profile-breakdown-cell-hint">Level {level} × 10</div>
             </div>
             
-            <div style={{
-              background: 'rgba(255, 255, 255, 0.1)',
-              borderRadius: '0.5rem',
-              padding: '1rem',
-              border: '1px solid rgba(255, 255, 255, 0.2)'
-            }}>
-              <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.7)', marginBottom: '0.5rem' }}>
-                Skills
-              </div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#10b981' }}>
+            <div className="mst-profile-breakdown-cell">
+              <div className="mst-profile-breakdown-cell-label">Skills</div>
+              <div className="mst-profile-breakdown-cell-value mst-profile-breakdown-cell-value--skills">
                 +{powerBreakdown.skills}
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.5)', marginTop: '0.25rem' }}>
-                Equipped skills
-              </div>
+              <div className="mst-profile-breakdown-cell-hint">Equipped skills</div>
             </div>
             
-            <div style={{
-              background: 'rgba(255, 255, 255, 0.1)',
-              borderRadius: '0.5rem',
-              padding: '1rem',
-              border: '1px solid rgba(255, 255, 255, 0.2)'
-            }}>
-              <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.7)', marginBottom: '0.5rem' }}>
-                Artifacts
-              </div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#f59e0b' }}>
+            <div className="mst-profile-breakdown-cell">
+              <div className="mst-profile-breakdown-cell-label">Artifacts</div>
+              <div className="mst-profile-breakdown-cell-value mst-profile-breakdown-cell-value--artifacts">
                 +{powerBreakdown.artifacts}
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.5)', marginTop: '0.25rem' }}>
-                Equipped artifacts
-              </div>
+              <div className="mst-profile-breakdown-cell-hint">Equipped artifacts</div>
             </div>
             
-            <div style={{
-              background: 'rgba(255, 255, 255, 0.1)',
-              borderRadius: '0.5rem',
-              padding: '1rem',
-              border: '1px solid rgba(255, 255, 255, 0.2)'
-            }}>
-              <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.7)', marginBottom: '0.5rem' }}>
-                Ascension
-              </div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#8b5cf6' }}>
+            <div className="mst-profile-breakdown-cell">
+              <div className="mst-profile-breakdown-cell-label">Ascension</div>
+              <div className="mst-profile-breakdown-cell-value mst-profile-breakdown-cell-value--ascension">
                 +{powerBreakdown.ascension}
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.5)', marginTop: '0.25rem' }}>
-                Manifest ascension
-              </div>
+              <div className="mst-profile-breakdown-cell-hint">Manifest ascension</div>
             </div>
           </div>
           
-          <div style={{
-            marginTop: '1rem',
-            padding: '1rem',
-            background: 'rgba(139, 92, 246, 0.2)',
-            borderRadius: '0.5rem',
-            border: '1px solid rgba(139, 92, 246, 0.4)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center'
-          }}>
-            <div style={{ fontSize: '1rem', color: 'rgba(255, 255, 255, 0.9)', fontWeight: 600 }}>
-              Total Power Level
-            </div>
-            <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#fff' }}>
-              {powerLevel}
-            </div>
+          <div className="mst-profile-breakdown-total">
+            <div className="mst-profile-breakdown-total-label">Total Power Level</div>
+            <div className="mst-profile-breakdown-total-value">{powerLevel}</div>
           </div>
         </div>
       )}
       
       {/* Two-column layout: Left (Player Card + Journey) and Right (Profile Settings) */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1.5fr',
-          gap: '1.5rem',
-          marginBottom: '1.5rem',
-          alignItems: 'start',
-        }}
-      >
+      <div className="mst-profile-layout">
         {/* Left Column - Power Card (height drives Profile Settings cap) */}
         <div
           ref={powerCardRowRef}
-          style={{ alignSelf: 'start', display: 'flex', flexDirection: 'column', alignItems: 'center' }}
+          className="mst-profile-card-col"
         >
           {/* Player Card on top */}
-          <div style={{ width: '100%', maxWidth: '380px' }}>
+          <div className="mst-profile-card-wrap">
             <PlayerCard
               key={`${userData?.photoURL}-${displayName}`} // Force re-render when avatar or name changes
               name={displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}
@@ -1626,9 +1478,9 @@ const Profile = () => {
           ) : (
             /* Profile Settings — height capped to Power Card */
           <>
-          <div className="profile-settings" style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '1.25rem 1.5rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb', marginBottom: 0, height: '100%', boxSizing: 'border-box', overflowY: 'auto', minHeight: 0 }}>
-            <h2 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#4f46e5' }}>
-              👤 Profile Settings
+          <div className="profile-settings mst-profile-settings">
+            <h2 className="mst-profile-settings-title">
+              Profile Settings
             </h2>
             <div className="profile-card" style={{ marginBottom: 0 }}>
               {/* User Info Section - Avatar, Name, and Bio */}
@@ -1639,9 +1491,9 @@ const Profile = () => {
                     key={avatarUrl} // Force re-render when avatar changes
                     src={avatarUrl}
                     alt="Profile"
-                    style={{ width: '120px', height: '120px', borderRadius: '50%', objectFit: 'cover', border: '4px solid #4f46e5' }}
+                    className="mst-profile-settings-avatar"
                   />
-                  <label style={{ position: 'absolute', bottom: '0', right: '0', backgroundColor: uploading ? '#9ca3af' : '#4f46e5', color: 'white', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: uploading ? 'not-allowed' : 'pointer', fontSize: '14px', opacity: uploading ? 0.7 : 1 }}>
+                  <label className={`mst-profile-settings-camera${uploading ? ' is-disabled' : ''}`}>
                     {uploading ? '⏳' : '📷'}
                     <input type="file" accept="image/*" onChange={handleAvatarUpload} style={{ display: 'none' }} disabled={uploading} />
                   </label>
@@ -1650,13 +1502,13 @@ const Profile = () => {
                 <div style={{ flex: 1 }}>
                   {editing ? (
                     <div>
-                      <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} style={{ fontSize: '1.5rem', fontWeight: 'bold', border: '1px solid #d1d5db', borderRadius: '0.375rem', padding: '0.5rem', marginBottom: '0.5rem', width: '100%' }} placeholder="Display Name" />
-                      <textarea value={bio} onChange={e => setBio(e.target.value)} style={{ border: '1px solid #d1d5db', borderRadius: '0.375rem', padding: '0.5rem', width: '100%', minHeight: '80px', resize: 'vertical' }} placeholder="Tell us about yourself..." />
+                      <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} className="mst-profile-input" style={{ fontSize: '1.5rem' }} placeholder="Display Name" />
+                      <textarea value={bio} onChange={e => setBio(e.target.value)} className="mst-profile-textarea" placeholder="Tell us about yourself..." />
                     </div>
                   ) : (
                     <div>
-                      <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>{displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}</h2>
-                      <p style={{ color: '#6b7280', marginBottom: '1rem' }}>{bio || 'No bio yet. Click edit to add one!'}</p>
+                      <h2 className="mst-profile-settings-name">{displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}</h2>
+                      <p className="mst-profile-settings-bio">{bio || 'No bio yet. Click edit to add one!'}</p>
                     </div>
                   )}
                 </div>
@@ -1673,22 +1525,22 @@ const Profile = () => {
                       </span>
                     </div>
                     <div style={{ margin: '1rem 0' }}>
-                      <label style={{ display: 'block', marginBottom: '1rem' }}><b>Card Customization:</b></label>
+                      <label className="mst-profile-label" style={{ display: 'block', marginBottom: '1rem' }}><b>Card Customization:</b></label>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem' }}>
                         <div>
-                          <label style={{ display: 'block', marginBottom: '0.5rem' }}><b>Card Background Color:</b></label>
+                          <label className="mst-profile-label" style={{ display: 'block', marginBottom: '0.5rem' }}><b>Card Background Color:</b></label>
                           <div style={{ marginTop: 8 }}>
                             <SketchPicker color={cardBgColor} onChange={(color: any) => setCardBgColor(color.hex)} width="100%" />
                           </div>
                         </div>
                         <div>
-                          <label style={{ display: 'block', marginBottom: '0.5rem' }}><b>Card Border Color:</b></label>
+                          <label className="mst-profile-label" style={{ display: 'block', marginBottom: '0.5rem' }}><b>Card Border Color:</b></label>
                           <div style={{ marginTop: 8 }}>
                             <SketchPicker color={cardBorderColor} onChange={(color: any) => setCardBorderColor(color.hex)} width="100%" />
                           </div>
                         </div>
                         <div>
-                          <label style={{ display: 'block', marginBottom: '0.5rem' }}><b>Card Image Border Color:</b></label>
+                          <label className="mst-profile-label" style={{ display: 'block', marginBottom: '0.5rem' }}><b>Card Image Border Color:</b></label>
                           <div style={{ marginTop: 8 }}>
                             <SketchPicker color={cardImageBorderColor} onChange={(color: any) => setCardImageBorderColor(color.hex)} width="100%" />
                           </div>
@@ -1696,86 +1548,58 @@ const Profile = () => {
                       </div>
                     </div>
                     <div style={{ margin: '1rem 0' }}>
-                      <label><b>Card Image Frame Shape:</b></label>
+                      <label className="mst-profile-label"><b>Card Image Frame Shape:</b></label>
                       <div style={{ marginTop: 8, display: 'flex', gap: '1rem' }}>
                         <button
                           onClick={() => setCardFrameShape('circular')}
-                          style={{
-                            backgroundColor: cardFrameShape === 'circular' ? '#4f46e5' : '#e5e7eb',
-                            color: cardFrameShape === 'circular' ? 'white' : '#374151',
-                            border: '2px solid',
-                            borderColor: cardFrameShape === 'circular' ? '#4f46e5' : '#d1d5db',
-                            borderRadius: '50%',
-                            width: '60px',
-                            height: '60px',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '1.5rem',
-                            fontWeight: 'bold',
-                            transition: 'all 0.2s'
-                          }}
+                          className={`mst-profile-frame-btn mst-profile-frame-btn--circle${cardFrameShape === 'circular' ? ' is-active' : ''}`}
                           title="Circular Frame"
+                          type="button"
                         >
                           ⭕
                         </button>
                         <button
                           onClick={() => setCardFrameShape('rectangular')}
-                          style={{
-                            backgroundColor: cardFrameShape === 'rectangular' ? '#4f46e5' : '#e5e7eb',
-                            color: cardFrameShape === 'rectangular' ? 'white' : '#374151',
-                            border: '2px solid',
-                            borderColor: cardFrameShape === 'rectangular' ? '#4f46e5' : '#d1d5db',
-                            borderRadius: '0.5rem',
-                            width: '60px',
-                            height: '60px',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '1.5rem',
-                            fontWeight: 'bold',
-                            transition: 'all 0.2s'
-                          }}
+                          className={`mst-profile-frame-btn mst-profile-frame-btn--rect${cardFrameShape === 'rectangular' ? ' is-active' : ''}`}
                           title="Rectangular Frame"
+                          type="button"
                         >
                           ▭
                         </button>
                       </div>
-                      <div style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: '#6b7280' }}>
+                      <div className="mst-profile-hint">
                         Current: {cardFrameShape === 'circular' ? 'Circular' : 'Rectangular'}
                       </div>
                     </div>
                     {level >= 3 && (
                       <div style={{ margin: '1.5rem 0' }}>
-                        <label><b>Design Your Moves</b></label>
+                        <label className="mst-profile-label"><b>Design Your Moves</b></label>
                         <div style={{ margin: '0.5rem 0' }}>
                           {moves.map((move: any, idx: number) => (
                             <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                               <span style={{ fontSize: 20 }}>{move.icon}</span>
                               <span style={{ fontWeight: 'bold' }}>{move.name}</span>
-                              <span style={{ color: '#6b7280' }}>{move.description}</span>
-                              <button onClick={() => setMoves(moves.filter((_: any, i: number) => i !== idx))} style={{ marginLeft: 8, color: '#ef4444', background: 'none', border: 'none', cursor: 'pointer' }}>Remove</button>
+                              <span style={{ color: 'var(--mst-text-muted)' }}>{move.description}</span>
+                              <button onClick={() => setMoves(moves.filter((_: any, i: number) => i !== idx))} className="mst-profile-btn--remove" type="button">Remove</button>
                             </div>
                           ))}
                         </div>
                         <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                          <input type="text" value={newMove.icon} onChange={e => setNewMove({ ...newMove, icon: e.target.value })} placeholder="Icon (e.g. ⚡)" style={{ width: 50 }} />
-                          <input type="text" value={newMove.name} onChange={e => setNewMove({ ...newMove, name: e.target.value })} placeholder="Move Name" style={{ flex: 1 }} />
-                          <input type="text" value={newMove.description} onChange={e => setNewMove({ ...newMove, description: e.target.value })} placeholder="Description" style={{ flex: 2 }} />
+                          <input type="text" value={newMove.icon} onChange={e => setNewMove({ ...newMove, icon: e.target.value })} placeholder="Icon (e.g. ⚡)" className="mst-profile-input" style={{ width: 50, marginBottom: 0 }} />
+                          <input type="text" value={newMove.name} onChange={e => setNewMove({ ...newMove, name: e.target.value })} placeholder="Move Name" className="mst-profile-input" style={{ flex: 1, marginBottom: 0 }} />
+                          <input type="text" value={newMove.description} onChange={e => setNewMove({ ...newMove, description: e.target.value })} placeholder="Description" className="mst-profile-input" style={{ flex: 2, marginBottom: 0 }} />
                           <button onClick={() => {
                             if (newMove.name && newMove.icon) {
                               setMoves([...moves, newMove]);
                               setNewMove({ name: '', description: '', icon: '' });
                             }
-                          }} style={{ backgroundColor: '#4f46e5', color: 'white', border: 'none', borderRadius: 4, padding: '0.5rem 1rem', cursor: 'pointer' }}>Add</button>
+                          }} className="mst-profile-btn--add" type="button">Add</button>
                         </div>
                       </div>
                     )}
                     <div style={{ marginTop: '1rem' }}>
-                      <button onClick={handleSaveProfile} style={{ backgroundColor: '#10b981', color: 'white', padding: '0.5rem 1rem', borderRadius: '0.375rem', border: 'none', marginRight: '0.5rem', cursor: 'pointer' }}>Save</button>
-                      <button onClick={() => setEditing(false)} style={{ backgroundColor: '#6b7280', color: 'white', padding: '0.5rem 1rem', borderRadius: '0.375rem', border: 'none', cursor: 'pointer' }}>Cancel</button>
+                      <button onClick={handleSaveProfile} className="mst-profile-btn mst-profile-btn--save" type="button">Save</button>
+                      <button onClick={() => setEditing(false)} className="mst-profile-btn mst-profile-btn--cancel" type="button">Cancel</button>
                     </div>
                   </div>
                 ) : (
@@ -1791,19 +1615,8 @@ const Profile = () => {
                       <div style={{ margin: '0.5rem 0' }}>
                         <button
                           onClick={() => setShowManifestSelection(true)}
-                          style={{
-                            backgroundColor: '#8b5cf6',
-                            color: 'white',
-                            padding: '0.5rem 1rem',
-                            borderRadius: '0.375rem',
-                            border: 'none',
-                            cursor: 'pointer',
-                            fontSize: '0.875rem',
-                            fontWeight: '500',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem'
-                          }}
+                          className="mst-profile-btn mst-profile-btn--manifest"
+                          type="button"
                         >
                           🔄 Re-select Manifest
                         </button>
@@ -1811,51 +1624,36 @@ const Profile = () => {
                     )}
                     {/* Rivals Section */}
                     {(rivals.chosen || rivals.inbound) && (
-                      <div style={{ 
-                        margin: '0.5rem 0', 
-                        padding: '0.75rem', 
-                        backgroundColor: '#fef2f2', 
-                        border: '1px solid #fecaca', 
-                        borderRadius: '0.5rem',
-                        borderLeft: '4px solid #dc2626'
-                      }}>
+                      <div className="mst-profile-rivals">
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <span style={{ fontSize: '1.25rem' }}>⚔️</span>
-                            <span style={{ fontWeight: 'bold', color: '#dc2626' }}>Rivals</span>
+                            <span className="mst-profile-rivals-title">Rivals</span>
                           </div>
                           <button
                             onClick={() => setShowEditRivalModal(true)}
-                            style={{
-                              padding: '0.375rem 0.75rem',
-                              backgroundColor: '#dc2626',
-                              color: 'white',
-                              border: 'none',
-                              borderRadius: '0.375rem',
-                              cursor: 'pointer',
-                              fontSize: '0.875rem',
-                              fontWeight: '500'
-                            }}
+                            className="mst-profile-btn--rival"
+                            type="button"
                           >
                             Edit Rival
                           </button>
                         </div>
                         {rivals.chosen && (
                           <div style={{ marginBottom: '0.5rem' }}>
-                            <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+                            <div className="mst-profile-rivals-label">
                               Chosen Rival:
                             </div>
-                            <div style={{ fontWeight: 'bold', color: '#1f2937' }}>
+                            <div className="mst-profile-rivals-name">
                               {rivals.chosen.displayName}
                             </div>
                           </div>
                         )}
                         {rivals.inbound && (
                           <div>
-                            <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+                            <div className="mst-profile-rivals-label">
                               Inbound Rival:
                             </div>
-                            <div style={{ fontWeight: 'bold', color: '#1f2937' }}>
+                            <div className="mst-profile-rivals-name">
                               {rivals.inbound.displayName}
                             </div>
                           </div>
@@ -1863,43 +1661,28 @@ const Profile = () => {
                       </div>
                     )}
                     {!(rivals.chosen || rivals.inbound) && (
-                      <div style={{ 
-                        margin: '0.5rem 0', 
-                        padding: '0.75rem', 
-                        backgroundColor: '#fef2f2', 
-                        border: '1px solid #fecaca', 
-                        borderRadius: '0.5rem',
-                        borderLeft: '4px solid #dc2626'
-                      }}>
+                      <div className="mst-profile-rivals">
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
                               <span style={{ fontSize: '1.25rem' }}>⚔️</span>
-                              <span style={{ fontWeight: 'bold', color: '#dc2626' }}>No Rivals Set</span>
+                              <span className="mst-profile-rivals-title">No Rivals Set</span>
                             </div>
-                            <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                            <div className="mst-profile-rivals-empty">
                               Set a rival to earn double rewards when you defeat them!
                             </div>
                           </div>
                           <button
                             onClick={() => setShowEditRivalModal(true)}
-                            style={{
-                              padding: '0.5rem 1rem',
-                              backgroundColor: '#dc2626',
-                              color: 'white',
-                              border: 'none',
-                              borderRadius: '0.375rem',
-                              cursor: 'pointer',
-                              fontSize: '0.875rem',
-                              fontWeight: '500'
-                            }}
+                            className="mst-profile-btn--rival"
+                            type="button"
                           >
                             Set Rival
                           </button>
                         </div>
                       </div>
                     )}
-                    <button onClick={() => setEditing(true)} style={{ backgroundColor: '#4f46e5', color: 'white', padding: '0.5rem 1rem', borderRadius: '0.375rem', border: 'none', cursor: 'pointer' }}>Edit Profile</button>
+                    <button onClick={() => setEditing(true)} className="mst-profile-btn mst-profile-btn--edit" type="button">Edit Profile</button>
                   </div>
                 )}
             </div>
@@ -1911,68 +1694,30 @@ const Profile = () => {
 
       {/* Productivity Stats — full width under Power Card + Profile Settings */}
       {productivityStats !== undefined && (
-        <div
-          style={{
-            gridColumn: '1 / -1',
-            background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 40%, #e0f2fe 100%)',
-            borderRadius: '1rem',
-            padding: '1.75rem 2rem',
-            border: '1px solid #86efac',
-            boxShadow: '0 4px 16px rgba(16,185,129,0.18)',
-            width: '100%',
-            marginTop: '0',
-          }}
-        >
-          <h3 style={{ margin: '0 0 1rem', fontSize: '1.35rem', fontWeight: 800, color: '#065f46' }}>
+        <div className="mst-profile-panel mst-profile-panel--productivity">
+          <h3 className="mst-profile-panel-title">
             Productivity Stats (My Stats)
           </h3>
           {productivityStats ? (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', marginBottom: '0.9rem', flexWrap: 'wrap' }}>
-                <span
-                  style={{
-                    background: '#059669',
-                    color: 'white',
-                    fontSize: '0.85rem',
-                    fontWeight: 800,
-                    borderRadius: '999px',
-                    padding: '0.35rem 0.85rem',
-                  }}
-                >
+                <span className="mst-profile-rank-pill">
                   {productivityStats.productivityRank || 'Dormant'}
                 </span>
-                <span style={{ color: '#065f46', fontWeight: 700, fontSize: '1.05rem' }}>
+                <span className="mst-profile-prod-rating">
                   Productivity Rating: {Math.round(productivityStats.overallProductivityRating || 0)}%
                 </span>
               </div>
-              <div
-                style={{
-                  width: '100%',
-                  height: '14px',
-                  background: 'rgba(16, 185, 129, 0.18)',
-                  borderRadius: '999px',
-                  overflow: 'hidden',
-                  marginBottom: '1.25rem',
-                }}
-              >
+              <div className="mst-profile-prod-track">
                 <div
+                  className="mst-profile-prod-fill"
                   style={{
                     width: `${Math.max(0, Math.min(100, Math.round(productivityStats.overallProductivityRating || 0)))}%`,
-                    height: '100%',
-                    background: 'linear-gradient(90deg, #10b981 0%, #0ea5e9 100%)',
                   }}
                 />
               </div>
 
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-                  gap: '1rem 1.5rem',
-                  fontSize: '0.95rem',
-                  color: '#064e3b',
-                }}
-              >
+              <div className="mst-profile-prod-grid">
                 <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Total Sprints Joined</div><div style={{ fontWeight: 800 }}>{productivityStats.totalSprintsJoined || 0}</div></div>
                 <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Total Sprints Completed</div><div style={{ fontWeight: 800 }}>{productivityStats.totalSprintsCompleted || 0}</div></div>
                 <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Sprint Completion Rate</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.sprintCompletionRate || 0)}%</div></div>
@@ -1990,10 +1735,10 @@ const Profile = () => {
                 style={{
                   marginTop: '1.5rem',
                   paddingTop: '1.25rem',
-                  borderTop: '1px solid rgba(5, 150, 105, 0.25)',
+                  borderTop: '1px solid var(--mst-border)',
                 }}
               >
-                <h4 style={{ margin: '0 0 0.85rem', fontSize: '1.15rem', fontWeight: 800, color: '#065f46' }}>
+                <h4 className="mst-profile-panel-sub">
                   Work & Energy Stats
                 </h4>
                 <div
@@ -2038,15 +1783,13 @@ const Profile = () => {
                       return (
                         <div
                           key={k}
+                          className="mst-profile-energy-card"
                           style={{
-                            background: 'rgba(255,255,255,0.65)',
-                            borderRadius: '0.65rem',
-                            padding: '0.85rem 1rem',
-                            border: '1px solid rgba(124, 58, 237, 0.35)',
+                            border: '1px solid var(--mst-border-purple)',
                           }}
                         >
-                          <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#064e3b' }}>{line1}</div>
-                          <div style={{ fontSize: '0.68rem', color: '#047857', marginBottom: 6 }}>{line2}</div>
+                          <div style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--mst-text-secondary)' }}>{line1}</div>
+                          <div style={{ fontSize: '0.68rem', color: 'var(--mst-text-muted)', marginBottom: 6 }}>{line2}</div>
                           {powerLevel != null ? (
                             <>
                               <div
@@ -2059,10 +1802,10 @@ const Profile = () => {
                               >
                                 <span style={{ fontSize: '1.1rem' }}>⚡</span>
                                 <div>
-                                  <div style={{ fontSize: '0.65rem', color: '#6b7280', fontWeight: 600 }}>
+                                  <div style={{ fontSize: '0.65rem', color: 'var(--mst-text-muted)', fontWeight: 600 }}>
                                     Power Level
                                   </div>
-                                  <div style={{ fontSize: '1.15rem', fontWeight: 900, color: '#5b21b6', lineHeight: 1.1 }}>
+                                  <div style={{ fontSize: '1.15rem', fontWeight: 900, color: 'var(--mst-purple-bright)', lineHeight: 1.1 }}>
                                     {powerLevel}
                                   </div>
                                 </div>
@@ -2148,18 +1891,18 @@ const Profile = () => {
                       <div
                         key={k}
                         style={{
-                          background: 'rgba(255,255,255,0.65)',
+                          background: 'rgba(5, 7, 13, 0.55)',
                           borderRadius: '0.65rem',
                           padding: '0.85rem 1rem',
-                          border: '1px solid rgba(5, 150, 105, 0.2)',
+                          border: '1px solid var(--mst-border)',
                         }}
                       >
-                        <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#064e3b' }}>{line1}</div>
-                        <div style={{ fontSize: '0.68rem', color: '#047857', marginBottom: 4 }}>{line2}</div>
-                        <div style={{ fontSize: '0.72rem', color: '#374151' }}>
+                        <div style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--mst-text-secondary)' }}>{line1}</div>
+                        <div style={{ fontSize: '0.68rem', color: 'var(--mst-text-muted)', marginBottom: 4 }}>{line2}</div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--mst-text-secondary)' }}>
                           Done: <strong>{b.completed}</strong> · Tried: <strong>{b.attempted}</strong>
                         </div>
-                        <div style={{ fontSize: '0.72rem', color: '#374151', marginTop: 2 }}>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--mst-text-secondary)', marginTop: 2 }}>
                           Rate: <strong>{pct}%</strong> · Points: <strong>{Math.round(b.pointsEarned)}</strong>
                         </div>
                         <div
@@ -2167,13 +1910,13 @@ const Profile = () => {
                             marginTop: 6,
                             height: 8,
                             borderRadius: 999,
-                            background: 'rgba(16,185,129,0.15)',
+                            background: 'var(--mst-track)',
                             overflow: 'hidden',
                           }}
                         >
                           <div style={{ width: `${pct}%`, height: '100%', background: barColor }} />
                         </div>
-                        <div style={{ fontSize: '0.65rem', color: '#6b7280', marginTop: 4 }}>
+                        <div style={{ fontSize: '0.65rem', color: 'var(--mst-text-muted)', marginTop: 4 }}>
                           Last: {lastMs ? new Date(lastMs).toLocaleString() : '—'}
                         </div>
                       </div>
@@ -2190,16 +1933,16 @@ const Profile = () => {
                   gap: '1rem',
                 }}
               >
-                <div style={{ background: 'rgba(255,255,255,0.55)', borderRadius: '0.65rem', padding: '1rem 1.15rem' }}>
-                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#065f46', marginBottom: '0.5rem' }}>
+                <div className="mst-profile-energy-card">
+                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--mst-gold-bright)', marginBottom: '0.5rem' }}>
                     Recent Sprint Activity
                   </div>
                   {productivityActivityLoading ? (
-                    <div style={{ fontSize: '0.78rem', color: '#047857' }}>Loading sprint activity…</div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--mst-text-muted)' }}>Loading sprint activity…</div>
                   ) : recentSprintActivity.length === 0 ? (
-                    <div style={{ fontSize: '0.78rem', color: '#047857' }}>No sprint activity yet.</div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--mst-text-muted)' }}>No sprint activity yet.</div>
                   ) : (
-                    <ul style={{ margin: 0, paddingLeft: '1rem', fontSize: '0.76rem' }}>
+                    <ul style={{ margin: 0, paddingLeft: '1rem', fontSize: '0.76rem', color: 'var(--mst-text-secondary)' }}>
                       {recentSprintActivity.slice(0, 5).map((item) => (
                         <li key={item.id} style={{ marginBottom: '0.2rem' }}>
                           {(item.status || 'joined').toUpperCase()} — {item.sprintTitle || 'Sprint'}
@@ -2208,14 +1951,14 @@ const Profile = () => {
                     </ul>
                   )}
                 </div>
-                <div style={{ background: 'rgba(255,255,255,0.55)', borderRadius: '0.65rem', padding: '1rem 1.15rem' }}>
-                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#065f46', marginBottom: '0.5rem' }}>
+                <div className="mst-profile-energy-card">
+                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--mst-gold-bright)', marginBottom: '0.5rem' }}>
                     Live Event CFU / quizzes (last 3)
                   </div>
                   {productivityActivityLoading ? (
-                    <div style={{ fontSize: '0.78rem', color: '#047857' }}>Loading live quiz activity…</div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--mst-text-muted)' }}>Loading live quiz activity…</div>
                   ) : recentLiveEventQuizActivity.length === 0 ? (
-                    <div style={{ fontSize: '0.78rem', color: '#047857' }}>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--mst-text-muted)' }}>
                       No live event CFU or quiz completions yet.
                     </div>
                   ) : (
@@ -2257,7 +2000,7 @@ const Profile = () => {
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-                  <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#312e81' }}>Live Event Exam History</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--mst-purple-bright)' }}>Live Event Exam History</div>
                   {examHistory.length > 5 ? (
                     <button
                       type="button"
@@ -2323,7 +2066,7 @@ const Profile = () => {
               </div>
             </>
           ) : (
-            <p style={{ margin: 0, fontSize: '0.875rem', color: '#047857' }}>
+            <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--mst-text-muted)' }}>
               No productivity data yet. Join Class Flow sprints and complete Training Grounds quizzes to populate
               your My Stats section.
             </p>
@@ -2332,27 +2075,10 @@ const Profile = () => {
       )}
 
       {/* Secondary profile panels under the top card row */}
-      <div
-        style={{
-          gridColumn: '1 / -1',
-          display: 'grid',
-          gap: '1.25rem',
-          marginTop: '0.25rem',
-        }}
-      >
+      <div className="mst-profile-secondary">
           {currentUser && (
-            <div
-              style={{
-                width: '100%',
-                maxWidth: '420px',
-                background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 45%, #f1f5f9 100%)',
-                borderRadius: '0.75rem',
-                padding: '1rem 1.25rem',
-                border: '1px solid #94a3b8',
-                boxShadow: '0 2px 8px rgba(15,23,42,0.12)',
-              }}
-            >
-              <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 800, color: '#0f172a' }}>
+            <div className="mst-profile-panel mst-profile-panel--civic">
+              <h3 className="mst-profile-panel-title mst-profile-panel-title--sm">
                 Civic Status
               </h3>
               {civicState === undefined ? (
@@ -2450,20 +2176,11 @@ const Profile = () => {
               )}
             </div>
           )}
-          <div
-            style={{
-              marginBottom: '1rem',
-              padding: '1rem 1.25rem',
-              background: 'linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%)',
-              borderRadius: '0.75rem',
-              border: '1px solid #a78bfa',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
-            }}
-          >
+          <div className="mst-profile-panel mst-profile-panel--season">
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
-                <strong style={{ color: '#4c1d95' }}>Season 1 — Flow &amp; Energy</strong>
-                <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem', color: '#5b21b6', maxWidth: '36rem' }}>
+                <strong style={{ color: 'var(--mst-purple-bright)' }}>Season 1 — Flow &amp; Energy</strong>
+                <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem', color: 'var(--mst-text-secondary)', maxWidth: '36rem' }}>
                   Track the four energies and evolve your manifest skill tiers (PP unlocks). Same progression data powers live events and battle pass.
                 </p>
               </div>
@@ -2471,48 +2188,21 @@ const Profile = () => {
                 <button
                   type="button"
                   onClick={() => navigate('/energy-mastery')}
-                  style={{
-                    background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '0.5rem',
-                    padding: '0.55rem 1rem',
-                    fontWeight: 700,
-                    fontSize: '0.85rem',
-                    cursor: 'pointer',
-                  }}
+                  className="mst-profile-nav-chip"
                 >
                   Energy Mastery
                 </button>
                 <button
                   type="button"
                   onClick={() => navigate('/manifest-evolution')}
-                  style={{
-                    background: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '0.5rem',
-                    padding: '0.55rem 1rem',
-                    fontWeight: 700,
-                    fontSize: '0.85rem',
-                    cursor: 'pointer',
-                  }}
+                  className="mst-profile-nav-chip"
                 >
                   Manifest evolution
                 </button>
                 <button
                   type="button"
                   onClick={() => navigate('/battle-pass')}
-                  style={{
-                    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '0.5rem',
-                    padding: '0.55rem 1rem',
-                    fontWeight: 700,
-                    fontSize: '0.85rem',
-                    cursor: 'pointer',
-                  }}
+                  className="mst-profile-nav-chip mst-profile-nav-chip--gold"
                 >
                   Battle Pass
                 </button>
@@ -2522,34 +2212,27 @@ const Profile = () => {
 
             {/* Stats Grid */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
-              <div
-                style={{
-                  backgroundColor: '#f3f4f6',
-                  padding: '1rem',
-                  borderRadius: '0.5rem',
-                  textAlign: 'center',
-                }}
-              >
-                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{userData?.xp || 0}</div>
-                <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.75rem' }}>Total XP</div>
+              <div className="mst-profile-stat-tile">
+                <div className="mst-profile-stat-value">{userData?.xp || 0}</div>
+                <div className="mst-profile-stat-label" style={{ marginBottom: '0.75rem' }}>Total XP</div>
                 <div
                   style={{
-                    borderTop: '1px solid #e5e7eb',
+                    borderTop: '1px solid var(--mst-border)',
                     paddingTop: '0.75rem',
                   }}
                 >
-                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{level}</div>
-                  <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Level</div>
+                  <div className="mst-profile-stat-value">{level}</div>
+                  <div className="mst-profile-stat-label">Level</div>
                 </div>
               </div>
-              <div style={{ backgroundColor: '#f3f4f6', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
+              <div className="mst-profile-stat-tile">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
-                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{userData?.powerPoints || 0}</div>
+                  <div className="mst-profile-stat-value">{userData?.powerPoints || 0}</div>
                   {ppBoostStatus.isActive && (
                     <span 
                       style={{ 
                         fontSize: '1rem',
-                        color: '#7c3aed',
+                        color: 'var(--mst-purple-bright)',
                         fontWeight: 'bold',
                         textShadow: '0 0 2px rgba(124, 58, 237, 0.3)',
                         animation: 'pulse 2s infinite'
@@ -2560,21 +2243,9 @@ const Profile = () => {
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.35rem' }}>Power Points</div>
+                <div className="mst-profile-stat-label" style={{ marginBottom: '0.35rem' }}>Power Points</div>
                 {profileTaxPreview ? (
-                  <div
-                    style={{
-                      marginBottom: '0.65rem',
-                      padding: '0.5rem 0.55rem',
-                      borderRadius: '0.375rem',
-                      background: 'linear-gradient(135deg, #f0fdfa 0%, #ecfeff 100%)',
-                      border: '1px solid #99f6e4',
-                      fontSize: '0.72rem',
-                      lineHeight: 1.45,
-                      color: '#0f766e',
-                      textAlign: 'left',
-                    }}
-                  >
+                  <div className="mst-profile-tax-preview">
                     <div style={{ fontWeight: 700, letterSpacing: '0.02em' }}>
                       Next civic tax in{' '}
                       <span style={{ color: '#115e59' }}>
@@ -2599,42 +2270,14 @@ const Profile = () => {
                 <button
                   type="button"
                   onClick={() => setShowWaysToEarnPpModal(true)}
-                  style={{
-                    background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
-                    color: '#1f2937',
-                    border: 'none',
-                    borderRadius: '0.5rem',
-                    padding: '0.5rem 1rem',
-                    fontSize: '0.875rem',
-                    fontWeight: 'bold',
-                    cursor: 'pointer',
-                    boxShadow: '0 2px 8px rgba(251, 191, 36, 0.3)',
-                    transition: 'all 0.2s',
-                    width: '100%',
-                    marginTop: '0.5rem'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(251, 191, 36, 0.4)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = '0 2px 8px rgba(251, 191, 36, 0.3)';
-                  }}
+                  className="mst-profile-btn--pp"
                 >
                   💰 Want more PP?
                 </button>
               </div>
-              <div style={{ 
-                background: 'linear-gradient(135deg, #9ca3af 0%, #6b7280 100%)', 
-                padding: '1rem', 
-                borderRadius: '0.5rem', 
-                textAlign: 'center',
-                border: '1px solid #4b5563',
-                boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)'
-              }}>
-                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#ffffff' }}>{Math.floor(userData?.truthMetal || 0)}</div>
-                <div style={{ fontSize: '0.875rem', color: '#e5e7eb', fontWeight: '500' }}>Truth Metal Shards</div>
+              <div className="mst-profile-tm-tile">
+                <div className="mst-profile-stat-value" style={{ color: '#fff' }}>{Math.floor(userData?.truthMetal || 0)}</div>
+                <div className="mst-profile-stat-label" style={{ color: '#e5e7eb', fontWeight: 500 }}>Truth Metal Shards</div>
                 <div
                   style={{
                     marginTop: '0.85rem',
@@ -2689,23 +2332,17 @@ const Profile = () => {
                   </div>
                 </div>
               </div>
-              <div style={{ backgroundColor: '#f3f4f6', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
-                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{Object.values(userData?.challenges || {}).filter(Boolean).length}</div>
-                <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Challenges Completed</div>
+              <div className="mst-profile-stat-tile">
+                <div className="mst-profile-stat-value">{Object.values(userData?.challenges || {}).filter(Boolean).length}</div>
+                <div className="mst-profile-stat-label">Challenges Completed</div>
               </div>
             </div>
 
-            <div style={{
-              marginTop: '1.5rem',
-              padding: '1.25rem',
-              background: '#f8fafc',
-              borderRadius: '0.75rem',
-              border: '1px solid #e2e8f0',
-            }}>
-              <h3 style={{ fontSize: '1.125rem', fontWeight: 700, color: '#1e293b', margin: '0 0 0.75rem 0' }}>
+            <div className="mst-profile-panel" style={{ marginTop: '1.5rem', padding: '1.25rem' }}>
+              <h3 className="mst-profile-panel-title mst-profile-panel-title--sm">
                 ⚡ Power stats
               </h3>
-              <p style={{ fontSize: '0.75rem', color: '#94a3b8', margin: '0 0 1rem 0', lineHeight: 1.45 }}>
+              <p style={{ fontSize: '0.75rem', color: 'var(--mst-text-muted)', margin: '0 0 1rem 0', lineHeight: 1.45 }}>
                 Hover a stat to see which live events and goals level it up.
               </p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(148px, 1fr))', gap: '0.75rem' }}>
@@ -2722,10 +2359,10 @@ const Profile = () => {
                       onMouseEnter={() => setProfilePowerStatHover(key)}
                       onMouseLeave={() => setProfilePowerStatHover(null)}
                       style={{
-                        background: hovered ? '#f8fafc' : '#fff',
+                        background: hovered ? 'rgba(30, 41, 59, 0.95)' : 'rgba(17, 24, 39, 0.85)',
                         padding: '0.85rem',
                         borderRadius: '0.5rem',
-                        border: `1px solid ${hovered ? '#cbd5e1' : '#e2e8f0'}`,
+                        border: `1px solid ${hovered ? 'var(--mst-border-gold)' : 'var(--mst-border)'}`,
                         cursor: 'help',
                         display: 'flex',
                         flexDirection: 'column',
@@ -2754,7 +2391,7 @@ const Profile = () => {
                           minHeight: 40,
                           fontSize: '0.7rem',
                           lineHeight: 1.45,
-                          color: '#334155',
+                          color: 'var(--mst-text-secondary)',
                           opacity: hovered ? 1 : 0,
                           transition: 'opacity 0.15s ease',
                         }}
@@ -2770,35 +2407,13 @@ const Profile = () => {
       </div>
 
       {/* Artifacts and Manifest Progress Side by Side */}
-      <div style={{ 
-        display: 'flex', 
-        gap: '2rem', 
-        marginBottom: '2rem',
-        alignItems: 'stretch' // Changed from flex-start to stretch for equal height
-      }}>
+      <div className="mst-profile-artifacts-row">
         {/* Artifacts Section - Left Side with Vertical Scrolling */}
-        <div style={{ 
-          flex: '1', 
-          backgroundColor: 'white', 
-          borderRadius: '0.75rem', 
-          padding: '2rem', 
-          boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', 
-          border: '1px solid #e5e7eb',
-          maxHeight: '800px',
-          overflowY: 'auto',
-          display: 'flex',
-          flexDirection: 'column'
-        }}>
+        <div className="mst-profile-panel mst-profile-panel--artifacts">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexShrink: 0 }}>
-              <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5', margin: 0, lineHeight: '1.5rem' }}>🛒 Purchased Artifacts</h2>
+              <h2 className="mst-profile-panel-title" style={{ margin: 0, lineHeight: '1.5rem', fontSize: '1.35rem' }}>Purchased Artifacts</h2>
               {Array.isArray(userData?.artifacts) && userData.artifacts.length > 0 && (
-                <div style={{ 
-                  background: '#f3f4f6', 
-                  padding: '0.5rem 1rem', 
-                  borderRadius: '1rem', 
-                  fontSize: '0.875rem',
-                  color: '#6b7280'
-                }}>
+                <div className="mst-profile-artifact-count">
                   {Array.isArray(userData?.artifacts) ? userData.artifacts.filter((a: any) => !a.used && !a.pending && !isEquippableArtifact(a)).length : 0} Available • {Array.isArray(userData?.artifacts) ? userData.artifacts.filter((a: any) => a.pending).length : 0} In Use • {Array.isArray(userData?.artifacts) ? userData.artifacts.filter((a: any) => a.used).length : 0} Used
                 </div>
               )}
@@ -3636,20 +3251,9 @@ const Profile = () => {
           </div>
       
         {/* Manifest Progress Section - Right Side with Horizontal Scrolling */}
-        <div style={{ 
-          flex: '1', 
-          backgroundColor: 'white', 
-          borderRadius: '0.75rem', 
-          padding: '2rem', 
-          boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', 
-          border: '1px solid #e5e7eb',
-          overflowX: 'auto',
-          minWidth: 0,
-          display: 'flex',
-          flexDirection: 'column'
-        }}>
-        <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5', margin: 0, lineHeight: '1.5rem', flexShrink: 0 }}>
-          ⚡ Manifest Progress
+        <div className="mst-profile-panel mst-profile-panel--artifacts" style={{ overflowX: 'auto', minWidth: 0 }}>
+        <h2 className="mst-profile-panel-title" style={{ margin: '0 0 1.5rem', lineHeight: '1.5rem', flexShrink: 0, fontSize: '1.35rem' }}>
+          Manifest Progress
         </h2>
         {playerManifest ? (
             <div style={{ minWidth: '600px' }}>
@@ -3881,11 +3485,11 @@ const Profile = () => {
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 padding: '0.5rem',
-                backgroundColor: 'white',
+                backgroundColor: '#111827',
                 borderRadius: '0.25rem',
-                border: '1px solid #d1d5db'
+                border: '1px solid var(--mst-border)'
               }}>
-                <span style={{ fontWeight: 'bold', color: '#374151' }}>
+                <span style={{ fontWeight: 'bold', color: 'var(--mst-text-primary)' }}>
                   {artifact.name} (Submitted: {artifact.submittedAt ? new Date(artifact.submittedAt).toLocaleString() : 'Unknown'})
                 </span>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>

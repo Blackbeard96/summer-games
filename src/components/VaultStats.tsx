@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 import { parseFirestoreDate, vaultHealthCooldownEnd } from '../utils/vaultDisplayNormalize';
+import '../styles/mst-vault.css';
 
 interface VaultStatsProps {
   vault: Vault | null;
@@ -551,17 +552,12 @@ const VaultStats: React.FC<VaultStatsProps> = ({
 
   if (!vault) {
     return (
-      <div style={{ 
-        background: '#fef2f2', 
-        border: '1px solid #fecaca',
-        color: '#dc2626',
-        padding: '2rem',
-        borderRadius: '0.75rem',
-        textAlign: 'center'
-      }}>
-        <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>⚠️</div>
-        <div style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>Vault Not Loaded</div>
-        <div style={{ fontSize: '0.875rem', opacity: 0.8 }}>
+      <div className="mst-vault-loading" role="status">
+        <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>◇</div>
+        <div className="mst-display" style={{ fontSize: '1.1rem', marginBottom: '0.5rem', color: 'var(--mst-gold-bright)' }}>
+          Accessing Vault…
+        </div>
+        <div style={{ fontSize: '0.875rem', color: 'var(--mst-text-muted)' }}>
           Your vault data is being initialized. Please wait a moment.
         </div>
       </div>
@@ -582,9 +578,9 @@ const VaultStats: React.FC<VaultStatsProps> = ({
   const offlineMovesPercentage = (remainingOfflineMoves / maxOfflineMoves) * 100;
 
   const getStatusColor = (percentage: number) => {
-    if (percentage >= 80) return '#059669'; // Green
-    if (percentage >= 50) return '#f59e0b'; // Yellow
-    return '#dc2626'; // Red
+    if (percentage >= 80) return '#3d9b6e'; // success
+    if (percentage >= 50) return '#d4a84f'; // gold/warn
+    return '#c44b4b'; // health/danger
   };
 
   const getStatusIcon = (percentage: number) => {
@@ -594,14 +590,8 @@ const VaultStats: React.FC<VaultStatsProps> = ({
   };
 
   return (
-    <div style={{ 
-      background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
-      border: '2px solid #e2e8f0',
-      borderRadius: '1rem',
-      padding: '2rem',
-      marginBottom: '2rem',
-      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
-    }}>
+    <div className="mst-vault-frame">
+    <div className="mst-vault-shell">
       <style>
         {`
           @keyframes pulse {
@@ -611,58 +601,28 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           }
         `}
       </style>
-      {/* Header */}
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center', 
-        marginBottom: '2rem',
-        paddingBottom: '1rem',
-        borderBottom: '2px solid #e2e8f0'
-      }}>
+      {/* Header / Hero */}
+      <div className="mst-vault-hero">
         <div>
-          <h2 style={{ 
-            fontSize: '2rem', 
-            color: '#1f2937', 
-            marginBottom: '0.25rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem'
-          }}>
-            🏦 Your Vault
+          <h2 className="mst-vault-hero-title">
+            <span aria-hidden>🏦</span> Your Vault
           </h2>
-          <p style={{ color: '#6b7280', fontSize: '0.875rem' }}>
+          <p className="mst-vault-hero-sub">
             Master Space & Time Battle System
           </p>
+          <p className="mst-vault-hero-flavor">
+            Protect your energy. Power fuels your purpose.
+          </p>
         </div>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
           {/* Battle Creation Buttons */}
           {onCreateBattle && (
             <>
               <button
+                className="mst-vault-btn-live"
                 onClick={() => {}} // Disabled - no action
                 title="Under Construction"
-                style={{
-                  background: '#9ca3af',
-                  color: 'white',
-                  border: 'none',
-                  padding: '0.75rem 1.5rem',
-                  borderRadius: '0.5rem',
-                  fontSize: '0.875rem',
-                  fontWeight: 'bold',
-                  cursor: 'not-allowed',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  transition: 'all 0.2s',
-                  opacity: 0.6
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.opacity = '0.8';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.opacity = '0.6';
-                }}
+                disabled
               >
                 🚀 Live Battle
               </button>
@@ -672,30 +632,8 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           {/* Sync PP Button - Admin Only */}
           {currentUser?.email === 'edm21179@gmail.com' && (
             <button
+              className="mst-vault-btn-sync"
               onClick={onSyncPP}
-              style={{
-                background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
-                color: 'white',
-                border: 'none',
-                padding: '0.75rem 1.5rem',
-                borderRadius: '0.5rem',
-                fontSize: '0.875rem',
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-                boxShadow: '0 2px 4px rgba(79, 70, 229, 0.2)',
-                transition: 'all 0.2s'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.transform = 'translateY(-1px)';
-                e.currentTarget.style.boxShadow = '0 4px 8px rgba(79, 70, 229, 0.3)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = '0 2px 4px rgba(79, 70, 229, 0.2)';
-              }}
             >
               🔄 Sync PP
             </button>
@@ -704,117 +642,34 @@ const VaultStats: React.FC<VaultStatsProps> = ({
       </div>
 
       {/* Quick Actions Section */}
-      <div style={{ 
-        background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)',
-        border: '2px solid #bbf7d0',
-        borderRadius: '1rem',
-        padding: '1.5rem',
-        marginBottom: '2rem',
-        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
-      }}>
-        <h3 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#1f2937' }}>Quick Actions</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
-          <button 
-            onClick={() => onRestoreShields(5, 5)}
-            disabled={maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp}
-            style={{
-              background: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? '#9ca3af' : '#10b981',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem',
-              borderRadius: '0.5rem',
-              cursor: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? 'not-allowed' : 'pointer',
-              fontWeight: 'bold',
-              fontSize: '0.875rem'
-            }}
-          >
-            +5 Shields (5 PP)
-          </button>
-          
-          <button 
-            onClick={() => onRestoreShields(10, 10)}
-            disabled={maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp}
-            style={{
-              background: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? '#9ca3af' : '#10b981',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem',
-              borderRadius: '0.5rem',
-              cursor: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? 'not-allowed' : 'pointer',
-              fontWeight: 'bold',
-              fontSize: '0.875rem'
-            }}
-          >
-            +10 Shields (10 PP)
-          </button>
-          
-          <button 
-            onClick={() => onRestoreShields(25, 25)}
-            disabled={maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp}
-            style={{
-              background: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? '#9ca3af' : '#10b981',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem',
-              borderRadius: '0.5rem',
-              cursor: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? 'not-allowed' : 'pointer',
-              fontWeight: 'bold',
-              fontSize: '0.875rem'
-            }}
-          >
-            +25 Shields (25 PP)
-          </button>
-          
-          <button 
-            onClick={() => onRestoreShields(50, 50)}
-            disabled={maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp}
-            style={{
-              background: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? '#9ca3af' : '#10b981',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem',
-              borderRadius: '0.5rem',
-              cursor: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? 'not-allowed' : 'pointer',
-              fontWeight: 'bold',
-              fontSize: '0.875rem'
-            }}
-          >
-            +50 Shields (50 PP)
-          </button>
-          
-          <button 
-            onClick={() => onRestoreShields(100, 100)}
-            disabled={maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp}
-            style={{
-              background: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? '#9ca3af' : '#10b981',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem',
-              borderRadius: '0.5rem',
-              cursor: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? 'not-allowed' : 'pointer',
-              fontWeight: 'bold',
-              fontSize: '0.875rem'
-            }}
-          >
-            +100 Shields (100 PP)
-          </button>
-          
-          <button 
-            onClick={() => onRestoreShields(1000, 1000)}
-            disabled={maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp}
-            style={{
-              background: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? '#9ca3af' : '#10b981',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem',
-              borderRadius: '0.5rem',
-              cursor: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? 'not-allowed' : 'pointer',
-              fontWeight: 'bold',
-              fontSize: '0.875rem'
-            }}
-          >
-            +1000 Shields (1000 PP)
-          </button>
+      <div className="mst-vault-qa">
+        <div className="mst-vault-qa-head">
+          <h3 className="mst-vault-qa-title">⚡ Quick Actions</h3>
+          <span className="mst-vault-qa-tag">Small steps. A stronger tomorrow.</span>
+        </div>
+        <p className="mst-vault-qa-desc">
+          Convert your Power Points into Shields to increase your Vault&apos;s protection.
+        </p>
+        <div className="mst-vault-qa-grid">
+          {[
+            { amount: 5, cost: 5 },
+            { amount: 10, cost: 10 },
+            { amount: 25, cost: 25 },
+            { amount: 50, cost: 50 },
+            { amount: 100, cost: 100 },
+            { amount: 1000, cost: 1000 },
+          ].map(({ amount, cost }) => (
+            <button
+              key={amount}
+              type="button"
+              onClick={() => onRestoreShields(amount, cost)}
+              disabled={maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp}
+              className="mst-vault-qa-btn"
+            >
+              <span aria-hidden>🛡️</span> +{amount} Shields
+              <span className="mst-vault-qa-cost">({cost} PP)</span>
+            </button>
+          ))}
         </div>
       </div>
 
@@ -826,18 +681,12 @@ const VaultStats: React.FC<VaultStatsProps> = ({
         marginBottom: '2rem'
       }}>
         {/* Power Points */}
-        <div style={{ 
-          background: 'white', 
-          padding: '1.5rem', 
-          borderRadius: '0.75rem', 
-          border: '2px solid #e5e7eb',
-          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)'
-        }}>
+        <div className="mst-vault-card mst-interactive-card mst-card--power" tabIndex={0}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>POWER POINTS</div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--mst-gold)', fontWeight: '600', letterSpacing: '0.12em', fontFamily: 'var(--mst-font-display)' }}>POWER POINTS</div>
             <span style={{ fontSize: '1.5rem' }}>⚡</span>
           </div>
-          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#059669', marginBottom: '0.5rem', position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <div className="mst-stat-bright" style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--mst-text-primary)', marginBottom: '0.5rem', position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span>{vault.currentPP.toLocaleString()} / {vault.capacity.toLocaleString()}</span>
             {ppBoostStatus.isActive && (
               <span 
@@ -875,60 +724,37 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             )}
           </div>
           <div style={{ marginBottom: '1rem' }}>
-            <div style={{ 
-              background: '#f3f4f6', 
-              height: '8px', 
-              borderRadius: '4px',
-              overflow: 'hidden'
-            }}>
-              <div style={{
-                background: `linear-gradient(90deg, ${getStatusColor(ppPercentage)} 0%, ${getStatusColor(ppPercentage)}80 100%)`,
-                height: '100%',
-                width: `${Math.min(ppPercentage, 100)}%`,
-                transition: 'width 0.3s ease'
-              }} />
+            <div className="mst-vault-track">
+              <div
+                className="mst-vault-fill-power"
+                style={{ width: `${Math.min(ppPercentage, 100)}%` }}
+              />
             </div>
           </div>
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'space-between', 
-            alignItems: 'center',
-            fontSize: '0.875rem',
-            color: '#6b7280'
-          }}>
+          <div className="mst-vault-card-meta">
             <span>{getStatusIcon(ppPercentage)} {ppPercentage.toFixed(1)}% Full</span>
             <span>Capacity: {vault.capacity.toLocaleString()}</span>
           </div>
+          <div className="mst-vault-card-flavor">Fuel your potential.</div>
         </div>
 
         {/* Vault Health */}
-        <div style={{ 
-          background: 'white', 
-          padding: '1.5rem', 
-          borderRadius: '0.75rem', 
-          border: '2px solid #e5e7eb',
-          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)'
-        }}>
+        <div className="mst-vault-card mst-interactive-card mst-card--health">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>VAULT HEALTH</div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--mst-gold)', fontWeight: '600', letterSpacing: '0.12em', fontFamily: 'var(--mst-font-display)' }}>VAULT HEALTH</div>
             <span style={{ fontSize: '1.5rem' }}>❤️</span>
           </div>
-          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: vault.vaultHealth === 0 ? '#6b7280' : '#10b981', marginBottom: '0.5rem', position: 'relative', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <div className="mst-stat-bright" style={{ fontSize: '2rem', fontWeight: 'bold', color: vault.vaultHealth === 0 ? 'var(--mst-text-muted)' : 'var(--mst-text-primary)', marginBottom: '0.5rem', position: 'relative', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <span>{(vault.vaultHealth || vault.maxVaultHealth || Math.floor(vault.capacity * 0.1)).toLocaleString()} / {(vault.maxVaultHealth || Math.floor(vault.capacity * 0.1)).toLocaleString()}</span>
             </div>
             {cooldownRemaining && (
-              <div style={{
-                background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-                border: '1px solid #f59e0b',
-                borderRadius: '0.5rem',
-                padding: '0.5rem 0.75rem',
+              <div className="mst-vault-timer" style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '0.5rem',
-                fontSize: '0.875rem',
-                fontWeight: 'bold',
-                color: '#92400e'
+                textAlign: 'left',
+                fontWeight: 'bold'
               }}>
                 <span style={{ fontSize: '1rem' }}>⏰</span>
                 <span>Cooldown: {cooldownRemaining.hours}h {cooldownRemaining.minutes}m {cooldownRemaining.seconds}s</span>
@@ -940,19 +766,17 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <div style={{ 
-              background: '#f3f4f6', 
+              background: 'var(--mst-track)', 
               height: '8px', 
               borderRadius: '4px',
               overflow: 'hidden'
             }}>
-              <div style={{
-                background: vault.vaultHealth === 0 
-                  ? 'linear-gradient(90deg, #6b7280 0%, #9ca3af 100%)'
-                  : 'linear-gradient(90deg, #10b981 0%, #059669 100%)',
-                height: '100%',
-                width: `${vault.maxVaultHealth ? Math.min((vault.vaultHealth / vault.maxVaultHealth) * 100, 100) : 0}%`,
-                transition: 'width 0.3s ease'
-              }} />
+              <div
+                className={vault.vaultHealth === 0 ? 'mst-vault-fill-warn' : 'mst-vault-fill-health'}
+                style={{
+                  width: `${vault.maxVaultHealth ? Math.min((vault.vaultHealth / vault.maxVaultHealth) * 100, 100) : 0}%`,
+                }}
+              />
             </div>
           </div>
           <div style={{ 
@@ -960,7 +784,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             justifyContent: 'space-between', 
             alignItems: 'center',
             fontSize: '0.875rem',
-            color: '#6b7280',
+            color: 'var(--mst-text-muted)',
             marginBottom: '1rem'
           }}>
             <span>{vault.vaultHealth === 0 ? '⏰ On Cooldown' : '🛡️ Protection Active'}</span>
@@ -979,39 +803,10 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             return (
               <div>
                 <button
+                  type="button"
+                  className="mst-vault-btn-restore"
                   onClick={handleRestoreVaultHealth}
                   disabled={restoreHealthLoading || !canRestore}
-                  style={{
-                    width: '100%',
-                    background: canRestore 
-                      ? (isOnCooldown 
-                          ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' 
-                          : 'linear-gradient(135deg, #10b981 0%, #059669 100%)')
-                      : '#9ca3af',
-                    color: 'white',
-                    border: 'none',
-                    padding: '0.75rem 1rem',
-                    borderRadius: '0.5rem',
-                    cursor: canRestore ? 'pointer' : 'not-allowed',
-                    fontSize: '0.875rem',
-                    fontWeight: 'bold',
-                    transition: 'all 0.2s ease',
-                    boxShadow: canRestore ? '0 2px 4px rgba(16, 185, 129, 0.2)' : 'none'
-                  }}
-                  onMouseEnter={(e) => {
-                    if (canRestore) {
-                      e.currentTarget.style.transform = 'translateY(-1px)';
-                      e.currentTarget.style.boxShadow = isOnCooldown 
-                        ? '0 4px 8px rgba(245, 158, 11, 0.3)' 
-                        : '0 4px 8px rgba(16, 185, 129, 0.3)';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (canRestore) {
-                      e.currentTarget.style.transform = 'translateY(0)';
-                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(16, 185, 129, 0.2)';
-                    }
-                  }}
                 >
                   {restoreHealthLoading 
                     ? 'Restoring...' 
@@ -1023,83 +818,51 @@ const VaultStats: React.FC<VaultStatsProps> = ({
                   }
                 </button>
                 {isOnCooldown && (
-                  <div style={{
-                    marginTop: '0.5rem',
-                    padding: '0.5rem',
-                    background: '#fef3c7',
-                    border: '1px solid #f59e0b',
-                    borderRadius: '0.375rem',
-                    fontSize: '0.75rem',
-                    color: '#92400e',
-                    textAlign: 'center'
-                  }}>
+                  <div className="mst-vault-timer" style={{ marginTop: '0.5rem', fontSize: '0.75rem' }}>
                     ⚠️ Restoring health now will remove your cooldown protection
                   </div>
                 )}
               </div>
             );
           })()}
+          <div className="mst-vault-card-flavor">A protected mind builds greater worlds.</div>
         </div>
 
         {/* Shield Strength */}
-        <div style={{ 
-          background: 'white', 
-          padding: '1.5rem', 
-          borderRadius: '0.75rem', 
-          border: '2px solid #e5e7eb',
-          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)'
-        }}>
+        <div className="mst-vault-card mst-interactive-card mst-card--shield" tabIndex={0}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>SHIELD STRENGTH</div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--mst-gold)', fontWeight: '600', letterSpacing: '0.12em', fontFamily: 'var(--mst-font-display)' }}>SHIELD STRENGTH</div>
             <span style={{ fontSize: '1.5rem' }}>🛡️</span>
           </div>
-          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#2563eb', marginBottom: '0.5rem' }}>
+          <div className="mst-stat-bright" style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--mst-text-primary)', marginBottom: '0.5rem' }}>
             {shieldStrengthDisp} / {maxShieldDisp || vault.maxShieldStrength}
           </div>
           <div style={{ marginBottom: '1rem' }}>
-            <div style={{ 
-              background: '#f3f4f6', 
-              height: '8px', 
-              borderRadius: '4px',
-              overflow: 'hidden'
-            }}>
-              <div style={{
-                background: `linear-gradient(90deg, ${getStatusColor(shieldPercentage)} 0%, ${getStatusColor(shieldPercentage)}80 100%)`,
-                height: '100%',
-                width: `${Math.min(shieldPercentage, 100)}%`,
-                transition: 'width 0.3s ease'
-              }} />
+            <div className="mst-vault-track">
+              <div
+                className="mst-vault-fill-shield"
+                style={{ width: `${Math.min(shieldPercentage, 100)}%` }}
+              />
             </div>
           </div>
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'space-between', 
-            alignItems: 'center',
-            fontSize: '0.875rem',
-            color: '#6b7280'
-          }}>
+          <div className="mst-vault-card-meta">
             <span>{getStatusIcon(shieldPercentage)} {shieldPercentage.toFixed(1)}% Active</span>
             <span>Max: {vault.maxShieldStrength}</span>
           </div>
           
+          <div className="mst-vault-card-flavor">Discipline keeps you in the game.</div>
+
           {/* Overshield Display */}
           {vault.overshield > 0 && (
-            <div style={{ 
-              marginTop: '1rem', 
-              padding: '0.75rem', 
-              background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-              border: '2px solid #f59e0b',
-              borderRadius: '0.5rem',
-              textAlign: 'center'
-            }}>
+            <div className="mst-vault-timer" style={{ marginTop: '1rem', padding: '0.75rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
                 <span style={{ fontSize: '1.2rem' }}>✨</span>
-                <span style={{ fontWeight: 'bold', color: '#92400e' }}>Overshield Active</span>
+                <span style={{ fontWeight: 'bold', color: 'var(--mst-gold-bright)' }}>Overshield Active</span>
               </div>
-              <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#92400e', marginBottom: '0.25rem' }}>
+              <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--mst-gold-bright)', marginBottom: '0.25rem' }}>
                 1 Attack Absorbed
               </div>
-              <div style={{ fontSize: '0.8rem', color: '#92400e' }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--mst-gold-bright)' }}>
                 Next incoming attack will be completely blocked
               </div>
             </div>
@@ -1107,18 +870,12 @@ const VaultStats: React.FC<VaultStatsProps> = ({
         </div>
 
         {/* Generator */}
-        <div style={{ 
-          background: 'white', 
-          padding: '1.5rem', 
-          borderRadius: '0.75rem', 
-          border: '2px solid #e5e7eb',
-          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)'
-        }}>
+        <div className="mst-vault-card mst-interactive-card mst-card--power">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>GENERATOR</div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--mst-gold)', fontWeight: '600', letterSpacing: '0.12em', fontFamily: 'var(--mst-font-display)' }}>GENERATOR</div>
             <span style={{ fontSize: '1.5rem' }}>⚡</span>
           </div>
-          <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#f59e0b', marginBottom: '0.5rem' }}>
+          <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--mst-gold-bright)', marginBottom: '0.5rem' }}>
             Level {vault.generatorLevel || 1}
           </div>
           {(() => {
@@ -1129,11 +886,11 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             return (
               <>
                 <div style={{ marginBottom: '1rem' }}>
-                  <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
+                  <div style={{ fontSize: '0.875rem', color: 'var(--mst-text-muted)', marginBottom: '0.5rem' }}>
                     Pending PP: {pendingPP} / {rates.ppPerDay}
                   </div>
                   <div style={{ 
-                    background: '#f3f4f6', 
+                    background: 'var(--mst-track)', 
                     height: '8px', 
                     borderRadius: '4px',
                     overflow: 'hidden'
@@ -1153,7 +910,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
                   justifyContent: 'space-between', 
                   alignItems: 'center',
                   fontSize: '0.875rem',
-                  color: '#6b7280',
+                  color: 'var(--mst-text-muted)',
                   marginBottom: '0.75rem'
                 }}>
                   <span>⚡ {rates.ppPerDay} PP/day</span>
@@ -1162,14 +919,14 @@ const VaultStats: React.FC<VaultStatsProps> = ({
                 
                 {/* Generator Timer */}
                 <div style={{
-                  background: '#fef3c7',
-                  border: '1px solid #f59e0b',
-                  borderRadius: '0.5rem',
+                  background: 'rgba(212, 168, 79, 0.1)',
+                  border: '1px solid rgba(212, 168, 79, 0.35)',
+                  borderRadius: 'var(--mst-radius-sm)',
                   padding: '0.5rem',
                   marginBottom: '0.75rem',
                   textAlign: 'center',
                   fontSize: '0.875rem',
-                  color: '#92400e',
+                  color: 'var(--mst-gold-bright)',
                   fontWeight: '500'
                 }}>
                   ⏰ Until Generator Full: {generatorTimer || 'Calculating...'}
@@ -1182,14 +939,14 @@ const VaultStats: React.FC<VaultStatsProps> = ({
                     justifyContent: 'space-between', 
                     alignItems: 'center',
                     fontSize: '0.75rem',
-                    color: '#6b7280',
+                    color: 'var(--mst-text-muted)',
                     marginBottom: '0.25rem'
                   }}>
                     <span>Generation Progress</span>
                     <span>{Math.round(generatorTimeProgress)}%</span>
                   </div>
                   <div style={{ 
-                    background: '#f3f4f6', 
+                    background: 'var(--mst-track)', 
                     height: '6px', 
                     borderRadius: '3px',
                     overflow: 'hidden'
@@ -1205,32 +962,9 @@ const VaultStats: React.FC<VaultStatsProps> = ({
                 
                 {pendingPP > 0 && (
                   <button
+                    type="button"
+                    className="mst-vault-btn-collect"
                     onClick={collectGeneratorPP}
-                    style={{
-                      width: '100%',
-                      padding: '0.5rem',
-                      background: isFull 
-                        ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
-                        : 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '0.5rem',
-                      fontSize: '0.875rem',
-                      fontWeight: 'bold',
-                      cursor: 'pointer',
-                      transform: 'scale(1)',
-                      boxShadow: 'none',
-                      transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                      willChange: 'transform, box-shadow'
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.transform = 'scale(1.02)';
-                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.2)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.transform = 'scale(1)';
-                      e.currentTarget.style.boxShadow = 'none';
-                    }}
                   >
                     {isFull ? '✓ Collect PP' : `Collect ${pendingPP} PP`}
                   </button>
@@ -1241,23 +975,17 @@ const VaultStats: React.FC<VaultStatsProps> = ({
         </div>
 
         {/* Battle Moves */}
-        <div style={{ 
-          background: 'white', 
-          padding: '1.5rem', 
-          borderRadius: '0.75rem', 
-          border: '2px solid #e5e7eb',
-          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)'
-        }}>
+        <div className="mst-vault-card mst-interactive-card mst-card--offense" tabIndex={0}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>BATTLE MOVES</div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--mst-gold)', fontWeight: '600', letterSpacing: '0.12em', fontFamily: 'var(--mst-font-display)' }}>BATTLE MOVES</div>
             <span style={{ fontSize: '1.5rem' }}>⚔️</span>
           </div>
-          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#dc2626', marginBottom: '0.5rem' }}>
+          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--mst-text-primary)', marginBottom: '0.5rem' }}>
             {remainingOfflineMoves} / {maxOfflineMoves}
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <div style={{ 
-              background: '#f3f4f6', 
+              background: 'var(--mst-track)', 
               height: '8px', 
               borderRadius: '4px',
               overflow: 'hidden'
@@ -1275,7 +1003,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             justifyContent: 'space-between', 
             alignItems: 'center',
             fontSize: '0.875rem',
-            color: '#6b7280',
+            color: 'var(--mst-text-muted)',
             marginBottom: '0.5rem'
           }}>
             <span>{getStatusIcon((remainingOfflineMoves / maxOfflineMoves) * 100)} Daily Remaining</span>
@@ -1284,13 +1012,13 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           
           {/* Reset Timer */}
           <div style={{
-            background: '#fef3c7',
-            border: '1px solid #f59e0b',
-            borderRadius: '0.5rem',
+            background: 'rgba(212, 168, 79, 0.1)',
+            border: '1px solid rgba(212, 168, 79, 0.35)',
+            borderRadius: 'var(--mst-radius-sm)',
             padding: '0.5rem',
             textAlign: 'center',
             fontSize: '0.875rem',
-            color: '#92400e',
+            color: 'var(--mst-gold-bright)',
             fontWeight: '500'
           }}>
             ⏰ Resets in: {resetTimer || 'Calculating...'}
@@ -1335,18 +1063,12 @@ const VaultStats: React.FC<VaultStatsProps> = ({
         </div>
 
         {/* Offline Moves */}
-        <div style={{ 
-          background: 'white', 
-          padding: '1.5rem', 
-          borderRadius: '0.75rem', 
-          border: '2px solid #e5e7eb',
-          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)'
-        }}>
+        <div className="mst-vault-card mst-interactive-card mst-card--dashboard">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>OFFLINE MOVES</div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--mst-gold)', fontWeight: '600', letterSpacing: '0.12em', fontFamily: 'var(--mst-font-display)' }}>OFFLINE MOVES</div>
             <span style={{ fontSize: '1.5rem' }}>⏰</span>
           </div>
-          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#f59e0b', marginBottom: '0.5rem', position: 'relative' }}>
+          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--mst-text-primary)', marginBottom: '0.5rem', position: 'relative' }}>
             {(() => {
               console.log('VaultStats: Rendering display - remainingOfflineMoves prop:', remainingOfflineMoves, 'maxOfflineMoves:', maxOfflineMoves);
               return `${remainingOfflineMoves} / ${maxOfflineMoves}`;
@@ -1371,7 +1093,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <div style={{ 
-              background: '#f3f4f6', 
+              background: 'var(--mst-track)', 
               height: '8px', 
               borderRadius: '4px',
               overflow: 'hidden'
@@ -1389,7 +1111,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             justifyContent: 'space-between', 
             alignItems: 'center',
             fontSize: '0.875rem',
-            color: '#6b7280',
+            color: 'var(--mst-text-muted)',
             marginBottom: '0.5rem'
           }}>
             <span>{getStatusIcon(offlineMovesPercentage)} Daily Remaining</span>
@@ -1397,12 +1119,13 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           </div>
           <div style={{
             fontSize: '0.875rem',
-            color: '#f59e0b',
+            color: 'var(--mst-gold-bright)',
             fontWeight: '600',
             textAlign: 'center',
             padding: '0.5rem',
-            background: '#fef3c7',
-            borderRadius: '0.375rem',
+            background: 'rgba(212, 168, 79, 0.1)',
+            border: '1px solid rgba(212, 168, 79, 0.35)',
+            borderRadius: 'var(--mst-radius-sm)',
             marginBottom: '1rem'
           }}>
             ⏰ Next Reset: {resetTimer || 'Calculating...'}
@@ -1410,38 +1133,22 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           
           {/* Restore Move Button */}
           <button
+            type="button"
+            className="mst-vault-btn-restore"
             onClick={handleRestoreMove}
             disabled={restoreLoading || !vault || vault.currentPP < 20}
-            style={{
-              background: vault && vault.currentPP >= 20 ? '#dc2626' : '#9ca3af',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem 1rem',
-              borderRadius: '0.5rem',
-              cursor: vault && vault.currentPP >= 20 ? 'pointer' : 'not-allowed',
-              fontSize: '0.875rem',
-              fontWeight: 'bold',
-              width: '100%',
-              transition: 'all 0.2s ease'
-            }}
           >
             {restoreLoading ? 'Restoring...' : `⚡ Restore Move (${restoreCost} PP)`}
           </button>
         </div>
 
         {/* XP Card */}
-        <div style={{ 
-          background: 'white', 
-          padding: '1.5rem', 
-          borderRadius: '0.75rem', 
-          border: '2px solid #e5e7eb',
-          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)'
-        }}>
+        <div className="mst-vault-card mst-interactive-card mst-card--power" tabIndex={0}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>EXPERIENCE POINTS</div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--mst-gold)', fontWeight: '600', letterSpacing: '0.12em', fontFamily: 'var(--mst-font-display)' }}>EXPERIENCE POINTS</div>
             <span style={{ fontSize: '1.5rem' }}>⭐</span>
           </div>
-          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#f59e0b', marginBottom: '0.5rem', position: 'relative' }}>
+          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--mst-text-primary)', marginBottom: '0.5rem', position: 'relative' }}>
             {userXP} XP
             {showXPNotification && (
               <div style={{
@@ -1463,7 +1170,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <div style={{ 
-              background: '#f3f4f6', 
+              background: 'var(--mst-track)', 
               height: '8px', 
               borderRadius: '4px',
               overflow: 'hidden'
@@ -1481,7 +1188,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             justifyContent: 'space-between', 
             alignItems: 'center',
             fontSize: '0.875rem',
-            color: '#6b7280'
+            color: 'var(--mst-text-muted)'
           }}>
             <span>{getStatusIcon((userXP % 50) / 50 * 100)} Level {userLevel}</span>
             <span>Next: {userLevel * 50} XP</span>
@@ -1496,60 +1203,36 @@ const VaultStats: React.FC<VaultStatsProps> = ({
         gap: '1rem',
         marginBottom: '2rem'
       }}>
-        <div style={{ 
-          background: 'white', 
-          padding: '1rem', 
-          borderRadius: '0.5rem', 
-          border: '1px solid #e5e7eb',
-          textAlign: 'center'
-        }}>
+        <div className="mst-vault-mini mst-interactive-card mst-card--offense" tabIndex={0}>
           <div style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>⚔️</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937' }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--mst-text-primary)' }}>
             {unlockedMoves.length}
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Unlocked Moves</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--mst-text-muted)' }}>Unlocked Moves</div>
         </div>
 
-        <div style={{ 
-          background: 'white', 
-          padding: '1rem', 
-          borderRadius: '0.5rem', 
-          border: '1px solid #e5e7eb',
-          textAlign: 'center'
-        }}>
+        <div className="mst-vault-mini mst-interactive-card mst-card--manifest" tabIndex={0}>
           <div style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>🃏</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937' }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--mst-text-primary)' }}>
             {unlockedCards.length}
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Action Cards</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--mst-text-muted)' }}>Action Cards</div>
         </div>
 
-        <div style={{ 
-          background: 'white', 
-          padding: '1rem', 
-          borderRadius: '0.5rem', 
-          border: '1px solid #e5e7eb',
-          textAlign: 'center'
-        }}>
+        <div className="mst-vault-mini mst-interactive-card mst-card--manifest" tabIndex={0}>
           <div style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>🎯</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937' }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--mst-text-primary)' }}>
             {moves.filter(m => m.masteryLevel > 1).length}
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Mastered Moves</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--mst-text-muted)' }}>Mastered Moves</div>
         </div>
 
-        <div style={{ 
-          background: 'white', 
-          padding: '1rem', 
-          borderRadius: '0.5rem', 
-          border: '1px solid #e5e7eb',
-          textAlign: 'center'
-        }}>
+        <div className="mst-vault-mini mst-interactive-card mst-card--support" tabIndex={0}>
           <div style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>🏆</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937' }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--mst-text-primary)' }}>
             {vault.debtStatus ? '⚠️' : '✅'}
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--mst-text-muted)' }}>
             {vault.debtStatus ? 'In Debt' : 'Good Standing'}
           </div>
         </div>
@@ -1557,15 +1240,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
 
       {/* Debt Warning */}
       {vault.debtStatus && (
-        <div style={{ 
-          background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)', 
-          border: '2px solid #fecaca',
-          color: '#dc2626',
-          padding: '1.5rem',
-          borderRadius: '0.75rem',
-          marginTop: '1rem',
-          textAlign: 'center'
-        }}>
+        <div className="mst-vault-debt">
           <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>⚠️</div>
           <div style={{ fontSize: '1.1rem', marginBottom: '0.5rem', fontWeight: 'bold' }}>
             Vault in Debt Status
@@ -1575,6 +1250,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 };
