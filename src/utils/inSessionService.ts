@@ -21,6 +21,7 @@ import {
   Unsubscribe,
   runTransaction
 } from 'firebase/firestore';
+import { notifyStudentsOfLiveEvent } from './liveEventStudentAlerts';
 import { debug, debugError } from './inSessionDebug';
 import { isUserAdmin } from './roleManagement';
 import { ensurePlayerStatsIfMissing, finalizeSessionStats, LIVE_EVENT_PP_BASE_PER_ELIMINATION, LIVE_EVENT_PP_PER_PARTICIPATION_POINT } from './inSessionStatsService';
@@ -168,6 +169,21 @@ export async function createSession(
     
     const sessionRef = doc(collection(db, 'inSessionRooms'));
     await setDoc(sessionRef, sessionData);
+
+    try {
+      const classroomSnap = await getDoc(doc(db, 'classrooms', classId));
+      const enrolled = classroomSnap.exists()
+        ? ((classroomSnap.data().students as string[]) || []).filter(Boolean)
+        : [];
+      await notifyStudentsOfLiveEvent({
+        studentIds: enrolled.filter((id) => id !== hostUid),
+        sessionId: sessionRef.id,
+        className,
+        classId,
+      });
+    } catch (notifyErr) {
+      debugError('inSessionService', 'Live event student alerts failed (session still created)', notifyErr);
+    }
     
     debug('inSessionService', `Session created: ${sessionRef.id} for class ${classId}`);
     
@@ -325,10 +341,11 @@ export async function joinSession(
         debugError('inSessionService', 'Invalid player data: userId is required', { player });
         throw new Error('Player userId is required and must be a string');
       }
-      if (!player.displayName || typeof player.displayName !== 'string') {
-        debugError('inSessionService', 'Invalid player data: displayName is required', { player });
-        throw new Error('Player displayName is required and must be a string');
-      }
+      const resolvedName =
+        typeof player.displayName === 'string' && player.displayName.trim()
+          ? player.displayName.trim()
+          : 'Player';
+      player = { ...player, displayName: resolvedName };
 
       // PHASE 2: ALL WRITES AFTER READS
       // Update or add player

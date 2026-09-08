@@ -65,6 +65,7 @@ interface Notification {
   message: string;
   challengeId?: string;
   challengeName?: string;
+  sessionId?: string;
   timestamp?: any;
   createdAt?: any;
   read?: boolean;
@@ -230,65 +231,69 @@ const NavBar = memo(() => {
     [roleIndicator, displayName]
   );
 
-  // Fetch notifications
+  // Fetch notifications (live so Live Event alerts appear without a refresh)
   useEffect(() => {
-    const fetchNotifications = async () => {
-      if (!currentUser) return;
-      
-      setNotificationsLoading(true);
-      try {
-        // Fetch student notifications
-        const notifSnap = await getDocs(collection(db, 'students', currentUser.uid, 'notifications'));
-        const studentNotifList: Notification[] = notifSnap.docs
-          .map(docSnap => {
-            const data = docSnap.data() as Notification;
-            return { ...data, id: docSnap.id, _ref: docSnap.ref };
-          })
-          .filter(notif => !notif.deleted); // Filter out deleted notifications
+    if (!currentUser) {
+      setNotifications([]);
+      return;
+    }
 
-        // If user is admin, also fetch admin notifications
-        let adminNotifList: Notification[] = [];
-        const isAdmin = currentUser.email === 'eddymosley@compscihigh.org' || 
-                       currentUser.email === 'admin@mstgames.net' ||
-                       currentUser.email === 'edm21179@gmail.com' ||
-                       currentUser.email?.includes('eddymosley') ||
-                       currentUser.email?.includes('admin') ||
-                       currentUser.email?.includes('mstgames');
+    setNotificationsLoading(true);
+    const unsub = onSnapshot(
+      collection(db, 'students', currentUser.uid, 'notifications'),
+      async (notifSnap) => {
+        try {
+          const studentNotifList: Notification[] = notifSnap.docs
+            .map(docSnap => {
+              const data = docSnap.data() as Notification;
+              return { ...data, id: docSnap.id, _ref: docSnap.ref };
+            })
+            .filter(notif => !notif.deleted);
 
-        if (isAdmin) {
-          try {
-            const adminNotifSnap = await getDocs(collection(db, 'adminNotifications'));
-            adminNotifList = adminNotifSnap.docs
-              .map(docSnap => {
-                const data = docSnap.data() as any;
-                return { 
-                  ...data, 
-                  id: docSnap.id, 
-                  _ref: docSnap.ref,
-                  timestamp: data.createdAt || data.timestamp // Handle different timestamp field names
-                };
-              })
-              .filter(notif => !notif.read); // Filter out read admin notifications
-          } catch (adminErr) {
-            console.error('Error fetching admin notifications:', adminErr);
+          let adminNotifList: Notification[] = [];
+          const isAdmin = currentUser.email === 'eddymosley@compscihigh.org' || 
+                         currentUser.email === 'admin@mstgames.net' ||
+                         currentUser.email === 'edm21179@gmail.com' ||
+                         currentUser.email?.includes('eddymosley') ||
+                         currentUser.email?.includes('admin') ||
+                         currentUser.email?.includes('mstgames');
+
+          if (isAdmin) {
+            try {
+              const adminNotifSnap = await getDocs(collection(db, 'adminNotifications'));
+              adminNotifList = adminNotifSnap.docs
+                .map(docSnap => {
+                  const data = docSnap.data() as any;
+                  return { 
+                    ...data, 
+                    id: docSnap.id, 
+                    _ref: docSnap.ref,
+                    timestamp: data.createdAt || data.timestamp
+                  };
+                })
+                .filter(notif => !notif.read);
+            } catch (adminErr) {
+              console.error('Error fetching admin notifications:', adminErr);
+            }
           }
-        }
 
-        // Combine and sort all notifications
-        const allNotifications = [...studentNotifList, ...adminNotifList];
-        setNotifications(allNotifications.sort((a, b) => {
-          const aTime = a.timestamp?.seconds || (a.createdAt?.getTime ? a.createdAt.getTime() / 1000 : 0);
-          const bTime = b.timestamp?.seconds || (b.createdAt?.getTime ? b.createdAt.getTime() / 1000 : 0);
-          return bTime - aTime;
-        }));
-      } catch (err) {
+          const allNotifications = [...studentNotifList, ...adminNotifList];
+          setNotifications(allNotifications.sort((a, b) => {
+            const aTime = a.timestamp?.seconds || (a.createdAt?.getTime ? a.createdAt.getTime() / 1000 : 0);
+            const bTime = b.timestamp?.seconds || (b.createdAt?.getTime ? b.createdAt.getTime() / 1000 : 0);
+            return bTime - aTime;
+          }));
+        } finally {
+          setNotificationsLoading(false);
+        }
+      },
+      () => {
         setNotifications([]);
-      } finally {
         setNotificationsLoading(false);
       }
-    };
+    );
 
-    fetchNotifications();
+    return () => unsub();
   }, [currentUser]);
 
   // Check for pending assessment goals
@@ -445,7 +450,9 @@ const NavBar = memo(() => {
   }, [location.pathname]);
 
   const handleNotificationClick = useCallback(async (notif: Notification) => {
-    if (notif.challengeId) {
+    if (notif.sessionId) {
+      navigate(`/live-events/${notif.sessionId}`);
+    } else if (notif.challengeId) {
       navigate(`/chapters?challenge=${notif.challengeId}`);
     }
     
@@ -1360,6 +1367,8 @@ const NavBar = memo(() => {
                                 return { backgroundColor: '#fee2e2', borderColor: '#ef4444' };
                               case 'chapter_unlocked':
                                 return { backgroundColor: '#e0e7ff', borderColor: '#6366f1' };
+                              case 'live_event':
+                                return { backgroundColor: '#ede9fe', borderColor: '#8b5cf6' };
                               default:
                                 return { backgroundColor: '#f3f4f6', borderColor: '#9ca3af' };
                             }

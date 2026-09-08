@@ -156,18 +156,21 @@ const Marketplace = () => {
       if (!currentUser) return;
 
       try {
-        // Fetch from both collections to stay in sync
+        // Fetch balances — vault is canonical PP when present
         const studentsRef = doc(db, 'students', currentUser.uid);
         const usersRef = doc(db, 'users', currentUser.uid);
+        const { getPlayerPowerPoints } = await import('../utils/playerPowerPoints');
         
-        const [studentsSnap, usersSnap] = await Promise.all([
+        const [studentsSnap, usersSnap, canonicalPP] = await Promise.all([
           getDoc(studentsRef),
-          getDoc(usersRef)
+          getDoc(usersRef),
+          getPlayerPowerPoints(currentUser.uid),
         ]);
+        
+        setPowerPoints(canonicalPP);
         
         if (studentsSnap.exists()) {
           const studentsData = studentsSnap.data();
-          setPowerPoints(studentsData.powerPoints || 0);
           setTruthMetal(Math.max(0, Math.floor(Number(studentsData.truthMetal) || 0)));
           const rawInv = studentsData.inventory;
           setInventory(Array.isArray(rawInv) ? rawInv : []);
@@ -1215,12 +1218,15 @@ const Marketplace = () => {
         await setDoc(
           userRef,
           deepOmitUndefined({
-            powerPoints: powerPoints - item.price,
             ...(tmCost > 0 ? { truthMetal: nextTruth } : {}),
             artifacts: updatedEquippableArtifacts,
           }),
           { merge: true }
         );
+
+        const { setPlayerPowerPoints } = await import('../utils/playerPowerPoints');
+        const nextPP = await setPlayerPowerPoints(currentUser.uid, powerPoints - item.price);
+        setPowerPoints(nextPP);
 
         const usersRef = doc(db, 'users', currentUser.uid);
         const usersSnap = await getDoc(usersRef);
@@ -1255,7 +1261,14 @@ const Marketplace = () => {
           },
         });
 
-        setPowerPoints((prev) => prev - item.price);
+        setPowerPoints(nextPP);
+        if (vault) {
+          try {
+            await updateVault({ currentPP: nextPP });
+          } catch {
+            /* BattleContext may not be ready */
+          }
+        }
         if (tmCost > 0) setTruthMetal((t) => Math.max(0, t - tmCost));
         await updateAllArtifactCounts();
         alert(`Successfully purchased ${item.name}! Equip it on the Artifacts page.`);
@@ -1302,17 +1315,19 @@ const Marketplace = () => {
 
       const invList = Array.isArray(inventory) ? inventory : [];
 
-      // Update user's power points (and Truth Metal if required) and add artifact to inventory
+      // Update inventory/artifacts, then debit PP across vault + students + users
       await setDoc(
         userRef,
         deepOmitUndefined({
-          powerPoints: powerPoints - item.price,
           ...(tmCost > 0 ? { truthMetal: nextTruth } : {}),
           inventory: [...invList, item.name],
           artifacts: updatedArtifacts,
         }),
         { merge: true }
       );
+
+      const { setPlayerPowerPoints } = await import('../utils/playerPowerPoints');
+      const nextPP = await setPlayerPowerPoints(currentUser.uid, powerPoints - item.price);
 
       // Also update the users collection to keep both in sync
       const usersRef = doc(db, 'users', currentUser.uid);
@@ -1357,7 +1372,14 @@ const Marketplace = () => {
         },
       });
 
-      setPowerPoints((prev) => prev - item.price);
+      setPowerPoints(nextPP);
+      if (vault) {
+        try {
+          await updateVault({ currentPP: nextPP });
+        } catch {
+          /* BattleContext may not be ready */
+        }
+      }
       if (tmCost > 0) setTruthMetal((t) => Math.max(0, t - tmCost));
       setInventory((prev) => [...prev, item.name]);
 

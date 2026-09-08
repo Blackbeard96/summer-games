@@ -399,6 +399,20 @@ service cloud.firestore {
         'students' in resource.data &&
         request.auth.uid in resource.data.students;
     }
+
+    // Pending Google Classroom invites: not-yet-enrolled players can read classrooms that
+    // list their email, and claim enrollment by adding only their own uid.
+    match /classrooms/{classroomId} {
+      allow read: if request.auth != null &&
+        request.auth.token.email != null &&
+        'pendingStudentEmails' in resource.data &&
+        resource.data.pendingStudentEmails.hasAny([request.auth.token.email.lower()]);
+      allow update: if request.auth != null &&
+        request.auth.token.email != null &&
+        'pendingStudentEmails' in resource.data &&
+        resource.data.pendingStudentEmails.hasAny([request.auth.token.email.lower()]) &&
+        request.auth.uid in request.resource.data.students;
+    }
     
     // Badges collection - allow admins to manage badges
     match /badges/{badgeId} {

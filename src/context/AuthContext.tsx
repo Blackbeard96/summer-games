@@ -18,6 +18,7 @@ import {
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { initializeChapterProgress, migrateExistingUserToChapters } from '../utils/chapterInit';
 import { ensurePlayerPowerLevel } from '../utils/powerLevelMigration';
+import { claimPendingClassroomEnrollments } from '../utils/classroomEnrollment';
 
 interface UserProfile {
   displayName: string;
@@ -180,6 +181,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Fetch user profile from Firestore
   const fetchUserProfile = useCallback(async (user: User) => {
     try {
+      const resolvedName =
+        user.displayName?.trim() ||
+        (user.email ? user.email.split('@')[0] : '') ||
+        'Student';
+      const resolvedEmail = (user.email || '').trim().toLowerCase();
+
       const userDoc = await getDoc(doc(db, 'users', user.uid));
       
       if (userDoc.exists()) {
@@ -199,11 +206,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             console.warn('AuthContext: Failed to sync Auth displayName from Firestore:', syncError);
           }
         }
-        
-        // Update lastLoginAt
-        await updateDoc(doc(db, 'users', user.uid), {
-          lastLoginAt: serverTimestamp()
-        });
+
+        // Google / early login can create a shell users/{uid} with only lastLogin —
+        // backfill identity so Admin search (name/email) works.
+        const identityPatch: {
+          lastLoginAt: ReturnType<typeof serverTimestamp>;
+          displayName?: string;
+          email?: string;
+          photoURL?: string;
+        } = {
+          lastLoginAt: serverTimestamp(),
+        };
+        if (!userData.displayName || !String(userData.displayName).trim()) {
+          identityPatch.displayName = resolvedName;
+        }
+        if (!userData.email || !String(userData.email).trim() || userData.email === 'No email') {
+          if (resolvedEmail) identityPatch.email = resolvedEmail;
+        }
+        if (!userData.photoURL && user.photoURL) {
+          identityPatch.photoURL = user.photoURL;
+        }
+        await updateDoc(doc(db, 'users', user.uid), identityPatch);
+
+        // Keep students roster in sync for Admin (Google sign-in never wrote students identity)
+        const studentRef = doc(db, 'students', user.uid);
+        const studentSnap = await getDoc(studentRef);
+        const studentData = studentSnap.exists() ? studentSnap.data() : {};
+        const studentPatch: { displayName?: string; email?: string } = {};
+        if (!studentData.displayName || !String(studentData.displayName).trim()) {
+          studentPatch.displayName =
+            identityPatch.displayName ||
+            userData.displayName ||
+            resolvedName;
+        }
+        if (!studentData.email || !String(studentData.email).trim()) {
+          const email = identityPatch.email || userData.email || resolvedEmail;
+          if (email) studentPatch.email = email;
+        }
+        if (Object.keys(studentPatch).length > 0) {
+          await setDoc(studentRef, studentPatch, { merge: true });
+        }
         
         // Migrate existing user to chapter system if needed
         await migrateExistingUserToChapters(user.uid);
@@ -213,8 +255,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } else {
         // Create new user profile — no Element assigned at signup
         const newProfile: UserProfile = {
-          displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Student'),
-          email: user.email || '',
+          displayName: resolvedName,
+          email: resolvedEmail,
           photoURL: user.photoURL || undefined,
           createdAt: new Date(),
           lastLogin: new Date(),
@@ -229,6 +271,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           lastLoginAt: serverTimestamp(),
           createdAt: serverTimestamp()
         });
+        // Admin Students list reads students/; ensure Google signups appear with searchable identity
+        await setDoc(
+          doc(db, 'students', user.uid),
+          {
+            displayName: resolvedName,
+            email: resolvedEmail,
+            xp: 0,
+            powerPoints: 0,
+            challenges: {},
+            elementalAffinity: null,
+            createdAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
         setUserProfile(newProfile);
         
         // Initialize chapter progress for new user
@@ -341,6 +397,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
       
       await setDoc(doc(db, 'students', result.user.uid), studentData);
+      try {
+        await claimPendingClassroomEnrollments(
+          result.user.uid,
+          normalizedEmail,
+          studentData.displayName
+        );
+      } catch (claimErr) {
+        console.warn('Pending classroom claim failed after signup:', claimErr);
+      }
       
     } catch (error: any) {
       console.error('Signup error details:', {
@@ -375,17 +440,72 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await setDoc(doc(db, 'users', result.user.uid), {
         lastLogin: new Date()
       }, { merge: true });
+      try {
+        await claimPendingClassroomEnrollments(
+          result.user.uid,
+          normalizedEmail,
+          result.user.displayName || undefined
+        );
+      } catch (claimErr) {
+        console.warn('Pending classroom claim failed after login:', claimErr);
+      }
     }
   }, []);
 
   const loginWithGoogle = useCallback(async () => {
     const provider = new GoogleAuthProvider();
     const result = await signInWithPopup(auth, provider);
-    // Update last login time - use setDoc with merge to create if doesn't exist
+    // Write identity + last login (merge). A lastLogin-only write used to race ahead of
+    // profile creation and leave Admin with "Unnamed Student" / no email.
     if (result.user) {
-      await setDoc(doc(db, 'users', result.user.uid), {
-        lastLogin: new Date()
-      }, { merge: true });
+      const displayName =
+        result.user.displayName?.trim() ||
+        (result.user.email ? result.user.email.split('@')[0] : 'Student');
+      const email = (result.user.email || '').trim().toLowerCase();
+      await setDoc(
+        doc(db, 'users', result.user.uid),
+        {
+          lastLogin: new Date(),
+          lastLoginAt: serverTimestamp(),
+          displayName,
+          ...(email ? { email } : {}),
+          ...(result.user.photoURL ? { photoURL: result.user.photoURL } : {}),
+        },
+        { merge: true }
+      );
+      await setDoc(
+        doc(db, 'students', result.user.uid),
+        {
+          displayName,
+          ...(email ? { email } : {}),
+        },
+        { merge: true }
+      );
+      // Seed game fields only if this is a brand-new students doc
+      const studentSnap = await getDoc(doc(db, 'students', result.user.uid));
+      const existing = studentSnap.exists() ? studentSnap.data() : {};
+      const seed: {
+        xp?: number;
+        powerPoints?: number;
+        challenges?: Record<string, never>;
+        elementalAffinity?: null;
+        createdAt?: ReturnType<typeof serverTimestamp>;
+      } = {};
+      if (existing.xp === undefined) seed.xp = 0;
+      if (existing.powerPoints === undefined) seed.powerPoints = 0;
+      if (existing.challenges === undefined) seed.challenges = {};
+      if (existing.elementalAffinity === undefined) seed.elementalAffinity = null;
+      if (existing.createdAt === undefined) seed.createdAt = serverTimestamp();
+      if (Object.keys(seed).length > 0) {
+        await setDoc(doc(db, 'students', result.user.uid), seed, { merge: true });
+      }
+      if (email) {
+        try {
+          await claimPendingClassroomEnrollments(result.user.uid, email, displayName);
+        } catch (claimErr) {
+          console.warn('Pending classroom claim failed after Google login:', claimErr);
+        }
+      }
     }
   }, []);
 

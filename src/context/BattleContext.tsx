@@ -415,10 +415,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const vaultCurrentPP = existingVaultData.currentPP || 0;
           console.log('BattleContext: Existing vault PP:', vaultCurrentPP, 'Player PP:', playerPP);
           
-          // CRITICAL FIX: If vault PP is 0 or significantly lower than student PP, sync from student PP
-          // This handles cases where admin set PP in students collection but vault wasn't updated
-          // If vault PP is 0, always use student PP. Otherwise, use the higher value to preserve generator earnings
-          const finalPP = vaultCurrentPP === 0 ? playerPP : Math.max(playerPP, vaultCurrentPP);
+          // Vault is canonical once it exists. Math.max previously undid Marketplace / skill spends
+          // that only deducted one store. Admin grants should update vault + students together.
+          const { resolveCanonicalPP } = await import('../utils/playerPowerPoints');
+          const finalPP = resolveCanonicalPP({
+            vaultExists: true,
+            vaultPP: vaultCurrentPP,
+            studentPP: playerPP,
+          });
           
           // MIGRATION: Infer levels from existing data if not present
           const { 
@@ -1790,9 +1794,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         
         const vaultData = vaultDoc.data();
         oldCapacityLevel = vaultData.capacityLevel || 1;
-        const currentPP = vaultData.currentPP || 0;
-        const studentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
-        const actualPP = Math.max(currentPP, studentPP); // Use higher value
+        // Vault is canonical — do not Math.max with student (undoes spends).
+        const actualPP = vaultData.currentPP || 0;
         
         // Calculate old and new values using formulas
         oldCapacity = getCapacity(oldCapacityLevel);
@@ -1886,9 +1889,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         
         const vaultData = vaultDoc.data();
         oldShieldLevel = vaultData.shieldLevel || 1;
-        const currentPP = vaultData.currentPP || 0;
-        const studentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
-        const actualPP = Math.max(currentPP, studentPP); // Use higher value
+        const actualPP = vaultData.currentPP || 0;
         if (oldShieldLevel >= SHIELD_MAX_LEVEL) {
           throw new Error(`Shield Enhancement is already at max level (${SHIELD_MAX_LEVEL}).`);
         }
@@ -1998,9 +1999,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const vaultData = vaultDoc.data();
         oldGeneratorLevel = vaultData.generatorLevel || 1;
         const currentCapacityLevel = vaultData.capacityLevel || 1;
-        const currentPP = vaultData.currentPP || 0;
-        const studentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
-        const actualPP = Math.max(currentPP, studentPP); // Use higher value
+        const actualPP = vaultData.currentPP || 0;
         
         // Calculate old and new values using formulas
         oldPPPerDay = getGeneratorPPPerDay(oldGeneratorLevel);
@@ -2306,18 +2305,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!currentUser || !vault) return;
     
     try {
-      // Get current player PP from student document
       const studentRef = doc(db, 'students', currentUser.uid);
+      const userRef = doc(db, 'users', currentUser.uid);
       const studentDoc = await getDoc(studentRef);
       const studentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
-      const vaultPP = vault.currentPP || 0;
+      // Vault is canonical — mirror to students/users. Never Math.max (undoes spends).
+      const finalPP = Math.max(0, vault.currentPP || 0);
       
-      console.log('🔄 Manual sync - Student PP:', studentPP, 'Vault PP:', vaultPP);
-      
-      // CRITICAL FIX: Use the HIGHER value to prevent overwriting generator earnings
-      // If vault PP is higher than student PP, it means generator earnings or other vault-specific additions occurred
-      // In this case, sync student PP TO vault PP instead of the other way around
-      const finalPP = Math.max(studentPP, vaultPP);
+      console.log('🔄 Manual sync - Student PP:', studentPP, 'Vault PP:', finalPP);
       
       // Max vault health is always 10% of max PP (capacity is the max PP)
       const maxPP = vault.capacity || 1000;
@@ -2347,25 +2342,24 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.log('🔄 syncVaultPP: Preserving recently restored vault health:', correctVaultHealth);
       }
       
-      // Determine what needs to be updated
-      const needsVaultUpdate = finalPP !== vault.currentPP || vault.vaultHealth !== correctVaultHealth;
-      const needsStudentUpdate = vaultPP > studentPP; // If vault is higher, student needs update
+      const needsVaultUpdate = vault.vaultHealth !== correctVaultHealth;
+      const needsStudentUpdate = studentPP !== finalPP;
       
       if (needsVaultUpdate || needsStudentUpdate) {
         const vaultRef = doc(db, 'vaults', currentUser.uid);
         
-        // Update vault PP to the higher value and adjust vault health
         if (needsVaultUpdate) {
           await updateDoc(vaultRef, { 
-            currentPP: finalPP,
             vaultHealth: correctVaultHealth
           });
         }
         
-        // If vault PP was higher, also update student PP (preserves generator earnings)
         if (needsStudentUpdate) {
-          await updateDoc(studentRef, { powerPoints: finalPP });
-          console.log('✅ Student PP synced to vault PP (generator earnings preserved):', finalPP);
+          await Promise.all([
+            setDoc(studentRef, { powerPoints: finalPP }, { merge: true }),
+            setDoc(userRef, { powerPoints: finalPP }, { merge: true }),
+          ]);
+          console.log('✅ Student/users PP synced to vault PP:', finalPP);
         }
         
         // Update local vault state
@@ -2375,7 +2369,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           vaultHealth: correctVaultHealth
         } : null);
         
-        console.log('✅ Vault PP synced (using higher value):', finalPP);
+        console.log('✅ Vault PP synced (vault canonical):', finalPP);
         console.log(`✅ Vault health updated to ${correctVaultHealth}/${maxVaultHealth} (capped at current PP: ${finalPP})`);
       } else {
         console.log('✅ Vault PP already in sync');
@@ -3474,11 +3468,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         updatedMoves: updatedMoves.find(m => m.id === moveId)
       });
 
-      // Deduct PP from vault (never go negative)
+      // Deduct PP from vault + students + users (never go negative)
       const newPP = Math.max(0, freshPP - upgradeCost);
-      await updateDoc(vaultRef, { 
-        currentPP: newPP
-      });
+      const { setPlayerPowerPoints } = await import('../utils/playerPowerPoints');
+      await setPlayerPowerPoints(currentUser.uid, newPP);
 
       // Update vault state AFTER Firestore update
       setVault({ ...vault, currentPP: newPP });
@@ -3759,12 +3752,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       await updateDoc(cardsRef, { cards: updatedCards });
       setActionCards(updatedCards);
 
-      // Deduct PP from vault
-      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      // Deduct PP from vault + students + users
       const newPP = Math.max(0, vault.currentPP - upgradeCost);
-      await updateDoc(vaultRef, { 
-        currentPP: newPP 
-      });
+      const { setPlayerPowerPoints } = await import('../utils/playerPowerPoints');
+      await setPlayerPowerPoints(currentUser.uid, newPP);
 
       // Update vault state
       setVault({ ...vault, currentPP: newPP });

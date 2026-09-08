@@ -13,12 +13,17 @@ export function mergeUserActionCardsWithAdmin(
   return userCards.map((uc) => {
     const ac = byName.get(uc.name);
     if (!ac) return uc;
+    const mastery = Number(uc.masteryLevel) || 1;
+    // Mastery upgrades mutate effect.strength locally — keep player effect once leveled.
+    const effect = mastery > 1 ? uc.effect : (ac.effect ?? uc.effect);
     return {
       ...ac,
       id: uc.id,
       unlocked: uc.unlocked,
       uses: uc.uses,
       masteryLevel: uc.masteryLevel,
+      effect,
+      upgradeCost: uc.upgradeCost ?? ac.upgradeCost,
     };
   });
 }

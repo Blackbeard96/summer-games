@@ -77,29 +77,22 @@ const InSessionNotification: React.FC = () => {
     // Function to check for active sessions (used by both listener and polling)
     const checkForActiveSessions = async (userId: string) => {
       try {
-        // Always refresh user classrooms cache on first check or periodically
-        // This ensures we pick up classroom changes immediately
-        const shouldRefreshClassrooms = userClassroomsCache.length === 0 || 
-          (Math.random() < 0.15); // 15% chance to refresh on each check
-        
-        if (shouldRefreshClassrooms) {
-          debug.throttle('refresh-classrooms', 5000, 'InSessionNotification', 'Refreshing user classrooms cache');
-          try {
-            userClassroomsCache = await getUserClassrooms(userId);
-            debug.throttle('classrooms-refreshed', 5000, 'InSessionNotification', 'User classrooms after refresh', {
-              userId,
-              classrooms: userClassroomsCache,
-              count: userClassroomsCache.length
-            });
-          } catch (classroomError) {
-            // Suppress Firestore internal assertion errors
-            if (classroomError instanceof Error && 
-                (classroomError.message?.includes('INTERNAL ASSERTION FAILED') || 
-                 classroomError.message?.includes('Unexpected state'))) {
-              debug.once('firestore-error-classrooms', 'InSessionNotification', 'Firestore error suppressed, using cached classrooms');
-            } else {
-              debug.error('InSessionNotification', 'Error refreshing classrooms', classroomError);
-            }
+        // Always refresh classrooms so students added mid-event still see the join popup.
+        try {
+          userClassroomsCache = await getUserClassrooms(userId);
+          debug.throttle('classrooms-refreshed', 5000, 'InSessionNotification', 'User classrooms after refresh', {
+            userId,
+            classrooms: userClassroomsCache,
+            count: userClassroomsCache.length
+          });
+        } catch (classroomError) {
+          // Suppress Firestore internal assertion errors
+          if (classroomError instanceof Error && 
+              (classroomError.message?.includes('INTERNAL ASSERTION FAILED') || 
+               classroomError.message?.includes('Unexpected state'))) {
+            debug.once('firestore-error-classrooms', 'InSessionNotification', 'Firestore error suppressed, using cached classrooms');
+          } else {
+            debug.error('InSessionNotification', 'Error refreshing classrooms', classroomError);
           }
         }
 

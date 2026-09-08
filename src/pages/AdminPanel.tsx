@@ -1598,19 +1598,18 @@ const AdminPanel: React.FC = () => {
     const newPP = Math.max(0, (student.powerPoints || 0) + delta);
     
     try {
-      // Update both students collection AND vaults collection
       const studentRef = doc(db, 'students', studentId);
+      const userRef = doc(db, 'users', studentId);
       const vaultRef = doc(db, 'vaults', studentId);
       
-      // Get vault data to calculate vault health
       const vaultDoc = await getDoc(vaultRef);
       const vaultData = vaultDoc.exists() ? vaultDoc.data() : null;
       const maxPP = vaultData?.capacity || 1000;
       const maxVaultHealth = Math.floor(maxPP * 0.1);
       const newVaultHealth = Math.min(newPP, maxVaultHealth);
       
-      // Update student PP first; only update vault if it already exists.
-      await updateDoc(studentRef, { powerPoints: newPP });
+      await setDoc(studentRef, { powerPoints: newPP }, { merge: true });
+      await setDoc(userRef, { powerPoints: newPP }, { merge: true });
       if (vaultDoc.exists()) {
         await updateDoc(vaultRef, {
           currentPP: newPP,
@@ -1638,19 +1637,18 @@ const AdminPanel: React.FC = () => {
     const newPP = Math.max(0, amount);
     
     try {
-      // Update both students collection AND vaults collection
       const studentRef = doc(db, 'students', studentId);
+      const userRef = doc(db, 'users', studentId);
       const vaultRef = doc(db, 'vaults', studentId);
       
-      // Get vault data to calculate vault health
       const vaultDoc = await getDoc(vaultRef);
       const vaultData = vaultDoc.exists() ? vaultDoc.data() : null;
       const maxPP = vaultData?.capacity || 1000;
       const maxVaultHealth = Math.floor(maxPP * 0.1);
       const newVaultHealth = Math.min(newPP, maxVaultHealth);
       
-      // Update student PP first; only update vault if it already exists.
-      await updateDoc(studentRef, { powerPoints: newPP });
+      await setDoc(studentRef, { powerPoints: newPP }, { merge: true });
+      await setDoc(userRef, { powerPoints: newPP }, { merge: true });
       if (vaultDoc.exists()) {
         await updateDoc(vaultRef, {
           currentPP: newPP,
@@ -1666,9 +1664,8 @@ const AdminPanel: React.FC = () => {
         )
       );
       
-      // Show success message
       const studentName = student.displayName || student.id;
-      setBatchMessage(`Successfully set ${studentName}'s Power Points to ${newPP}! (Updated both student and vault)`);
+      setBatchMessage(`Successfully set ${studentName}'s Power Points to ${newPP}!`);
       setShowBatchSuccess(true);
       setTimeout(() => setShowBatchSuccess(false), 3000);
     } catch (error) {
@@ -1677,105 +1674,191 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  /**
+   * Apply PP changes to many students. Skips IDs with no students/users doc.
+   * Uses set+merge (never update) so missing student shells don't abort the batch.
+   */
+  const applyBatchPPUpdates = async (
+    studentIds: string[],
+    resolveNewPP: (oldPP: number) => number,
+    buildSuccessMessage: (updated: number, skipped: number) => string
+  ) => {
+    if (studentIds.length === 0) {
+      alert('Please select at least one student first.');
+      return;
+    }
+
+    const updatedStudents: { id: string; newPP: number; oldPP: number }[] = [];
+    const skippedIds: string[] = [];
+
+    // Prefetch existence — skip completely missing accounts
+    const snaps = await Promise.all(
+      studentIds.map(async (studentId) => {
+        const [studentSnap, userSnap, vaultSnap] = await Promise.all([
+          getDoc(doc(db, 'students', studentId)),
+          getDoc(doc(db, 'users', studentId)),
+          getDoc(doc(db, 'vaults', studentId)),
+        ]);
+        return { studentId, studentSnap, userSnap, vaultSnap };
+      })
+    );
+
+    type PendingWrite = {
+      studentId: string;
+      oldPP: number;
+      newPP: number;
+      vaultSnap: Awaited<ReturnType<typeof getDoc>>;
+    };
+    const pending: PendingWrite[] = [];
+
+    for (const { studentId, studentSnap, userSnap, vaultSnap } of snaps) {
+      const local = students.find((s) => s.id === studentId);
+      if (!studentSnap.exists() && !userSnap.exists()) {
+        console.warn(`[AdminPanel] Skipping inactive/missing account: ${studentId}`);
+        skippedIds.push(studentId);
+        continue;
+      }
+
+      const oldPP = Math.max(
+        0,
+        Number(
+          (studentSnap.exists() ? studentSnap.data()?.powerPoints : undefined) ??
+            (userSnap.exists() ? userSnap.data()?.powerPoints : undefined) ??
+            local?.powerPoints ??
+            0
+        ) || 0
+      );
+      const newPP = Math.max(0, resolveNewPP(oldPP));
+      pending.push({
+        studentId,
+        oldPP,
+        newPP,
+        vaultSnap,
+      });
+    }
+
+    if (pending.length === 0) {
+      alert(
+        skippedIds.length > 0
+          ? `No active student records found to update (${skippedIds.length} skipped).`
+          : 'No valid students found to update.'
+      );
+      return;
+    }
+
+    // ~3 writes per student; keep under Firestore's 500 ops/batch
+    const CHUNK = 150;
+    for (let offset = 0; offset < pending.length; offset += CHUNK) {
+      const chunk = pending.slice(offset, offset + CHUNK);
+      const batch = writeBatch(db);
+
+      for (const row of chunk) {
+        const studentRef = doc(db, 'students', row.studentId);
+        const userRef = doc(db, 'users', row.studentId);
+        // set+merge never fails with not-found (unlike update)
+        batch.set(studentRef, { powerPoints: row.newPP }, { merge: true });
+        batch.set(userRef, { powerPoints: row.newPP }, { merge: true });
+
+        if (row.vaultSnap.exists()) {
+          const vaultData = row.vaultSnap.data() as { capacity?: number } | undefined;
+          const maxPP = vaultData?.capacity || 1000;
+          const maxVaultHealth = Math.floor(maxPP * 0.1);
+          const newVaultHealth = Math.min(row.newPP, maxVaultHealth);
+          batch.update(doc(db, 'vaults', row.studentId), {
+            currentPP: row.newPP,
+            vaultHealth: newVaultHealth,
+          });
+        }
+
+        updatedStudents.push({
+          id: row.studentId,
+          newPP: row.newPP,
+          oldPP: row.oldPP,
+        });
+      }
+
+      await batch.commit();
+    }
+
+    setStudents((prev) =>
+      prev.map((s) => {
+        const found = updatedStudents.find((u) => u.id === s.id);
+        return found ? { ...s, powerPoints: found.newPP } : s;
+      })
+    );
+
+    const msg = buildSuccessMessage(updatedStudents.length, skippedIds.length);
+    setBatchMessage(msg);
+    setShowBatchSuccess(true);
+    setTimeout(() => setShowBatchSuccess(false), 4000);
+    setSelected([]);
+    console.log('PP batch results:', {
+      updated: updatedStudents.length,
+      skipped: skippedIds,
+    });
+  };
+
   // Batch Power Points adjustment
   const adjustBatchPowerPoints = async (multiplier: number) => {
+    const actualDelta = batchPP * multiplier;
+    console.log(`Batch PP Update: ${actualDelta} PP to ${selected.length} students`);
+
+    try {
+      await applyBatchPPUpdates(
+        selected,
+        (oldPP) => oldPP + actualDelta,
+        (updated, skipped) => {
+          const action = actualDelta > 0 ? 'added' : 'removed';
+          const absDelta = Math.abs(actualDelta);
+          const skipNote =
+            skipped > 0 ? ` Skipped ${skipped} inactive/missing account${skipped !== 1 ? 's' : ''}.` : '';
+          return `Successfully ${action} ${absDelta} Power Points for ${updated} student${updated !== 1 ? 's' : ''}!${skipNote}`;
+        }
+      );
+    } catch (error: any) {
+      console.error('Error updating batch power points:', error);
+      if (error?.code === 'permission-denied') {
+        alert('Permission denied. Please check Firestore security rules.');
+      } else {
+        alert(`Failed to update power points: ${error?.message || error}`);
+      }
+    }
+  };
+
+  // Batch set Power Points to an absolute value for all selected students
+  const setBatchPowerPoints = async () => {
     if (selected.length === 0) {
       alert('Please select at least one student first.');
       return;
     }
-    
-    const actualDelta = batchPP * multiplier; // Use batchPP value with multiplier
-    console.log(`Batch PP Update: ${actualDelta} PP to ${selected.length} students`);
-    
+
+    const targetPP = Math.max(0, Math.floor(Number(batchPP) || 0));
+    if (
+      !window.confirm(
+        `Set Power Points to ${targetPP} for ${selected.length} selected student${selected.length !== 1 ? 's' : ''}?\n\nThis replaces each player's current PP (not add/remove).\nInactive/missing accounts will be skipped.`
+      )
+    ) {
+      return;
+    }
+
+    console.log(`Batch PP Set: ${targetPP} PP for ${selected.length} students`);
+
     try {
-      // Use writeBatch for atomic updates
-      const batch = writeBatch(db);
-      const updatedStudents: { id: string; newPP: number; oldPP: number }[] = [];
-      
-      // First, fetch all vault documents to calculate vault health
-      const vaultPromises = selected.map(studentId => getDoc(doc(db, 'vaults', studentId)));
-      const vaultDocs = await Promise.all(vaultPromises);
-      
-      for (let i = 0; i < selected.length; i++) {
-        const studentId = selected[i];
-        const student = students.find(s => s.id === studentId);
-        if (!student) {
-          console.warn(`Student ${studentId} not found in local data`);
-          continue;
+      await applyBatchPPUpdates(
+        selected,
+        () => targetPP,
+        (updated, skipped) => {
+          const skipNote =
+            skipped > 0 ? ` Skipped ${skipped} inactive/missing account${skipped !== 1 ? 's' : ''}.` : '';
+          return `Successfully set Power Points to ${targetPP} for ${updated} student${updated !== 1 ? 's' : ''}!${skipNote}`;
         }
-        
-        const oldPP = student.powerPoints || 0;
-        const newPP = Math.max(0, oldPP + actualDelta); // Don't allow negative values
-        
-        console.log(`Updating ${student.displayName}: ${oldPP} → ${newPP} PP`);
-        
-        const studentRef = doc(db, 'students', studentId);
-        batch.update(studentRef, { powerPoints: newPP });
-        
-        // Also update vault
-        const vaultDoc = vaultDocs[i];
-        const vaultRef = doc(db, 'vaults', studentId);
-        const vaultData = vaultDoc.exists() ? vaultDoc.data() : null;
-        const maxPP = vaultData?.capacity || 1000;
-        const maxVaultHealth = Math.floor(maxPP * 0.1);
-        const newVaultHealth = Math.min(newPP, maxVaultHealth);
-        
-        if (vaultDoc.exists()) {
-          batch.update(vaultRef, {
-            currentPP: newPP,
-            vaultHealth: newVaultHealth
-          });
-        } else {
-          console.warn(`[AdminPanel] Skipping vault creation for ${studentId} during batch PP update (vault missing)`);
-        }
-        
-        updatedStudents.push({ id: studentId, newPP, oldPP });
-      }
-      
-      if (updatedStudents.length === 0) {
-        alert('No valid students found to update.');
-        return;
-      }
-      
-      console.log('Committing batch update (students + vaults)...');
-      await batch.commit();
-      console.log('Batch update successful!');
-      
-      // Update local state
-      setStudents(prev =>
-        prev.map(s => {
-          const found = updatedStudents.find(u => u.id === s.id);
-          return found ? { ...s, powerPoints: found.newPP } : s;
-        })
       );
-      
-      // Show success message
-      const action = actualDelta > 0 ? 'added' : 'removed';
-      const absDelta = Math.abs(actualDelta);
-      setBatchMessage(`Successfully ${action} ${absDelta} Power Points to ${updatedStudents.length} student${updatedStudents.length !== 1 ? 's' : ''}! (Updated both student and vault)`);
-      setShowBatchSuccess(true);
-      
-      // Auto-hide after 3 seconds
-      setTimeout(() => setShowBatchSuccess(false), 3000);
-      
-      setSelected([]);
-      
-      // Log final results
-      console.log('PP Update Results:', updatedStudents.map(u => 
-        `${students.find(s => s.id === u.id)?.displayName}: ${u.oldPP} → ${u.newPP}`
-      ));
-      
     } catch (error: any) {
-      console.error('Error updating batch power points:', error);
-      console.error('Error details:', error);
-      
-      // More specific error message
+      console.error('Error setting batch power points:', error);
       if (error?.code === 'permission-denied') {
         alert('Permission denied. Please check Firestore security rules.');
-      } else if (error?.code === 'not-found') {
-        alert('Some student records were not found. Please refresh and try again.');
       } else {
-        alert(`Failed to update power points: ${error?.message || error}`);
+        alert(`Failed to set power points: ${error?.message || error}`);
       }
     }
   };
@@ -4086,6 +4169,21 @@ const AdminPanel: React.FC = () => {
                       }}
                     >
                       Remove {batchPP} PP
+                    </button>
+                    <button
+                      onClick={setBatchPowerPoints}
+                      style={{
+                        backgroundColor: '#2563eb',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '0.375rem',
+                        padding: '0.5rem 1rem',
+                        cursor: 'pointer',
+                        fontSize: '0.875rem',
+                        fontWeight: '500'
+                      }}
+                    >
+                      Set to {batchPP} PP
                     </button>
                     <button
                       onClick={async () => {

@@ -25,6 +25,14 @@ import SearchBar from './SearchBar';
 import { searchStudents } from '../utils/searchUtils';
 import { useAuth } from '../context/AuthContext';
 import InSessionBattle from './InSessionBattle';
+import { notifyStudentsOfLiveEvent, setStudentClassroomId } from '../utils/liveEventStudentAlerts';
+import {
+  addPendingClassroomInvite,
+  enrollStudentInClassroom,
+  findPlayerUidByEmail,
+  normalizeStudentEmail,
+} from '../utils/classroomEnrollment';
+import { setPlayerPowerPoints, adjustPlayerPowerPoints } from '../utils/playerPowerPoints';
 
 // Classroom interface
 interface Classroom {
@@ -35,6 +43,9 @@ interface Classroom {
   students: string[];
   /** Denormalized display names so classmates can render roster without reading each other's user docs */
   studentDisplayNames?: Record<string, string>;
+  /** Emails invited via Google Classroom before the player has an Auth account */
+  pendingStudentEmails?: string[];
+  pendingStudents?: Record<string, { email: string; displayName: string; photoURL?: string }>;
 }
 
 // Google Classroom API types
@@ -119,6 +130,8 @@ interface Classroom {
   description?: string;
   students: string[];
   studentDisplayNames?: Record<string, string>;
+  pendingStudentEmails?: string[];
+  pendingStudents?: Record<string, { email: string; displayName: string; photoURL?: string }>;
   createdAt: Date;
   maxStudents?: number;
 }
@@ -520,6 +533,17 @@ const ClassroomManagement: React.FC = () => {
       };
 
       const roomRef = await addDoc(collection(db, 'inSessionRooms'), roomData);
+      const enrolledIds = Array.from(
+        new Set(
+          selectedClassrooms.flatMap((c) => c.students || []).filter((id) => id && id !== authUid)
+        )
+      );
+      await notifyStudentsOfLiveEvent({
+        studentIds: enrolledIds,
+        sessionId: roomRef.id,
+        className: roomData.className,
+        classId: null,
+      });
       setShowUniversalEventModal(false);
       navigate(`/live-events/${roomRef.id}`);
     } catch (error) {
@@ -548,6 +572,7 @@ const ClassroomManagement: React.FC = () => {
         rosterPatch[`studentDisplayNames.${id}`] = label;
       }
       await updateDoc(classroomRef, rosterPatch as UpdateData<DocumentData>);
+      await Promise.all(newlyAdded.map((id) => setStudentClassroomId(id, classroomId)));
 
       setSelectedStudents([]);
       setShowAddStudentsModal(null);
@@ -627,13 +652,11 @@ const ClassroomManagement: React.FC = () => {
     console.log('OAuth cache cleared');
   };
 
-  // Add/subtract Power Points
+  // Add/subtract Power Points (vault + students + users)
   const adjustPowerPoints = async (studentId: string, delta: number) => {
     const student = students.find(s => s.id === studentId);
     if (!student) return;
-    const newPP = Math.max(0, (student.powerPoints || 0) + delta);
-    const studentRef = doc(db, 'students', studentId);
-    await updateDoc(studentRef, { powerPoints: newPP });
+    const newPP = await adjustPlayerPowerPoints(studentId, delta);
     setStudents(prev =>
       prev.map(s =>
         s.id === studentId ? { ...s, powerPoints: newPP } : s
@@ -641,7 +664,7 @@ const ClassroomManagement: React.FC = () => {
     );
   };
 
-  // Set Power Points to absolute value
+  // Set Power Points to absolute value (vault + students + users)
   const setPowerPoints = async (studentId: string, amount: number) => {
     console.log('Setting PP for student:', studentId, 'to amount:', amount);
     const student = students.find(s => s.id === studentId);
@@ -649,10 +672,8 @@ const ClassroomManagement: React.FC = () => {
       console.log('Student not found:', studentId);
       return;
     }
-    const newPP = Math.max(0, amount);
+    const newPP = await setPlayerPowerPoints(studentId, amount);
     console.log('New PP value:', newPP);
-    const studentRef = doc(db, 'students', studentId);
-    await updateDoc(studentRef, { powerPoints: newPP });
     setStudents(prev =>
       prev.map(s =>
         s.id === studentId ? { ...s, powerPoints: newPP } : s
@@ -702,6 +723,9 @@ const ClassroomManagement: React.FC = () => {
             powerPoints: newPP,
             lastUpdated: serverTimestamp()
           });
+
+          const userRef = doc(db, 'users', studentId);
+          chunkBatch.set(userRef, { powerPoints: newPP }, { merge: true });
 
           // Also update vault if it exists
           const vaultRef = doc(db, 'vaults', studentId);
@@ -1031,73 +1055,91 @@ const ClassroomManagement: React.FC = () => {
 
         console.log('Found classroom:', classroom);
 
-        // Filter out students that are already in the classroom
-        const newStudents = googleStudents.filter(googleStudent => 
-          !classroom!.students.includes(googleStudent.profile.id)
+        const enrolledIds = new Set(classroom.students || []);
+        const enrolledEmails = new Set(
+          students
+            .filter((s) => enrolledIds.has(s.id))
+            .map((s) => normalizeStudentEmail(s.email))
+            .filter(Boolean)
+        );
+        (classroom.pendingStudentEmails || []).forEach((e) =>
+          enrolledEmails.add(normalizeStudentEmail(e))
         );
 
-        // Add students to the classroom
-        for (let i = 0; i < newStudents.length; i++) {
-          const googleStudent = newStudents[i];
-          
+        let linked = 0;
+        let pending = 0;
+        let skipped = 0;
+
+        for (let i = 0; i < googleStudents.length; i++) {
+          const googleStudent = googleStudents[i];
+          const email = normalizeStudentEmail(googleStudent.profile.emailAddress);
+          const displayName =
+            googleStudent.profile.name.fullName || email.split('@')[0] || 'Student';
+
           try {
-            console.log(`Processing student ${i + 1}/${newStudents.length}: ${googleStudent.profile.name.fullName}`);
-            
-            // Check if student already exists in our system
-            const existingStudent = students.find(s => s.email === googleStudent.profile.emailAddress);
-            
-            if (!existingStudent) {
-              console.log(`Creating new student account for: ${googleStudent.profile.emailAddress}`);
-              
-              // Create new student account
-              const newStudentData = {
-                displayName: googleStudent.profile.name.fullName,
-                email: googleStudent.profile.emailAddress,
-                photoURL: googleStudent.profile.photoUrl,
-                xp: 0,
-                powerPoints: 0,
-                createdAt: new Date()
-              };
+            console.log(`Processing student ${i + 1}/${googleStudents.length}: ${displayName}`);
 
-              // Add to users collection
-              const userRef = await addDoc(collection(db, 'users'), newStudentData);
-              console.log(`Created user document: ${userRef.id}`);
-              
-              // Add to students collection
-              await addDoc(collection(db, 'students'), {
-                ...newStudentData,
-                userId: userRef.id
-              });
-              console.log(`Created student document for user: ${userRef.id}`);
-
-                          // Add to classroom
-            await updateDoc(doc(db, 'classrooms', classroomId), {
-              students: [...classroom!.students, userRef.id],
-              [`studentDisplayNames.${userRef.id}`]: googleStudent.profile.name.fullName,
-            });
-              console.log(`Added student ${userRef.id} to classroom ${classroomId}`);
-            } else {
-              console.log(`Found existing student: ${existingStudent.email}`);
-                          // Add existing student to classroom if not already there
-            if (!classroom!.students.includes(existingStudent.id)) {
-              await updateDoc(doc(db, 'classrooms', classroomId), {
-                students: [...classroom!.students, existingStudent.id],
-                [`studentDisplayNames.${existingStudent.id}`]:
-                  existingStudent.displayName ||
-                  googleStudent.profile.name.fullName,
-              });
-                console.log(`Added existing student ${existingStudent.id} to classroom ${classroomId}`);
-              } else {
-                console.log(`Student ${existingStudent.id} already in classroom`);
-              }
+            if (!email) {
+              skipped += 1;
+              setImportProgress({ current: i + 1, total: googleStudents.length });
+              continue;
             }
 
-            setImportProgress({ current: i + 1, total: newStudents.length });
+            if (enrolledEmails.has(email)) {
+              skipped += 1;
+              setImportProgress({ current: i + 1, total: googleStudents.length });
+              continue;
+            }
+
+            // Prefer live Auth-backed accounts (doc id = uid). Never create orphan addDoc IDs.
+            const existing =
+              (await findPlayerUidByEmail(email)) ||
+              (() => {
+                const local = students.find(
+                  (s) => normalizeStudentEmail(s.email) === email
+                );
+                return local
+                  ? { uid: local.id, displayName: local.displayName, email }
+                  : null;
+              })();
+
+            if (existing) {
+              if (!enrolledIds.has(existing.uid)) {
+                await enrollStudentInClassroom({
+                  classroomId,
+                  uid: existing.uid,
+                  displayName: existing.displayName || displayName,
+                });
+                enrolledIds.add(existing.uid);
+                linked += 1;
+              } else {
+                skipped += 1;
+              }
+            } else {
+              await addPendingClassroomInvite({
+                classroomId,
+                email,
+                displayName,
+                photoURL: googleStudent.profile.photoUrl,
+                source: 'google_classroom',
+              });
+              pending += 1;
+            }
+
+            enrolledEmails.add(email);
+            setImportProgress({ current: i + 1, total: googleStudents.length });
           } catch (studentError) {
-            console.error(`Error processing student ${googleStudent.profile.name.fullName}:`, studentError);
-            // Continue with next student instead of failing completely
+            console.error(`Error processing student ${displayName}:`, studentError);
           }
         }
+
+        alert(
+          `Google Classroom import finished.\n\n` +
+            `Linked to existing accounts: ${linked}\n` +
+            `Pending (will enroll on first signup): ${pending}\n` +
+            `Already enrolled / skipped: ${skipped}\n\n` +
+            `Students who have not signed up yet are queued by email — no orphan player docs were created.`
+        );
 
         // Reset Google import state and refresh data
         setGoogleImportTargetClassroom(null);
@@ -1175,38 +1217,6 @@ const ClassroomManagement: React.FC = () => {
           <p style={{ fontSize: '1.125rem', color: '#6b7280' }}>
             Create and manage classrooms, add students, and organize your learning environment.
           </p>
-          
-          {/* Debug Panel - Remove this after debugging */}
-          <div style={{ 
-            backgroundColor: '#fef3c7', 
-            border: '1px solid #f59e0b', 
-            borderRadius: '0.5rem', 
-            padding: '1rem', 
-            marginTop: '1rem',
-            fontSize: '0.875rem'
-          }}>
-            <h4 style={{ margin: '0 0 0.5rem 0', color: '#92400e' }}>🔍 Debug Info</h4>
-            <div style={{ color: '#92400e' }}>
-              <div>Total Students: {students.length}</div>
-              <div>Total Classrooms: {classrooms.length}</div>
-              {(() => {
-                const jbStudent = students.find(s => s.displayName === 'JB' || s.email?.includes('jeremiah.mejiacuello26'));
-                if (jbStudent) {
-                  const jbClassrooms = getStudentClassrooms(jbStudent.id);
-                  return (
-                    <div>
-                      <div>JB Student Found: ✅</div>
-                      <div>JB ID: {jbStudent.id}</div>
-                      <div>JB Email: {jbStudent.email}</div>
-                      <div>JB Enrolled in {jbClassrooms.length} classroom(s): {jbClassrooms.map(c => c.name).join(', ') || 'None'}</div>
-                    </div>
-                  );
-                } else {
-                  return <div>JB Student: ❌ Not found</div>;
-                }
-              })()}
-            </div>
-          </div>
         </div>
         <button
           onClick={() => setShowCreateModal(true)}
