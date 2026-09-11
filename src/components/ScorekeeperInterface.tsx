@@ -17,6 +17,7 @@ import { UserRole } from '../types/roles';
 import { logger } from '../utils/debugLogger';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 import SearchBar from './SearchBar';
+import ClassScorekeeperAssignment from './ClassScorekeeperAssignment';
 import { searchStudents } from '../utils/searchUtils';
 
 // FORCE DEBUG LOG - This should appear in console when component loads
@@ -843,6 +844,15 @@ const ScorekeeperInterface: React.FC = () => {
           </p>
         )}
       </div>
+
+      {/* Admin: assign a player as this class's scorekeeper */}
+      {(userRole === 'admin' || isAdminByEmail) && currentUser && (
+        <ClassScorekeeperAssignment
+          classId={assignedClassId || 'admin-all-classes'}
+          className={className}
+          adminUserId={currentUser.uid}
+        />
+      )}
 
       {/* Search Bar */}
       <div style={{ marginBottom: '2rem' }}>

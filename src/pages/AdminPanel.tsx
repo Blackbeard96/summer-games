@@ -1224,6 +1224,8 @@ const AdminPanel: React.FC = () => {
       if (p.get('tab') === 'productivity') setActiveTab('productivity-dashboard');
       if (p.get('tab') === 'civic-economy') setActiveTab('civic-economy');
       if (p.get('tab') === 'missions') setActiveTab('missions');
+      if (p.get('tab') === 'roles') setActiveTab('roles');
+      if (p.get('tab') === 'scorekeeper') setActiveTab('scorekeeper');
     } catch (_) {
       /* ignore */
     }
