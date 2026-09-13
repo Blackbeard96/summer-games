@@ -104,6 +104,18 @@ import {
 import CpuAwakeningSequenceModal from './CpuAwakeningSequenceModal';
 import { filterCpuAwakeningAnimationSteps } from '../types/missions';
 import type { MissionMediaSequenceStep } from '../types/missions';
+import {
+  cpuMustAwakenBeforeDefeat,
+  hasCpuAwakenConfig,
+  isEnemyDefeatedForBattleProgression,
+  primaryCombatantHealth,
+  preserveAwakenedReadyAfterDamage,
+  primaryCombatantShield,
+  refillAwakenedCombatPoolIfNeeded,
+  mergeCombatResourceMostDamaged,
+  resolveAwakenedHealthPool,
+  resolveAwakenedShieldPool,
+} from '../utils/cpuAwakenCombat';
 
 interface Opponent {
   id: string;
@@ -112,6 +124,9 @@ interface Opponent {
   maxPP: number;
   vaultHealth?: number; // For PvP opponents, this is their vault health (what gets damaged)
   maxVaultHealth?: number; // For PvP opponents, this is their max vault health
+  /** Island Raid / mission rows sometimes mirror vault fields as health/maxHealth */
+  health?: number;
+  maxHealth?: number;
   shieldStrength: number;
   maxShieldStrength: number;
   level: number;
@@ -144,6 +159,13 @@ interface Opponent {
   awakenedEnemyType?: ElementType | null;
   awakenedMoves?: unknown[];
   isAwakened?: boolean;
+  /**
+   * Sticky once the CPU has entered phase 2 (survives `isAwakened` being dropped by a sync merge).
+   * Used so a first lethal hit can still awaken when phase-1 max HP equals `awakenedHealth`.
+   */
+  awakenedPhaseEntered?: boolean;
+  /** True once phase-2 HP/shields have been applied — required before counting as defeated. */
+  awakenedPhaseReady?: boolean;
   /** Mission-style slides/videos when this CPU awakens (optional). */
   awakeningAnimation?: MissionMediaSequenceStep[];
 }
@@ -151,51 +173,55 @@ interface Opponent {
 /** When CPU HP drops to threshold, swap to awakened stats, portrait, element, and move list. */
 function maybeApplyCpuAwakenedPhase(opp: Opponent, isCpu: boolean): Opponent {
   if (!isCpu) return opp;
-  const o = opp as Opponent;
-  if (!o.awakenedModeEnabled || o.isAwakened) return opp;
-  const hp = (o.vaultHealth ?? o.currentPP) ?? 0;
-  const sh = Math.max(0, Math.floor(Number(o.shieldStrength) || 0));
-  const maxHpCur = Math.floor(Number(o.maxVaultHealth ?? o.maxPP) || 0);
-  const ahTarget =
-    o.awakenedHealth != null && Number.isFinite(o.awakenedHealth)
-      ? Math.floor(Number(o.awakenedHealth))
-      : 0;
-  /**
-   * Second-phase death: if `isAwakened` was dropped by a sync bug but stats already match the awakened
-   * HP cap, do NOT run "lethal first-hit awaken" again (that would refill HP/shields and revive the boss).
-   */
-  if (ahTarget > 0 && maxHpCur === ahTarget && hp <= 0 && sh <= 0) {
-    const maxS = Math.max(0, Math.floor(Number(o.maxShieldStrength) || 0));
-    return {
-      ...o,
-      isAwakened: true,
-      isDefeated: true,
-      currentPP: 0,
-      maxPP: maxHpCur,
-      vaultHealth: 0,
-      maxVaultHealth: maxHpCur,
-      shieldStrength: 0,
-      maxShieldStrength: maxS,
-      defeatedAt: (o as { defeatedAt?: Date }).defeatedAt ?? new Date(),
-    };
+  let o = opp as Opponent;
+
+  // Recover awaken capability if config fields survived but the boolean flag was stripped in a merge.
+  if (
+    !o.awakenedModeEnabled &&
+    (cpuMustAwakenBeforeDefeat(o) ||
+      (Array.isArray(o.awakeningAnimation) && o.awakeningAnimation.length > 0) ||
+      (o.awakenedHealth != null && Number(o.awakenedHealth) > 0) ||
+      (Array.isArray(o.awakenedMoves) && o.awakenedMoves.length > 0))
+  ) {
+    o = { ...o, awakenedModeEnabled: true };
   }
 
+  if (!o.awakenedModeEnabled) return opp;
+
+  // Already completed the phase-2 transition — never refill again (that would revive a dead boss).
+  // Exception: mid-transition stuck at 0/max (flags set, pool never applied) — refill once.
+  if (o.isAwakened || o.awakenedPhaseEntered) {
+    const repaired = refillAwakenedCombatPoolIfNeeded(o);
+    if (repaired !== o) return repaired as Opponent;
+    if (o.awakenedPhaseEntered && !o.isAwakened) {
+      return {
+        ...o,
+        isAwakened: true,
+        awakenedModeEnabled: true,
+        awakenedPhaseReady: o.awakenedPhaseReady === true || primaryCpuEnemyHp(o) > 0,
+      };
+    }
+    if (o.awakenedPhaseReady !== true && primaryCpuEnemyHp(o) > 0) {
+      return { ...o, awakenedPhaseReady: true, awakenedModeEnabled: true, isAwakened: true };
+    }
+    return o === opp ? opp : o;
+  }
+
+  const hp = (o.vaultHealth ?? o.currentPP) ?? 0;
+  const maxHpCur = Math.floor(Number(o.maxVaultHealth ?? o.maxPP) || 0);
   const maxHp = maxHpCur || 1;
   const threshold = Math.min(100, Math.max(1, o.awakenAtHealthPercent ?? 50));
   if (hp > 0) {
-    const pct = maxHp > 0 ? (hp / maxHp) * 100 : 100;
-    if (pct > threshold) return opp;
-    /**
-     * Max HP already matches configured awakened cap but `isAwakened` was lost (e.g. Firestore merge).
-     * Below threshold would re-run the full awaken transform and refill HP/shields + spam the battle log.
-     */
-    if (ahTarget > 0 && maxHpCur === ahTarget) {
-      return { ...o, isAwakened: true };
-    }
+    const pct = (hp / maxHp) * 100;
+    // `awakenAtHealthPercent: 100` means "only after base form is KO'd", not "awaken at full HP".
+    const triggerAtOrBelow = threshold >= 100 ? 0 : threshold;
+    if (pct > triggerAtOrBelow) return o === opp ? opp : o;
   }
-  // hp <= 0: still enter awakened second phase (lethal hit while awaken is configured), instead of staying dead
+  // hp <= 0 (or at/under threshold): enter awakened second phase
+
   const ahConfigured = o.awakenedHealth != null && Number.isFinite(o.awakenedHealth) && Number(o.awakenedHealth) > 0;
-  const ah = ahConfigured ? Math.floor(Number(o.awakenedHealth)) : Math.max(1, Math.floor(hp));
+  // Never awaken into 0 HP — phase 2 must be fightable even if admin left awakenedHealth unset.
+  const ah = ahConfigured ? Math.max(1, Math.floor(Number(o.awakenedHealth))) : Math.max(1, maxHpCur || 1);
   const ashConfigured = o.awakenedShields != null && Number.isFinite(o.awakenedShields) && Number(o.awakenedShields) >= 0;
   /** When awakened HP is explicitly set but shields are not, refill shields to the pre-awaken cap instead of keeping damaged current. */
   let ash: number;
@@ -208,9 +234,9 @@ function maybeApplyCpuAwakenedPhase(opp: Opponent, isCpu: boolean): Opponent {
     );
     ash = Math.max(0, priorMax);
   } else {
-    ash = Math.max(0, Math.floor(o.shieldStrength ?? 0));
+    ash = Math.max(0, Math.floor(Number(o.maxShieldStrength) || 0));
   }
-  const maxShieldOut = ashConfigured ? ash : ahConfigured ? Math.max(ash, Math.floor(Number(o.maxShieldStrength) || 0)) : ash;
+  const maxShieldOut = ashConfigured ? ash : Math.max(ash, Math.floor(Number(o.maxShieldStrength) || 0));
   const raw = Array.isArray(o.awakenedMoves) ? o.awakenedMoves : [];
   const mapped = raw.length > 0 ? mapCpuMovesToBattleEngineFormat(raw as any[]) : [];
   const movesOut = (mapped.length > 0 ? mapped : o.moves) as unknown[] | undefined;
@@ -218,11 +244,18 @@ function maybeApplyCpuAwakenedPhase(opp: Opponent, isCpu: boolean): Opponent {
     typeof o.awakenedImage === 'string' && o.awakenedImage.trim() ? o.awakenedImage.trim() : o.image;
   const next: Opponent = {
     ...o,
+    awakenedModeEnabled: true,
     isAwakened: true,
+    awakenedPhaseEntered: true,
+    awakenedPhaseReady: true,
+    isDefeated: false,
+    defeatedAt: undefined,
     currentPP: ah,
     maxPP: ah,
     vaultHealth: ah,
     maxVaultHealth: ah,
+    health: ah,
+    maxHealth: ah,
     shieldStrength: ash,
     maxShieldStrength: maxShieldOut,
     ...(movesOut && movesOut.length ? { moves: movesOut } : {}),
@@ -255,7 +288,7 @@ function primaryCpuEnemyHp(o: Opponent): number {
 /**
  * Firestore opponent snapshots often omit `isAwakened` (optional field). We still merge **health/shields**
  * defensively: taking props alone revived enemies whenever Firestore lagged behind the local lethal hit.
- * Mirrors IslandRaidBattle listener: `min` for normal enemies; capped `max` only for awakened + alive.
+ * Always min-merge (most damage) — max-merge caused awakened HP/shields to bounce between attacks.
  */
 function mergeFirestoreOpponentWithLocalAwakenState(propOpp: Opponent, existing: Opponent): Opponent {
   const pH = primaryCpuEnemyHp(propOpp);
@@ -263,39 +296,91 @@ function mergeFirestoreOpponentWithLocalAwakenState(propOpp: Opponent, existing:
   const eH = primaryCpuEnemyHp(existing);
   const eS = Math.max(0, Math.floor(Number(existing.shieldStrength ?? 0)));
 
+  const stillOwesAwaken =
+    cpuMustAwakenBeforeDefeat(existing) || cpuMustAwakenBeforeDefeat(propOpp);
+
+  const eitherAwakened =
+    existing.isAwakened === true ||
+    existing.awakenedPhaseEntered === true ||
+    propOpp.isAwakened === true ||
+    propOpp.awakenedPhaseEntered === true;
+
+  const phaseReady =
+    existing.awakenedPhaseReady === true ||
+    propOpp.awakenedPhaseReady === true ||
+    eH > 0 ||
+    eS > 0 ||
+    pH > 0 ||
+    pS > 0;
+
   const eitherDefeated =
-    existing.isDefeated === true ||
-    propOpp.isDefeated === true ||
-    (eH <= 0 && eS <= 0) ||
-    (pH <= 0 && pS <= 0);
+    !stillOwesAwaken &&
+    (existing.isDefeated === true ||
+      propOpp.isDefeated === true ||
+      (phaseReady && eH <= 0 && eS <= 0 && pH <= 0 && pS <= 0));
+
+  const capH = eitherAwakened
+    ? resolveAwakenedHealthPool({
+        ...existing,
+        ...propOpp,
+        awakenedHealth: existing.awakenedHealth ?? propOpp.awakenedHealth,
+        maxVaultHealth: Math.max(
+          Math.floor(Number(propOpp.maxVaultHealth ?? propOpp.maxPP ?? 0)),
+          Math.floor(Number(existing.maxVaultHealth ?? existing.maxPP ?? 0))
+        ),
+        maxHealth: Math.max(
+          Math.floor(Number(propOpp.maxHealth ?? 0)),
+          Math.floor(Number(existing.maxHealth ?? 0))
+        ),
+      })
+    : Math.max(
+        Math.floor(Number(propOpp.maxVaultHealth ?? propOpp.maxPP ?? 0)),
+        Math.floor(Number(existing.maxVaultHealth ?? existing.maxPP ?? 0))
+      );
+  const capS = eitherAwakened
+    ? resolveAwakenedShieldPool({
+        ...existing,
+        ...propOpp,
+        awakenedShields: existing.awakenedShields ?? propOpp.awakenedShields,
+        maxShieldStrength: Math.max(
+          Math.floor(Number(propOpp.maxShieldStrength ?? 0)),
+          Math.floor(Number(existing.maxShieldStrength ?? 0))
+        ),
+      })
+    : Math.max(
+        Math.floor(Number(propOpp.maxShieldStrength ?? 0)),
+        Math.floor(Number(existing.maxShieldStrength ?? 0))
+      );
 
   let mergedH: number;
   let mergedS: number;
-  if (eitherDefeated) {
+  if (eitherDefeated && !stillOwesAwaken) {
     mergedH = 0;
     mergedS = 0;
-  } else if (existing.isAwakened === true) {
-    const capH = Math.max(
-      Math.floor(Number(propOpp.maxVaultHealth ?? propOpp.maxPP ?? 0)),
-      Math.floor(Number(existing.maxVaultHealth ?? existing.maxPP ?? 0))
-    );
-    const capS = Math.max(
-      Math.floor(Number(propOpp.maxShieldStrength ?? 0)),
-      Math.floor(Number(existing.maxShieldStrength ?? 0))
-    );
-    const rawH = Math.max(pH, eH);
-    const rawS = Math.max(pS, eS);
-    mergedH = capH > 0 ? Math.min(rawH, capH) : rawH;
-    mergedS = capS > 0 ? Math.min(rawS, capS) : rawS;
   } else {
-    mergedH = Math.min(pH, eH);
-    mergedS = Math.min(pS, eS);
+    mergedH = mergeCombatResourceMostDamaged(pH, eH, capH > 0 ? capH : undefined);
+    mergedS = mergeCombatResourceMostDamaged(pS, eS, capS > 0 ? capS : undefined);
   }
 
-  const defeated = mergedH <= 0 && mergedS <= 0;
+  const defeated =
+    !stillOwesAwaken &&
+    phaseReady &&
+    mergedH <= 0 &&
+    mergedS <= 0 &&
+    (existing.isDefeated === true || propOpp.isDefeated === true || eitherDefeated);
 
   const base = {
     ...propOpp,
+    awakenedModeEnabled:
+      existing.awakenedModeEnabled === true || propOpp.awakenedModeEnabled === true,
+    awakeningAnimation:
+      (existing as { awakeningAnimation?: MissionMediaSequenceStep[] }).awakeningAnimation ??
+      (propOpp as { awakeningAnimation?: MissionMediaSequenceStep[] }).awakeningAnimation,
+    awakenedHealth: existing.awakenedHealth ?? propOpp.awakenedHealth,
+    awakenedShields: existing.awakenedShields ?? propOpp.awakenedShields,
+    awakenedMoves: existing.awakenedMoves ?? propOpp.awakenedMoves,
+    awakenedImage: existing.awakenedImage ?? propOpp.awakenedImage,
+    awakenAtHealthPercent: existing.awakenAtHealthPercent ?? propOpp.awakenAtHealthPercent,
     vaultHealth: mergedH,
     currentPP: mergedH,
     shieldStrength: mergedS,
@@ -305,23 +390,80 @@ function mergeFirestoreOpponentWithLocalAwakenState(propOpp: Opponent, existing:
           (propOpp as { defeatedAt?: Date }).defeatedAt ??
           new Date())
       : undefined,
-    /** IslandRaid / mission enemy rows use `health` alongside vault fields */
     health: mergedH,
   } as Opponent;
 
-  if (existing.isAwakened !== true) return base;
+  // If phase-1 is spent and awaken is owed, enter phase 2 here so prop sync cannot soft-lock.
+  if (stillOwesAwaken && mergedH <= 0 && mergedS <= 0) {
+    return maybeApplyCpuAwakenedPhase(base, true);
+  }
 
-  const propMaxH = Math.floor(Number(propOpp.maxVaultHealth ?? propOpp.maxPP ?? 0));
-  const exMaxH = Math.floor(Number(existing.maxVaultHealth ?? existing.maxPP ?? 0));
-  const propMaxS = Math.floor(Number(propOpp.maxShieldStrength ?? 0));
-  const exMaxS = Math.floor(Number(existing.maxShieldStrength ?? 0));
+  // Awaken flags landed without HP (common Firestore race) — restore phase-2 pool once.
+  // Never refill when either side is already marked ready or both already awakened at 0/0
+  // (that means real damage/death, not a broken transition).
+  if (
+    eitherAwakened &&
+    existing.awakenedPhaseReady !== true &&
+    propOpp.awakenedPhaseReady !== true &&
+    mergedH <= 0 &&
+    mergedS <= 0 &&
+    !(existing.isAwakened === true && propOpp.isAwakened === true)
+  ) {
+    const repaired = refillAwakenedCombatPoolIfNeeded({
+      ...base,
+      isAwakened: true,
+      awakenedPhaseEntered: true,
+      awakenedPhaseReady: false,
+      isDefeated: false,
+      maxVaultHealth: capH,
+      maxHealth: capH,
+      maxShieldStrength: capS,
+    });
+    if (primaryCombatantHealth(repaired) > 0 || primaryCombatantShield(repaired) > 0) {
+      return repaired as Opponent;
+    }
+  }
+
+  if (!eitherAwakened) return base;
+
+  // Do not stamp awaken display onto CPUs that have no awaken profile (e.g. Unpowered Zombies).
+  if (!hasCpuAwakenConfig(existing) && !hasCpuAwakenConfig(propOpp) && !hasCpuAwakenConfig(base)) {
+    return {
+      ...base,
+      isAwakened: false,
+      awakenedPhaseEntered: false,
+      awakenedPhaseReady: false,
+      awakenedModeEnabled: false,
+    };
+  }
+
+  const poolH = capH > 0 ? capH : Math.max(
+    Math.floor(Number(propOpp.maxVaultHealth ?? propOpp.maxPP ?? 0)),
+    Math.floor(Number(existing.maxVaultHealth ?? existing.maxPP ?? 0))
+  );
+  const poolS = capS > 0 ? capS : Math.max(
+    Math.floor(Number(propOpp.maxShieldStrength ?? 0)),
+    Math.floor(Number(existing.maxShieldStrength ?? 0))
+  );
 
   return {
     ...base,
     isAwakened: true,
-    maxPP: Math.max(propMaxH, exMaxH) || base.maxPP,
-    maxVaultHealth: Math.max(propMaxH, exMaxH) || base.maxVaultHealth,
-    maxShieldStrength: Math.max(propMaxS, exMaxS) || base.maxShieldStrength,
+    awakenedPhaseEntered: true,
+    awakenedPhaseReady:
+      existing.awakenedPhaseReady === true ||
+      propOpp.awakenedPhaseReady === true ||
+      // Resources only imply ready once phase 2 has already started (not base-form spawn HP).
+      ((existing.isAwakened === true ||
+        existing.awakenedPhaseEntered === true ||
+        propOpp.isAwakened === true ||
+        propOpp.awakenedPhaseEntered === true) &&
+        (mergedH > 0 || mergedS > 0)) ||
+      defeated,
+    maxPP: poolH || base.maxPP,
+    maxVaultHealth: poolH || base.maxVaultHealth,
+    maxHealth: poolH || base.maxHealth,
+    maxShieldStrength: poolS || base.maxShieldStrength,
     moves:
       Array.isArray(existing.moves) && existing.moves.length > 0 ? existing.moves : propOpp.moves,
     image: existing.image ?? propOpp.image,
@@ -434,6 +576,8 @@ interface BattleEngineProps {
   isForestStageActive?: boolean; // Whether the forest stage is active (for field bonus)
   isMultiplayer?: boolean; // Whether this is a multiplayer battle (2-8 players)
   onIceGolemDefeated?: () => void; // Callback when an Ice Golem is defeated (triggers cutscene)
+  /** Island Raid / missions: true while CPU awaken cutscene is open (blocks premature victory modal). */
+  onCpuAwakeningChange?: (active: boolean) => void;
   gameId?: string; // Game ID for Island Raid battles (to sync move selections)
   candyChoice?: string; // RR Candy choice for Ch2-4 battles ('on-off' | 'up-down' | 'config')
   /** Mission battle arena backdrop URL (from mission BATTLE step backgroundImage). */
@@ -502,6 +646,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   isForestStageActive = false,
   isMultiplayer = false,
   onIceGolemDefeated,
+  onCpuAwakeningChange,
   gameId,
   candyChoice,
   customBackgroundUrl,
@@ -873,7 +1018,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
   }, [propCurrentWave, propMaxWaves]);
   
-  // Helper: Get alive enemies (not defeated)
+  // Helper: Get alive enemies (not defeated) — awaken bosses stay alive until phase 2 is cleared
   const getAliveEnemies = useCallback((enemies: Opponent[]): Opponent[] => {
     return enemies.filter(opp => {
       // Filter out allies (player and AI allies like Kon)
@@ -883,21 +1028,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       if (opp.isAI === true) return false;
       // Exclude specific ally IDs
       if (opp.id === 'kon_ally' || opp.id?.includes('_ally')) return false;
-      
-      // Now check if this enemy is alive
-      const health = opp.vaultHealth !== undefined 
-        ? Math.max(0, Number(opp.vaultHealth)) 
-        : Math.max(0, Number(opp.currentPP || 0));
-      const shield = Math.max(0, Number(opp.shieldStrength || 0));
-      const isDefeated = opp.isDefeated === true;
-      
-      // Enemy is alive if they have health > 0 OR shield > 0, AND not explicitly marked as defeated
-      // If isDefeated is undefined but health and shield are both 0, treat as defeated
-      const hasHealthOrShield = health > 0 || shield > 0;
-      const explicitlyDefeated = isDefeated === true;
-      
-      // Enemy is alive only if they have health/shield AND are not explicitly defeated
-      return hasHealthOrShield && !explicitlyDefeated;
+
+      // Still owe awaken → treat as alive so wave/victory cannot skip phase 2
+      if (cpuMustAwakenBeforeDefeat(opp)) return true;
+
+      return !isEnemyDefeatedForBattleProgression(opp);
     });
   }, []);
   
@@ -998,6 +1133,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     steps: MissionMediaSequenceStep[];
     title: string;
   } | null>(null);
+
+  useEffect(() => {
+    onCpuAwakeningChange?.(!!cpuAwakeningMedia);
+  }, [cpuAwakeningMedia, onCpuAwakeningChange]);
+
   const resumeCpuTurnAfterAwakeningRef = useRef<{
     newLog: string[];
     opponent: Opponent;
@@ -4011,34 +4151,83 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         const newTargetShield = Math.max(0, (target.shieldStrength || 0) - targetShieldDamage);
         const newTargetHealth = Math.max(0, targetHealth - targetHealthDamage);
         isInternalUpdateRef.current = true;
-        setOpponents(prev => {
-          const updated = prev.map(opp => {
-            if (opp.id !== targetId) return opp;
-            const updatedOpp = { ...opp, shieldStrength: newTargetShield };
-            if (opp.vaultHealth !== undefined) {
-              updatedOpp.vaultHealth = newTargetHealth;
-              updatedOpp.maxVaultHealth = targetMaxHealth;
-              if (checkIsCPUOpponent(opp)) updatedOpp.currentPP = newTargetHealth;
-            } else {
-              updatedOpp.currentPP = newTargetHealth;
-            }
-            const finalHealth = updatedOpp.vaultHealth !== undefined ? updatedOpp.vaultHealth : updatedOpp.currentPP;
-            updatedOpp.isDefeated = (finalHealth <= 0 && (updatedOpp.shieldStrength || 0) <= 0);
-            updatedOpp.defeatedAt = updatedOpp.isDefeated ? new Date() : undefined;
-            return updatedOpp;
-          });
+
+        const wasAwakenedBeforeSummon =
+          !!target.isAwakened || !!target.awakenedPhaseEntered;
+        let summonDamagedTarget: Opponent = {
+          ...target,
+          shieldStrength: newTargetShield,
+        };
+        if (target.vaultHealth !== undefined) {
+          summonDamagedTarget.vaultHealth = newTargetHealth;
+          summonDamagedTarget.maxVaultHealth = targetMaxHealth;
+          if (checkIsCPUOpponent(target)) summonDamagedTarget.currentPP = newTargetHealth;
+        } else {
+          summonDamagedTarget.currentPP = newTargetHealth;
+        }
+        summonDamagedTarget = maybeApplyCpuAwakenedPhase(
+          summonDamagedTarget,
+          checkIsCPUOpponent(target)
+        );
+        const summonTriggeredAwaken =
+          !wasAwakenedBeforeSummon && summonDamagedTarget.isAwakened
+            ? summonDamagedTarget
+            : null;
+        {
+          const finalHealth =
+            summonDamagedTarget.vaultHealth !== undefined
+              ? summonDamagedTarget.vaultHealth
+              : summonDamagedTarget.currentPP;
+          summonDamagedTarget.isDefeated =
+            (finalHealth ?? 0) <= 0 && (summonDamagedTarget.shieldStrength || 0) <= 0;
+          summonDamagedTarget.defeatedAt = summonDamagedTarget.isDefeated
+            ? new Date()
+            : undefined;
+        }
+
+        setOpponents((prev) => {
+          const updated = prev.map((opp) =>
+            opp.id === targetId ? { ...opp, ...summonDamagedTarget, id: opp.id } : opp
+          );
           if (onOpponentsUpdate) onOpponentsUpdate(updated);
-          setTimeout(() => { isInternalUpdateRef.current = false; }, 100);
+          setTimeout(() => {
+            isInternalUpdateRef.current = false;
+          }, 100);
           return updated;
         });
         // Summon lifetime is tracked by round ticks + HP (not decremented each attack)
         const summonLog = `⚡ ${summon.name} struck ${targetName} for ${summonDmg} ${elem} damage!`;
-        setBattleState(prev => {
-          const newLog = [...prev.battleLog, summonLog, ...(elemLine ? [elemLine] : [])];
+        const awakenLines = summonTriggeredAwaken
+          ? buildCpuAwakenedAnnouncementLines(summonTriggeredAwaken.name)
+          : [];
+        setBattleState((prev) => {
+          const newLog = [
+            ...prev.battleLog,
+            summonLog,
+            ...(elemLine ? [elemLine] : []),
+            ...awakenLines,
+          ];
           if (onBattleLogUpdate) onBattleLogUpdate(newLog);
           return { ...prev, battleLog: newLog };
         });
-        await new Promise(resolve => setTimeout(resolve, 400));
+        if (summonTriggeredAwaken) {
+          const st = filterCpuAwakeningAnimationSteps(
+            summonTriggeredAwaken.awakeningAnimation
+          );
+          if (st.length > 0) {
+            const awakenTitle = `${formatOpponentName(summonTriggeredAwaken.name)} — Awakening`;
+            await new Promise<void>((resolve) => {
+              pendingTurnOrderAwakeningResolveRef.current = resolve;
+              queueMicrotask(() =>
+                setCpuAwakeningMedia({
+                  steps: st,
+                  title: awakenTitle,
+                })
+              );
+            });
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 400));
         continue;
       }
 
@@ -4187,20 +4376,30 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                 });
                 return prev;
               }
-              const currentHealth = current.vaultHealth !== undefined ? current.vaultHealth : (current.currentPP ?? 0);
+              const currentHealth =
+                current.vaultHealth !== undefined && current.vaultHealth !== null
+                  ? Number(current.vaultHealth)
+                  : current.health !== undefined && current.health !== null
+                    ? Number(current.health)
+                    : Number(current.currentPP ?? 0);
               const currentShield = current.shieldStrength ?? 0;
               const newTargetShieldFromPrev = Math.max(0, currentShield - targetShieldDamage);
               const newTargetHealthFromPrev = Math.max(0, currentHealth - targetHealthDamage);
-              let computed = { ...current, shieldStrength: newTargetShieldFromPrev };
-              if (current.vaultHealth !== undefined) {
+              let computed: Opponent = {
+                ...current,
+                shieldStrength: newTargetShieldFromPrev,
+                currentPP: newTargetHealthFromPrev,
+                health: newTargetHealthFromPrev,
+              };
+              if (current.vaultHealth !== undefined || checkIsCPUOpponent(current)) {
                 computed.vaultHealth = newTargetHealthFromPrev;
-                computed.maxVaultHealth = current.maxVaultHealth ?? targetMaxHealth;
-                if (checkIsCPUOpponent(current)) computed.currentPP = newTargetHealthFromPrev;
-              } else {
-                computed.currentPP = newTargetHealthFromPrev;
+                computed.maxVaultHealth =
+                  current.maxVaultHealth ?? targetMaxHealth ?? newTargetHealthFromPrev;
               }
               const wasAwakenedBefore = !!current.isAwakened;
+              computed = preserveAwakenedReadyAfterDamage(current, computed);
               computed = maybeApplyCpuAwakenedPhase(computed, checkIsCPUOpponent(current));
+              computed = preserveAwakenedReadyAfterDamage(current, computed);
               if (!wasAwakenedBefore && computed.isAwakened) {
                 const awakenLines = buildCpuAwakenedAnnouncementLines(computed.name);
                 queueMicrotask(() => {
@@ -4211,9 +4410,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                   });
                 });
               }
-              const finalHealth = computed.vaultHealth !== undefined ? computed.vaultHealth : computed.currentPP;
-              const finalShield = computed.shieldStrength;
-              computed.isDefeated = (finalHealth ?? 0) <= 0 && (finalShield ?? 0) <= 0;
+              const finalHealth = primaryCombatantHealth(computed);
+              const finalShield = primaryCombatantShield(computed);
+              computed.isDefeated = isEnemyDefeatedForBattleProgression(computed);
               if (computed.isDefeated) {
                 (computed as any).defeatedAt = new Date();
                 const wasAlreadyDefeated = current.isDefeated === true;
@@ -4227,10 +4426,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                 computed.isDefeated = false;
                 (computed as any).defeatedAt = undefined;
               }
-              console.log(`📝 [Player Move] Updated opponent ${targetName} (${targetId}): health ${currentHealth} → ${newTargetHealthFromPrev}, shield ${currentShield} → ${newTargetShieldFromPrev}, isDefeated=${computed.isDefeated}`);
+              console.log(`📝 [Player Move] Updated opponent ${targetName} (${targetId}): health ${currentHealth} → ${finalHealth}, shield ${currentShield} → ${finalShield}, isDefeated=${computed.isDefeated}`);
               const updated = prev.map(opp => opp.id === targetId ? computed : opp);
               
-              console.log(`✅ [BattleEngine] Opponents updated. Target ${targetName} health: ${currentHealth} → ${newTargetHealthFromPrev}`);
+              console.log(`✅ [BattleEngine] Opponents updated. Target ${targetName} health: ${currentHealth} → ${finalHealth}`);
               
               // CRITICAL: Mark as internal update BEFORE calling onOpponentsUpdate
               // This prevents the useEffect from also calling onOpponentsUpdate with potentially stale data
@@ -6544,22 +6743,30 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // Apply damage from LATEST state so Island Raid enemy stats don't fluctuate and attacks register accurately
     const applyDamageToCurrent = (current: typeof targetOpponent, shieldDmg: number = shieldDamage) => {
       const newShield = Math.max(0, (current.shieldStrength || 0) - shieldDmg);
-      if (isCPUOpponent) {
-        const newHealth = Math.max(0, (current.currentPP ?? 0) - healthDamage);
-        const next = { ...current, shieldStrength: newShield, currentPP: newHealth };
-        if (current.vaultHealth !== undefined) {
-          next.vaultHealth = newHealth;
-          next.maxVaultHealth = current.maxVaultHealth || current.maxPP;
-        }
-        return next;
-      }
-      const currentHealth = current.vaultHealth !== undefined ? current.vaultHealth : (current.currentPP ?? 0);
+      // Island Raid / mission CPUs store fight HP in vaultHealth; currentPP can desync after awaken merges.
+      const currentHealth =
+        current.vaultHealth !== undefined && current.vaultHealth !== null
+          ? Number(current.vaultHealth)
+          : current.health !== undefined && current.health !== null
+            ? Number(current.health)
+            : Number(current.currentPP ?? 0);
       const newHealth = Math.max(0, currentHealth - healthDamage);
-      const maxVaultHealth = current.maxVaultHealth ?? Math.floor((current.maxPP || 1000) * 0.1);
-      const next = { ...current, shieldStrength: newShield, vaultHealth: newHealth, maxVaultHealth };
-      if (current.vaultHealth === undefined) next.currentPP = newHealth;
+      const next = {
+        ...current,
+        shieldStrength: newShield,
+        currentPP: newHealth,
+        health: newHealth,
+      };
+      if (current.vaultHealth !== undefined || checkIsCPUOpponent(current)) {
+        next.vaultHealth = newHealth;
+        next.maxVaultHealth =
+          current.maxVaultHealth || current.maxHealth || current.maxPP || newHealth;
+      }
       return next;
     };
+
+    /** Once phase-2 has been fightable, keep ready sticky so awaken-refill cannot wipe damage. */
+    const stickyReady = preserveAwakenedReadyAfterDamage;
 
     // For self-directed moves (Pebble Guard, Shield ON, etc.) do NOT apply damage or defeat logic to the caster
     let newTargetOpponent: typeof targetOpponent;
@@ -6579,10 +6786,23 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           const rm = Math.floor(denom * shieldOffMaxShieldRemoveFraction(ml));
           sd = Math.min(rm, current.shieldStrength || 0);
         }
-        let computed = applyDamageToCurrent(current, sd);
+        let computed: Opponent = applyDamageToCurrent(current, sd);
+        computed = stickyReady(current, computed);
         computed = maybeApplyCpuAwakenedPhase(computed, checkIsCPUOpponent(current));
-        computed.isDefeated = ((computed.vaultHealth ?? computed.currentPP) ?? 0) <= 0 && (computed.shieldStrength ?? 0) <= 0;
+        if (
+          checkIsCPUOpponent(computed) &&
+          cpuMustAwakenBeforeDefeat(computed) &&
+          primaryCombatantHealth(computed) <= 0
+        ) {
+          computed = maybeApplyCpuAwakenedPhase(computed, true);
+        }
+        computed = stickyReady(current, computed);
+        computed.isDefeated = isEnemyDefeatedForBattleProgression(computed);
         if (computed.isDefeated) (computed as any).defeatedAt = new Date();
+        else {
+          computed.isDefeated = false;
+          (computed as any).defeatedAt = undefined;
+        }
         const updated = prev.map(opp => opp.id === targetOpponent.id ? computed : opp);
         isInternalUpdateRef.current = true;
         if (onOpponentsUpdate) {
@@ -6609,12 +6829,24 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           const rm = Math.floor(denom * shieldOffMaxShieldRemoveFraction(ml));
           sdT = Math.min(rm, latestT.shieldStrength || 0);
         }
-        newTargetOpponent = maybeApplyCpuAwakenedPhase(
-          applyDamageToCurrent(latestT, sdT),
-          checkIsCPUOpponent(latestT)
-        );
+        {
+          const beforeHit = latestT;
+          let hit = preserveAwakenedReadyAfterDamage(beforeHit, applyDamageToCurrent(beforeHit, sdT));
+          hit = maybeApplyCpuAwakenedPhase(hit, checkIsCPUOpponent(beforeHit));
+          if (
+            checkIsCPUOpponent(hit) &&
+            cpuMustAwakenBeforeDefeat(hit) &&
+            primaryCombatantHealth(hit) <= 0
+          ) {
+            hit = maybeApplyCpuAwakenedPhase(hit, true);
+          }
+          newTargetOpponent = preserveAwakenedReadyAfterDamage(beforeHit, hit);
+        }
       }
-      newTargetOpponent.isDefeated = ((newTargetOpponent.vaultHealth ?? newTargetOpponent.currentPP) ?? 0) <= 0 && (newTargetOpponent.shieldStrength ?? 0) <= 0;
+      newTargetOpponent.isDefeated = isEnemyDefeatedForBattleProgression(newTargetOpponent);
+      if (!newTargetOpponent.isDefeated) {
+        newTargetOpponent.defeatedAt = undefined;
+      }
     } else {
       {
         const latestT =
@@ -6629,11 +6861,21 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           const rm = Math.floor(denom * shieldOffMaxShieldRemoveFraction(ml));
           sdT = Math.min(rm, latestT.shieldStrength || 0);
         }
-        newTargetOpponent = applyDamageToCurrent(latestT, sdT);
+        const beforeHit = latestT;
+        let hit = preserveAwakenedReadyAfterDamage(beforeHit, applyDamageToCurrent(beforeHit, sdT));
+        hit = maybeApplyCpuAwakenedPhase(hit, isCPUOpponent);
+        if (
+          isCPUOpponent &&
+          cpuMustAwakenBeforeDefeat(hit) &&
+          primaryCombatantHealth(hit) <= 0
+        ) {
+          hit = maybeApplyCpuAwakenedPhase(hit, true);
+        }
+        newTargetOpponent = preserveAwakenedReadyAfterDamage(beforeHit, hit);
       }
-      newTargetOpponent = maybeApplyCpuAwakenedPhase(newTargetOpponent, isCPUOpponent);
-      newTargetOpponent.isDefeated = ((newTargetOpponent.vaultHealth ?? newTargetOpponent.currentPP) ?? 0) <= 0 && (newTargetOpponent.shieldStrength ?? 0) <= 0;
+      newTargetOpponent.isDefeated = isEnemyDefeatedForBattleProgression(newTargetOpponent);
       if (newTargetOpponent.isDefeated) (newTargetOpponent as any).defeatedAt = new Date();
+      else (newTargetOpponent as any).defeatedAt = undefined;
       // Self-targeted skills (e.g. Stroke of Creation summon) must not overwrite the actual enemy.
       if (!isSelfTarget) {
         setOpponent(newTargetOpponent);
@@ -6837,13 +7079,58 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       });
     }
 
-    // Check for victory (health depleted)
+    // If phase-1 lethal hit somehow skipped awaken, force it before victory checks.
+    if (
+      !isSelfTarget &&
+      checkIsCPUOpponent(newTargetOpponent) &&
+      cpuMustAwakenBeforeDefeat(newTargetOpponent) &&
+      primaryCombatantHealth(newTargetOpponent) <= 0
+    ) {
+      newTargetOpponent = maybeApplyCpuAwakenedPhase(newTargetOpponent, true);
+    }
+
+    // Check for victory (health depleted). Awaken-capable CPUs are never "defeated" until phase 2.
     // Self-directed moves (Pebble Guard, etc.) never deplete the caster - skip defeat/victory logic
-    const opponentHealthDepleted = !isSelfTarget && (
-      checkIsCPUOpponent(targetOpponent) 
-        ? (newTargetOpponent.currentPP <= 0 || (newTargetOpponent.vaultHealth !== undefined && newTargetOpponent.vaultHealth <= 0))
-        : (newTargetOpponent.vaultHealth !== undefined ? newTargetOpponent.vaultHealth <= 0 : false)
-    );
+    let opponentHealthDepleted =
+      !isSelfTarget && isEnemyDefeatedForBattleProgression(newTargetOpponent);
+
+    // Broken awaken (AWAKENED + 0/0 + not yet a real phase-2 clear) — restore pool, do not end battle.
+    if (
+      !isSelfTarget &&
+      !opponentHealthDepleted &&
+      checkIsCPUOpponent(newTargetOpponent) &&
+      (newTargetOpponent.isAwakened === true || newTargetOpponent.awakenedPhaseEntered === true)
+    ) {
+      const repaired = refillAwakenedCombatPoolIfNeeded(newTargetOpponent) as typeof newTargetOpponent;
+      if (repaired !== newTargetOpponent) {
+        newTargetOpponent = repaired;
+        opponentHealthDepleted = isEnemyDefeatedForBattleProgression(newTargetOpponent);
+        if (isMultiplayer) {
+          setOpponents((prev) => {
+            const updated = prev.map((opp) =>
+              opp.id === targetOpponent.id ? newTargetOpponent : opp
+            );
+            isInternalUpdateRef.current = true;
+            if (onOpponentsUpdate) {
+              setTimeout(() => {
+                onOpponentsUpdate(updated);
+                setTimeout(() => {
+                  isInternalUpdateRef.current = false;
+                }, 100);
+              }, 0);
+            } else {
+              setTimeout(() => {
+                isInternalUpdateRef.current = false;
+              }, 100);
+            }
+            return updated;
+          });
+        } else if (!isSelfTarget) {
+          setOpponent(newTargetOpponent);
+        }
+        newLog.push(...buildCpuAwakenedAnnouncementLines(newTargetOpponent.name));
+      }
+    }
     
     // Set isDefeated flag when health reaches 0 (never for self-target)
     if (!isSelfTarget) {
@@ -8256,6 +8543,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   const handleCpuAwakeningMediaDismiss = () => {
     setCpuAwakeningMedia(null);
+    onCpuAwakeningChange?.(false);
     const resumeTurnOrder = pendingTurnOrderAwakeningResolveRef.current;
     pendingTurnOrderAwakeningResolveRef.current = null;
     if (resumeTurnOrder) resumeTurnOrder();
@@ -9299,7 +9587,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                       : Math.floor((opp.maxPP || 1000) * 0.1),
                   isPlayer: false,
                   enemyType: opp.enemyType,
-                  isAwakened: opp.isAwakened === true,
+                  isAwakened: opp.isAwakened === true && hasCpuAwakenConfig(opp),
                 }))
               : raidStyleArenaRows?.enemies ?? []
           }

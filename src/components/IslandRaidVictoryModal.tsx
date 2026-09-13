@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { doc, getDoc, updateDoc, increment } from 'firebase/firestore';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 
 interface IslandRaidVictoryModalProps {
@@ -21,6 +21,8 @@ interface IslandRaidVictoryModalProps {
   };
   customTitle?: string; // Optional custom title
   customSubtitle?: string; // Optional custom subtitle
+  /** Mission replay: rewards were already claimed on a prior completion. */
+  rewardsAlreadyCollected?: boolean;
 }
 
 const IslandRaidVictoryModal: React.FC<IslandRaidVictoryModalProps> = ({
@@ -30,7 +32,8 @@ const IslandRaidVictoryModal: React.FC<IslandRaidVictoryModalProps> = ({
   difficulty,
   rewards,
   customTitle,
-  customSubtitle
+  customSubtitle,
+  rewardsAlreadyCollected = false,
 }) => {
   const { currentUser } = useAuth();
   const [claimed, setClaimed] = useState(false);
@@ -132,212 +135,113 @@ const IslandRaidVictoryModal: React.FC<IslandRaidVictoryModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.85)',
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'center',
-      zIndex: 20000,
-      animation: 'fadeIn 0.3s ease-in'
-    }}
-    onClick={!claimed ? undefined : onClose}
+    <div
+      className="mst-victory-backdrop"
+      onClick={!claimed ? undefined : onClose}
     >
-      <div style={{
-        background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
-        borderRadius: '1.5rem',
-        padding: '2.5rem',
-        maxWidth: '600px',
-        width: '90%',
-        border: '3px solid #fbbf24',
-        boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)',
-        animation: 'slideUp 0.3s ease-out',
-        position: 'relative',
-        textAlign: 'center'
-      }}
-      onClick={(e) => e.stopPropagation()}
+      <div
+        className="mst-victory-modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mst-victory-title"
       >
         {!claimed ? (
           <>
-            {/* Title */}
-            <div style={{ marginBottom: '2rem' }}>
-              <h2 style={{
-                fontSize: '2.5rem',
-                fontWeight: 'bold',
-                color: '#fbbf24',
-                margin: 0,
-                textShadow: '0 2px 10px rgba(251, 191, 36, 0.5)',
-                marginBottom: '0.5rem'
-              }}>
-                {customTitle || '🏝️ ISLAND RAID COMPLETE!'}
-              </h2>
-              <p style={{
-                fontSize: '1.25rem',
-                color: '#cbd5e1',
-                margin: 0
-              }}>
-                {customSubtitle || `All ${waveNumber} waves cleared on ${difficulty.toUpperCase()} difficulty!`}
-              </p>
-            </div>
+            <div className="mst-victory-check" aria-hidden="true">✓</div>
+            <h2 id="mst-victory-title" className="mst-victory-title">
+              {customTitle || 'Island Raid Complete!'}
+            </h2>
+            <p className="mst-victory-subtitle">
+              {customSubtitle || `All ${waveNumber} waves cleared on ${difficulty.toUpperCase()} difficulty!`}
+            </p>
 
-            {/* Rewards Section */}
-            <div style={{
-              background: 'rgba(255, 255, 255, 0.05)',
-              borderRadius: '1rem',
-              padding: '2rem',
-              marginBottom: '2rem'
-            }}>
-              <h3 style={{
-                fontSize: '1.5rem',
-                color: '#fbbf24',
-                marginBottom: '1.5rem',
-                marginTop: 0
-              }}>
-                🎁 Rewards
-              </h3>
-
-              <div style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '1.5rem',
-                alignItems: 'center'
-              }}>
-                {/* PP Reward */}
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '1rem',
-                  background: 'rgba(251, 191, 36, 0.1)',
-                  padding: '1rem 1.5rem',
-                  borderRadius: '0.75rem',
-                  width: '100%',
-                  maxWidth: '400px'
-                }}>
-                  <div style={{ fontSize: '2.5rem' }}>🪙</div>
-                  <div style={{ flex: 1, textAlign: 'left' }}>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#fbbf24' }}>
-                      {rewards.pp} Power Points
-                    </div>
-                    <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-                      Already added to your account
+            <div className="mst-victory-rewards">
+              <h3 className="mst-victory-rewards-title">🎁 Rewards</h3>
+              {rewardsAlreadyCollected ? (
+                <p className="mst-victory-subtitle" style={{ marginBottom: '1rem' }}>
+                  You already collected this mission&apos;s rewards. Replays do not grant them again.
+                </p>
+              ) : null}
+              <div className="mst-victory-reward-list">
+                <div className="mst-victory-reward mst-victory-reward--pp">
+                  <div className="mst-victory-reward-icon" aria-hidden="true">🪙</div>
+                  <div className="mst-victory-reward-body">
+                    <div className="mst-victory-reward-amount">{rewards.pp} Power Points</div>
+                    <div className="mst-victory-reward-note">
+                      {rewardsAlreadyCollected
+                        ? 'Already collected'
+                        : 'Already added to your account'}
                     </div>
                   </div>
                 </div>
 
-                {/* XP Reward */}
                 {rewards.xp > 0 && (
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '1rem',
-                    background: 'rgba(34, 197, 94, 0.1)',
-                    padding: '1rem 1.5rem',
-                    borderRadius: '0.75rem',
-                    width: '100%',
-                    maxWidth: '400px'
-                  }}>
-                    <div style={{ fontSize: '2.5rem' }}>⭐</div>
-                    <div style={{ flex: 1, textAlign: 'left' }}>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#22c55e' }}>
-                        {rewards.xp} Experience Points
-                      </div>
-                      <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-                        Added to your account
+                  <div className="mst-victory-reward mst-victory-reward--xp">
+                    <div className="mst-victory-reward-icon" aria-hidden="true">⭐</div>
+                    <div className="mst-victory-reward-body">
+                      <div className="mst-victory-reward-amount">{rewards.xp} Experience Points</div>
+                      <div className="mst-victory-reward-note">
+                        {rewardsAlreadyCollected ? 'Already collected' : 'Added to your account'}
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* Truth Metal Reward */}
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '1rem',
-                  background: 'rgba(139, 92, 246, 0.1)',
-                  padding: '1rem 1.5rem',
-                  borderRadius: '0.75rem',
-                  width: '100%',
-                  maxWidth: '400px'
-                }}>
-                  <div style={{ fontSize: '2.5rem' }}>💎</div>
-                  <div style={{ flex: 1, textAlign: 'left' }}>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#8b5cf6' }}>
-                      {rewards.truthMetal} Truth Metal
-                    </div>
-                    <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-                      Rare currency
+                <div className="mst-victory-reward mst-victory-reward--tm">
+                  <div className="mst-victory-reward-icon" aria-hidden="true">💎</div>
+                  <div className="mst-victory-reward-body">
+                    <div className="mst-victory-reward-amount">{rewards.truthMetal} Truth Metal</div>
+                    <div className="mst-victory-reward-note">
+                      {rewardsAlreadyCollected ? 'Already collected' : 'Rare currency'}
                     </div>
                   </div>
                 </div>
 
-                {/* Elemental Ring Reward */}
                 {rewards.elementalRing && (
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '1rem',
-                    background: 'rgba(236, 72, 153, 0.1)',
-                    padding: '1rem 1.5rem',
-                    borderRadius: '0.75rem',
-                    width: '100%',
-                    maxWidth: '400px',
-                    border: '2px solid rgba(236, 72, 153, 0.3)'
-                  }}>
-                    <div style={{ fontSize: '2.5rem' }}>
-                      {rewards.elementalRing.image && (
-                        <img 
-                          src={rewards.elementalRing.image} 
+                  <div className="mst-victory-reward mst-victory-reward--artifact">
+                    <div className="mst-victory-reward-icon">
+                      {rewards.elementalRing.image ? (
+                        <img
+                          src={rewards.elementalRing.image}
                           alt={rewards.elementalRing.name}
-                          style={{ width: '48px', height: '48px', objectFit: 'contain' }}
                         />
+                      ) : (
+                        <span aria-hidden="true">💍</span>
                       )}
                     </div>
-                    <div style={{ flex: 1, textAlign: 'left' }}>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#ec4899' }}>
-                        {rewards.elementalRing.name}
-                      </div>
-                      <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-                        +1 Level to all {rewards.elementalRing.name.includes('Blaze') ? 'Fire' : 
-                                       rewards.elementalRing.name.includes('Terra') ? 'Earth' :
-                                       rewards.elementalRing.name.includes('Aqua') ? 'Water' : 'Air'} moves
+                    <div className="mst-victory-reward-body">
+                      <div className="mst-victory-reward-amount">{rewards.elementalRing.name}</div>
+                      <div className="mst-victory-reward-note">
+                        +1 Level to all{' '}
+                        {rewards.elementalRing.name.includes('Blaze')
+                          ? 'Fire'
+                          : rewards.elementalRing.name.includes('Terra')
+                            ? 'Earth'
+                            : rewards.elementalRing.name.includes('Aqua')
+                              ? 'Water'
+                              : 'Air'}{' '}
+                        moves
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* Captain Helmet Reward */}
                 {rewards.captainHelmet && (
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '1rem',
-                    background: 'rgba(251, 191, 36, 0.1)',
-                    padding: '1rem 1.5rem',
-                    borderRadius: '0.75rem',
-                    width: '100%',
-                    maxWidth: '400px',
-                    border: '2px solid rgba(251, 191, 36, 0.3)'
-                  }}>
-                    <div style={{ fontSize: '2.5rem' }}>
-                      <img 
-                        src="/images/Captains Helmet.png" 
+                  <div className="mst-victory-reward mst-victory-reward--helmet">
+                    <div className="mst-victory-reward-icon">
+                      <img
+                        src="/images/Captains Helmet.png"
                         alt="Captain's Helmet"
-                        style={{ width: '48px', height: '48px', objectFit: 'contain' }}
                         onError={(e) => {
                           (e.target as HTMLImageElement).style.display = 'none';
                           (e.target as HTMLImageElement).parentElement!.innerHTML = '🪖';
                         }}
                       />
                     </div>
-                    <div style={{ flex: 1, textAlign: 'left' }}>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#fbbf24' }}>
-                        Captain's Helmet
-                      </div>
-                      <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
+                    <div className="mst-victory-reward-body">
+                      <div className="mst-victory-reward-amount">Captain&apos;s Helmet</div>
+                      <div className="mst-victory-reward-note">
                         +5% damage boost to all Manifest moves
                       </div>
                     </div>
@@ -346,98 +250,36 @@ const IslandRaidVictoryModal: React.FC<IslandRaidVictoryModalProps> = ({
               </div>
             </div>
 
-            {/* Claim Button */}
             <button
+              type="button"
+              className="mst-victory-cta"
               onClick={handleClaimRewards}
               disabled={claiming}
-              style={{
-                background: claiming ? '#475569' : 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.75rem',
-                padding: '1rem 2rem',
-                fontSize: '1.25rem',
-                fontWeight: 'bold',
-                cursor: claiming ? 'not-allowed' : 'pointer',
-                width: '100%',
-                maxWidth: '400px',
-                transition: 'all 0.2s',
-                boxShadow: claiming ? 'none' : '0 4px 15px rgba(251, 191, 36, 0.4)'
-              }}
-              onMouseEnter={(e) => {
-                if (!claiming) {
-                  e.currentTarget.style.transform = 'scale(1.05)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'scale(1)';
-              }}
             >
               {claiming ? 'Verifying...' : 'Continue'}
             </button>
           </>
         ) : (
           <>
-            <div style={{ marginBottom: '2rem' }}>
-              <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>✅</div>
-              <h2 style={{
-                fontSize: '2rem',
-                fontWeight: 'bold',
-                color: '#10b981',
-                margin: 0
-              }}>
-                Rewards Claimed!
-              </h2>
-              <p style={{
-                fontSize: '1rem',
-                color: '#cbd5e1',
-                marginTop: '0.5rem'
-              }}>
-                Your rewards have been added to your account.
-              </p>
-            </div>
+            <div className="mst-victory-check" aria-hidden="true">✓</div>
+            <h2 id="mst-victory-title" className="mst-victory-title" style={{ color: '#6ee7a8' }}>
+              Rewards Claimed!
+            </h2>
+            <p className="mst-victory-subtitle">
+              Your rewards have been added to your account.
+            </p>
             <button
+              type="button"
+              className="mst-victory-cta mst-victory-cta--claimed"
               onClick={onClose}
-              style={{
-                background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.75rem',
-                padding: '1rem 2rem',
-                fontSize: '1.25rem',
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                width: '100%',
-                maxWidth: '400px',
-                transition: 'all 0.2s'
-              }}
             >
               Continue
             </button>
           </>
         )}
       </div>
-
-      <style>{`
-        @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-        @keyframes slideUp {
-          from { 
-            opacity: 0;
-            transform: translateY(50px);
-          }
-          to { 
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-      `}</style>
     </div>
   );
 };
 
 export default IslandRaidVictoryModal;
-
-

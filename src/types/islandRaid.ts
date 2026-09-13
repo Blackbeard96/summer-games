@@ -67,6 +67,10 @@ export interface IslandRaidEnemy {
   awakeningAnimation?: MissionMediaSequenceStep[];
   /** Runtime: phase-two active (synced in raid room when possible). */
   isAwakened?: boolean;
+  /** Sticky: phase-two transition already happened (survives isAwakened sync gaps). */
+  awakenedPhaseEntered?: boolean;
+  /** True once phase-2 HP pool has been applied (required before counting as defeated). */
+  awakenedPhaseReady?: boolean;
 }
 
 export interface IslandArtifact {

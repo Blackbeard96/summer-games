@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { MissionMediaSequenceStep } from '../types/missions';
+import { MissionRichText } from '../utils/missionRichText';
 
 export interface CpuAwakeningSequenceModalProps {
   open: boolean;
@@ -102,9 +103,12 @@ const CpuAwakeningSequenceModal: React.FC<CpuAwakeningSequenceModalProps> = ({
                 }}
               />
             ) : null}
-            <p style={{ fontSize: '1rem', lineHeight: 1.65, whiteSpace: 'pre-wrap', margin: 0, color: '#cbd5e1' }}>
-              {step.bodyText}
-            </p>
+            <MissionRichText
+              text={step.bodyText}
+              as="p"
+              style={{ fontSize: '1rem', lineHeight: 1.65, margin: 0, color: '#cbd5e1' }}
+              linkColor="#93c5fd"
+            />
           </div>
         )}
 
@@ -133,9 +137,12 @@ const CpuAwakeningSequenceModal: React.FC<CpuAwakeningSequenceModalProps> = ({
               <p style={{ color: '#f87171' }}>Video URL missing for this step.</p>
             )}
             {step.bodyText ? (
-              <p style={{ fontSize: '0.95rem', lineHeight: 1.6, whiteSpace: 'pre-wrap', margin: 0, color: '#cbd5e1' }}>
-                {step.bodyText}
-              </p>
+              <MissionRichText
+                text={step.bodyText}
+                as="p"
+                style={{ fontSize: '0.95rem', lineHeight: 1.6, margin: 0, color: '#cbd5e1' }}
+                linkColor="#93c5fd"
+              />
             ) : null}
           </div>
         )}

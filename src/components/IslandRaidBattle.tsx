@@ -20,10 +20,28 @@ import { grantArtifactToPlayer } from '../utils/artifactCompensation';
 import { mirrorProfileXpToProgressionSystems, trackPlayerAction } from '../utils/playerProgressionRewards';
 import CoopBattleRosterPanel from './coop/CoopBattleRosterPanel';
 import { transactionLeaveIslandRaidBattleRoom } from '../services/coopBattleRoomService';
+import {
+  isEnemyDefeatedForBattleProgression,
+  cpuMustAwakenBeforeDefeat,
+  hasCpuAwakenConfig,
+  primaryCombatantHealth,
+  preserveAwakenedReadyAfterDamage,
+  refillAwakenedCombatPoolIfNeeded,
+  resolveAwakenedHealthPool,
+  resolveAwakenedShieldPool,
+  mergeCombatResourceMostDamaged,
+  normalizeAwakenCombatantForProgression,
+  type AwakenCombatant,
+} from '../utils/cpuAwakenCombat';
 
 /** Copy CPU awaken profile from a room enemy row onto BattleEngine opponents[]. */
 function pickAwakenFieldsFromEnemy(enemy: Record<string, unknown>): Record<string, unknown> {
-  if (!enemy?.awakenedModeEnabled) return {};
+  const hasAwakenConfig =
+    enemy?.awakenedModeEnabled === true ||
+    (Array.isArray(enemy?.awakeningAnimation) && (enemy.awakeningAnimation as unknown[]).length > 0) ||
+    (enemy?.awakenedHealth != null && Number(enemy.awakenedHealth) > 0) ||
+    (Array.isArray(enemy?.awakenedMoves) && (enemy.awakenedMoves as unknown[]).length > 0);
+  if (!hasAwakenConfig) return {};
   const out: Record<string, unknown> = {
     awakenedModeEnabled: true,
     awakenAtHealthPercent:
@@ -48,6 +66,11 @@ function pickAwakenFieldsFromEnemy(enemy: Record<string, unknown>): Record<strin
     out.awakeningAnimation = (enemy as { awakeningAnimation: unknown[] }).awakeningAnimation;
   }
   if (enemy.isAwakened === true) out.isAwakened = true;
+  if (enemy.awakenedPhaseEntered === true) {
+    out.awakenedPhaseEntered = true;
+    out.isAwakened = true;
+  }
+  if (enemy.awakenedPhaseReady === true) out.awakenedPhaseReady = true;
   return out;
 }
 
@@ -66,7 +89,9 @@ function islandRaidExtractNumericField(opp: Record<string, unknown>, key: string
 function islandRaidExtractPrimaryEnemyHealth(opp: Record<string, unknown>): number | null {
   const vh = islandRaidExtractNumericField(opp, 'vaultHealth');
   if (vh !== null) return vh;
-  return islandRaidExtractNumericField(opp, 'health');
+  const h = islandRaidExtractNumericField(opp, 'health');
+  if (h !== null) return h;
+  return islandRaidExtractNumericField(opp, 'currentPP');
 }
 
 /**
@@ -155,6 +180,8 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
   const [difficulty, setDifficulty] = useState<'easy' | 'normal' | 'hard' | 'nightmare'>('normal');
   const [battleLog, setBattleLog] = useState<string[]>(['Welcome to Island Raid!']);
   const [showVictoryModal, setShowVictoryModal] = useState(false);
+  const [cpuAwakeningActive, setCpuAwakeningActive] = useState(false);
+  const victoryFinalizingRef = useRef(false);
   const [showLuzCutscene, setShowLuzCutscene] = useState(false);
   const [showKonCutscene, setShowKonCutscene] = useState(false);
   const [hasShownKonIntro, setHasShownKonIntro] = useState(false); // Track if Kon intro has been shown
@@ -175,6 +202,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
     truthMetal: number;
     elementalRing?: { id: string; name: string; image: string };
     captainHelmet?: boolean;
+    alreadyCollected?: boolean;
   } | null>(null);
   const [levelConfig, setLevelConfig] = useState<IslandRaidLevel | null>(null);
   const hasJoinedRef = useRef(false);
@@ -824,46 +852,70 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                   const localHealth = existingOpp ? (existingOpp.vaultHealth !== undefined ? existingOpp.vaultHealth : (existingOpp.health !== undefined ? existingOpp.health : firestoreHealth)) : firestoreHealth;
                   const localShield = existingOpp ? (existingOpp.shieldStrength || 0) : firestoreShield;
                   
-                  // Use minimum (most damage) to ensure consistency
-                  // This prevents stale Firestore data from overwriting correct local damage
-                  let mergedHealth = Math.min(firestoreHealth, localHealth);
-                  let mergedShield = Math.min(firestoreShield, localShield);
-                  // Awakened bosses: persist may carry full shields/HP while a snapshot races before React
-                  // applies the engine row — min(local, fs) would freeze partial shields. Take the better
-                  // of the two streams, clamped to the awakened caps from room vs local.
-                  if (existingOpp?.isAwakened || enemy.isAwakened === true) {
-                    const localDead =
-                      existingOpp?.isDefeated === true ||
-                      (localHealth <= 0 && localShield <= 0);
-                    const fsDead =
-                      (enemy as IslandRaidEnemy & { isDefeated?: boolean }).isDefeated === true ||
-                      (firestoreHealth <= 0 && firestoreShield <= 0);
-                    // Never "max merge" a dead boss back to full HP/shields when Firestore or local is stale.
-                    if (localDead || fsDead) {
+                  // Use minimum (most damage) for ALL combatants — including awakened bosses.
+                  // Max-merge previously "healed" The Noise between attacks from stale Firestore values.
+                  let mergedHealth = mergeCombatResourceMostDamaged(firestoreHealth, localHealth);
+                  let mergedShield = mergeCombatResourceMostDamaged(firestoreShield, localShield);
+                  if (existingOpp?.isAwakened || enemy.isAwakened === true || existingOpp?.awakenedPhaseEntered || enemy.awakenedPhaseEntered === true) {
+                    const phaseReady =
+                      existingOpp?.awakenedPhaseReady === true ||
+                      (enemy as IslandRaidEnemy).awakenedPhaseReady === true ||
+                      localHealth > 0 ||
+                      localShield > 0 ||
+                      firestoreHealth > 0 ||
+                      firestoreShield > 0;
+                    const poolCapH = resolveAwakenedHealthPool({
+                      ...pickAwakenFieldsFromEnemy(enemy as unknown as Record<string, unknown>),
+                      maxHealth: enemy.maxHealth,
+                      maxVaultHealth: existingOpp?.maxVaultHealth ?? enemy.maxHealth,
+                      maxPP: existingOpp?.maxPP,
+                      awakenedHealth: existingOpp?.awakenedHealth ?? enemy.awakenedHealth,
+                    } as AwakenCombatant);
+                    const poolCapS = resolveAwakenedShieldPool({
+                      ...pickAwakenFieldsFromEnemy(enemy as unknown as Record<string, unknown>),
+                      maxShieldStrength:
+                        enemy.maxShieldStrength || existingOpp?.maxShieldStrength || 0,
+                      awakenedShields: existingOpp?.awakenedShields ?? enemy.awakenedShields,
+                    } as AwakenCombatant);
+
+                    mergedHealth = mergeCombatResourceMostDamaged(
+                      firestoreHealth,
+                      localHealth,
+                      poolCapH
+                    );
+                    mergedShield = mergeCombatResourceMostDamaged(
+                      firestoreShield,
+                      localShield,
+                      poolCapS
+                    );
+
+                    const trulyDead =
+                      phaseReady &&
+                      (existingOpp?.isDefeated === true ||
+                        (enemy as IslandRaidEnemy & { isDefeated?: boolean }).isDefeated === true) &&
+                      mergedHealth <= 0 &&
+                      mergedShield <= 0;
+                    if (trulyDead) {
                       mergedHealth = 0;
                       mergedShield = 0;
-                    } else {
-                      const capH = Math.max(
-                        Number(enemy.maxHealth || 0),
-                        Number(
-                          existingOpp?.maxVaultHealth ??
-                            existingOpp?.maxHealth ??
-                            existingOpp?.maxPP ??
-                            0
-                        )
-                      );
-                      const capS = Math.max(
-                        Number(enemy.maxShieldStrength || 0),
-                        Number(existingOpp?.maxShieldStrength || 0)
-                      );
-                      mergedHealth =
-                        capH > 0
-                          ? Math.min(Math.max(firestoreHealth, localHealth), capH)
-                          : Math.max(firestoreHealth, localHealth);
-                      mergedShield =
-                        capS > 0
-                          ? Math.min(Math.max(firestoreShield, localShield), capS)
-                          : Math.max(firestoreShield, localShield);
+                    } else if (!phaseReady && mergedHealth <= 0 && mergedShield <= 0) {
+                      // One-shot awaken pool only when neither stream has applied phase-2 stats yet.
+                      const refillProbe = {
+                        ...pickAwakenFieldsFromEnemy(enemy as unknown as Record<string, unknown>),
+                        isAwakened: true,
+                        awakenedPhaseEntered: true,
+                        awakenedPhaseReady: false,
+                        isDefeated: false,
+                        maxHealth: poolCapH,
+                        maxVaultHealth: poolCapH,
+                        maxShieldStrength: poolCapS,
+                        awakenedHealth:
+                          existingOpp?.awakenedHealth ?? enemy.awakenedHealth,
+                        awakenedShields:
+                          existingOpp?.awakenedShields ?? enemy.awakenedShields,
+                      } as AwakenCombatant;
+                      mergedHealth = resolveAwakenedHealthPool(refillProbe);
+                      mergedShield = resolveAwakenedShieldPool(refillProbe);
                     }
                   }
 
@@ -885,45 +937,246 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                       ? (enemy as any).moves
                       : existingOpp?.moves;
 
-                  const mergedDefeated = mergedHealth <= 0 && mergedShield <= 0;
-                  const defeatOverlay = mergedDefeated
-                    ? { isDefeated: true as const, defeatedAt: new Date() }
-                    : {};
+                  const awakenFields: Record<string, unknown> = {
+                    ...pickAwakenFieldsFromEnemy(enemy as unknown as Record<string, unknown>),
+                    // Prefer local awaken flags so a lagging Firestore 0/0 cannot erase phase 2.
+                    // Only for enemies that actually have an awaken profile — never stamp zombies.
+                    ...(hasCpuAwakenConfig({
+                      ...pickAwakenFieldsFromEnemy(enemy as unknown as Record<string, unknown>),
+                      awakenedModeEnabled:
+                        existingOpp?.awakenedModeEnabled === true ||
+                        enemy.awakenedModeEnabled === true,
+                      awakenedHealth: existingOpp?.awakenedHealth ?? enemy.awakenedHealth,
+                      awakenedMoves: existingOpp?.awakenedMoves ?? enemy.awakenedMoves,
+                      awakeningAnimation:
+                        existingOpp?.awakeningAnimation ?? enemy.awakeningAnimation,
+                    } as AwakenCombatant) &&
+                    (existingOpp?.isAwakened || existingOpp?.awakenedPhaseEntered)
+                      ? { isAwakened: true, awakenedPhaseEntered: true, awakenedModeEnabled: true }
+                      : {}),
+                  };
+                  const enemyHasAwaken = hasCpuAwakenConfig({
+                    ...awakenFields,
+                    awakenedModeEnabled:
+                      awakenFields.awakenedModeEnabled === true ||
+                      existingOpp?.awakenedModeEnabled === true ||
+                      enemy.awakenedModeEnabled === true,
+                    awakenedHealth:
+                      awakenFields.awakenedHealth ??
+                      existingOpp?.awakenedHealth ??
+                      enemy.awakenedHealth,
+                    awakenedMoves:
+                      awakenFields.awakenedMoves ??
+                      existingOpp?.awakenedMoves ??
+                      enemy.awakenedMoves,
+                    awakeningAnimation:
+                      awakenFields.awakeningAnimation ??
+                      existingOpp?.awakeningAnimation ??
+                      enemy.awakeningAnimation,
+                  } as AwakenCombatant);
+                  let rowHealth = mergedHealth;
+                  let rowShield = mergedShield;
+                  const inPhase2Already =
+                    enemyHasAwaken &&
+                    (awakenFields.isAwakened === true ||
+                      existingOpp?.isAwakened === true ||
+                      awakenFields.awakenedPhaseEntered === true ||
+                      existingOpp?.awakenedPhaseEntered === true ||
+                      awakenFields.awakenedPhaseReady === true ||
+                      existingOpp?.awakenedPhaseReady === true ||
+                      (enemy as IslandRaidEnemy).awakenedPhaseReady === true);
 
-                  const baseRow = {
+                  const awakenProbe = {
+                    ...awakenFields,
+                    vaultHealth: rowHealth,
+                    health: rowHealth,
+                    shieldStrength: rowShield,
+                    maxHealth: enemy.maxHealth || existingOpp?.maxHealth || 100,
+                    maxVaultHealth:
+                      existingOpp?.maxVaultHealth ?? enemy.maxHealth ?? 100,
+                    maxPP: existingOpp?.maxPP ?? enemy.maxHealth ?? 100,
+                    maxShieldStrength:
+                      enemy.maxShieldStrength || existingOpp?.maxShieldStrength || 0,
+                    isAwakened:
+                      enemyHasAwaken &&
+                      (awakenFields.isAwakened === true || existingOpp?.isAwakened === true),
+                    awakenedPhaseEntered:
+                      enemyHasAwaken &&
+                      (awakenFields.awakenedPhaseEntered === true ||
+                        existingOpp?.awakenedPhaseEntered === true),
+                    // Ready only after phase 2 has actually started — never from base-form HP alone
+                    // (that made The Noise spawn already AWAKENED).
+                    awakenedPhaseReady:
+                      enemyHasAwaken &&
+                      (existingOpp?.awakenedPhaseReady === true ||
+                        (enemy as IslandRaidEnemy).awakenedPhaseReady === true ||
+                        (inPhase2Already &&
+                          (localHealth > 0 ||
+                            localShield > 0 ||
+                            firestoreHealth > 0 ||
+                            firestoreShield > 0))),
+                  } as AwakenCombatant;
+                  const refilled = enemyHasAwaken
+                    ? refillAwakenedCombatPoolIfNeeded(awakenProbe)
+                    : awakenProbe;
+                  if (refilled !== awakenProbe) {
+                    rowHealth = primaryCombatantHealth(refilled);
+                    rowShield = Math.max(0, Math.floor(Number(refilled.shieldStrength ?? 0)));
+                    Object.assign(awakenFields, {
+                      isAwakened: true,
+                      awakenedPhaseEntered: true,
+                      awakenedPhaseReady: true,
+                      awakenedModeEnabled: true,
+                      maxHealth: refilled.maxHealth,
+                      maxVaultHealth: refilled.maxVaultHealth,
+                      maxShieldStrength: refilled.maxShieldStrength,
+                    });
+                    mergedHealth = rowHealth;
+                    mergedShield = rowShield;
+                  }
+
+                  const phase2Flags =
+                    enemyHasAwaken &&
+                    (awakenFields.isAwakened === true ||
+                      existingOpp?.isAwakened === true ||
+                      awakenFields.awakenedPhaseEntered === true ||
+                      existingOpp?.awakenedPhaseEntered === true ||
+                      awakenFields.awakenedPhaseReady === true ||
+                      existingOpp?.awakenedPhaseReady === true ||
+                      (enemy as IslandRaidEnemy).awakenedPhaseReady === true);
+
+                  const provisionalForDefeat = {
+                    ...awakenFields,
+                    vaultHealth: rowHealth,
+                    health: rowHealth,
+                    shieldStrength: rowShield,
+                    isAwakened:
+                      enemyHasAwaken &&
+                      (awakenFields.isAwakened === true || existingOpp?.isAwakened === true),
+                    awakenedPhaseEntered:
+                      enemyHasAwaken &&
+                      (awakenFields.awakenedPhaseEntered === true ||
+                        existingOpp?.awakenedPhaseEntered === true),
+                    // Sticky ready only once phase 2 started (or was already marked ready).
+                    awakenedPhaseReady:
+                      enemyHasAwaken &&
+                      (awakenFields.awakenedPhaseReady === true ||
+                        existingOpp?.awakenedPhaseReady === true ||
+                        (enemy as IslandRaidEnemy).awakenedPhaseReady === true ||
+                        (phase2Flags && (rowHealth > 0 || rowShield > 0))),
+                    isDefeated:
+                      existingOpp?.isDefeated === true ||
+                      (enemy as IslandRaidEnemy & { isDefeated?: boolean }).isDefeated === true,
+                  };
+                  // Phase-1 lethal hit on an awaken boss is NOT a defeat — battle continues after awaken.
+                  const mergedDefeated = isEnemyDefeatedForBattleProgression(
+                    provisionalForDefeat as AwakenCombatant
+                  );
+                  // Only stamp isDefeated when progression says the clear is real (phase-2 ready + empty).
+                  // Do not keep a phase-1 isDefeated flag — that ended missions before awaken.
+                  const defeatOverlay =
+                    mergedDefeated
+                      ? { isDefeated: true as const, defeatedAt: new Date() }
+                      : { isDefeated: false as const, defeatedAt: undefined };
+
+                  const stickyReady =
+                    enemyHasAwaken &&
+                    (provisionalForDefeat.awakenedPhaseReady === true ||
+                      mergedDefeated ||
+                      (provisionalForDefeat.isAwakened === true &&
+                        (rowHealth > 0 || rowShield > 0)));
+
+                  let baseRow: Record<string, unknown> = {
                     id: enemy.id,
                     name: enemy.name,
-                    currentPP: mergedHealth,
-                    maxPP: enemy.maxHealth || 100,
-                    shieldStrength: mergedShield, // Use merged value (most damage)
-                    maxShieldStrength: enemy.maxShieldStrength || 0,
+                    currentPP: rowHealth,
+                    maxPP: Number(awakenFields.maxHealth) || enemy.maxHealth || 100,
+                    shieldStrength: rowShield,
+                    maxShieldStrength:
+                      Number(awakenFields.maxShieldStrength) ||
+                      enemy.maxShieldStrength ||
+                      0,
                     level: enemy.level || existingOpp?.level || 1,
-                    health: mergedHealth, // Use merged value (most damage)
-                    maxHealth: enemy.maxHealth || 100,
+                    health: rowHealth,
+                    maxHealth: Number(awakenFields.maxHealth) || enemy.maxHealth || 100,
                     type: enemy.type || existingOpp?.type || 'zombie',
                     image: enemy.image || existingOpp?.image || undefined,
-                    vaultHealth: mergedHealth, // Use merged value (most damage)
-                    maxVaultHealth: enemy.maxHealth || 100,
+                    vaultHealth: rowHealth,
+                    maxVaultHealth:
+                      Number(awakenFields.maxVaultHealth) || enemy.maxHealth || 100,
                     waveNumber: enemyWave, // CRITICAL: Set waveNumber for filtering
                     moves: embeddedMoves,
                     enemyType:
                       Object.prototype.hasOwnProperty.call(enemy, 'enemyType')
                         ? enemy.enemyType
                         : existingOpp?.enemyType,
-                    ...pickAwakenFieldsFromEnemy(enemy as unknown as Record<string, unknown>),
+                    ...awakenFields,
                     ...defeatOverlay,
+                    ...(stickyReady ? { awakenedPhaseReady: true } : {}),
+                    // Never leave awaken display flags on enemies without an awaken profile.
+                    ...(!enemyHasAwaken
+                      ? {
+                          isAwakened: false,
+                          awakenedPhaseEntered: false,
+                          awakenedPhaseReady: false,
+                          awakenedModeEnabled: false,
+                        }
+                      : {}),
                   };
 
-                  if (existingOpp?.isAwakened) {
+                  // Final guard: AWAKENED + empty + not defeated → restore phase-2 pool.
+                  baseRow = normalizeAwakenCombatantForProgression(baseRow as AwakenCombatant) as Record<
+                    string,
+                    unknown
+                  >;
+                  if (
+                    enemyHasAwaken &&
+                    baseRow.isAwakened === true &&
+                    Number(baseRow.vaultHealth || baseRow.health || 0) > 0
+                  ) {
+                    baseRow.awakenedPhaseReady = true;
+                    baseRow.isDefeated = false;
+                    baseRow.defeatedAt = undefined;
+                  }
+
+                  if (
+                    enemyHasAwaken &&
+                    (existingOpp?.isAwakened || existingOpp?.awakenedPhaseEntered)
+                  ) {
+                    const poolH = resolveAwakenedHealthPool({
+                      ...existingOpp,
+                      ...awakenFields,
+                      awakenedHealth:
+                        existingOpp.awakenedHealth ?? enemy.awakenedHealth,
+                      maxVaultHealth: existingOpp.maxVaultHealth ?? enemy.maxHealth,
+                      maxHealth: existingOpp.maxHealth ?? enemy.maxHealth,
+                    } as AwakenCombatant);
+                    const poolS = resolveAwakenedShieldPool({
+                      ...existingOpp,
+                      ...awakenFields,
+                      awakenedShields:
+                        existingOpp.awakenedShields ?? enemy.awakenedShields,
+                      maxShieldStrength:
+                        existingOpp.maxShieldStrength ?? enemy.maxShieldStrength,
+                    } as AwakenCombatant);
                     return {
                       ...baseRow,
                       isAwakened: true,
+                      awakenedPhaseEntered: true,
+                      awakenedPhaseReady:
+                        existingOpp.awakenedPhaseReady === true ||
+                        mergedHealth > 0 ||
+                        mergedShield > 0 ||
+                        existingOpp.isDefeated === true ||
+                        mergedDefeated,
                       currentPP: mergedHealth,
-                      maxPP: existingOpp.maxPP ?? baseRow.maxPP,
+                      maxPP: poolH,
                       vaultHealth: mergedHealth,
-                      maxVaultHealth: existingOpp.maxVaultHealth ?? baseRow.maxVaultHealth,
+                      maxVaultHealth: poolH,
+                      health: mergedHealth,
+                      maxHealth: poolH,
                       shieldStrength: mergedShield,
-                      maxShieldStrength: existingOpp.maxShieldStrength ?? baseRow.maxShieldStrength,
+                      maxShieldStrength: poolS,
                       moves: existingOpp.moves ?? baseRow.moves,
                       image: existingOpp.image ?? baseRow.image,
                       photoURL: (existingOpp as { photoURL?: string }).photoURL ?? (baseRow as { photoURL?: string }).photoURL,
@@ -952,17 +1205,9 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 // Immediately check if all enemies are defeated after updating opponents
                 // This ensures wave progression happens as soon as enemies are defeated
                 // CRITICAL: Check BOTH health AND shield (consistent with main check)
-                const allDefeated = opponentsList.length > 0 && opponentsList.every(opp => {
-                  const health = opp.vaultHealth !== undefined 
-                    ? Math.max(0, Number(opp.vaultHealth))
-                    : (opp.health !== undefined 
-                      ? Math.max(0, Number(opp.health))
-                      : (opp.currentPP !== undefined ? Math.max(0, Number(opp.currentPP)) : 0));
-                  const shield = opp.shieldStrength !== undefined 
-                    ? Math.max(0, Number(opp.shieldStrength))
-                    : 0;
-                  return health <= 0 && shield <= 0;
-                });
+                const allDefeated =
+                  opponentsList.length > 0 &&
+                  opponentsList.every((opp) => isEnemyDefeatedForBattleProgression(opp));
                 
                 if (allDefeated && !isProcessingWaveTransitionRef.current && !waveAdvanceLockRef.current) {
                   const currentWave = room.waveNumber || waveNumber;
@@ -1426,7 +1671,6 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
     }
     
     // Check if all enemies are defeated (only check current wave enemies)
-    const firestoreEnemies = battleRoom.enemies || [];
     const currentWaveEnemies = opponents.filter(opp => {
       // Prioritize waveNumber property on opponent object
       if (opp.waveNumber !== undefined && opp.waveNumber !== null) {
@@ -1449,45 +1693,32 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
     
     let allEnemiesDefeated = false;
     if (currentWaveEnemies.length > 0) {
-      allEnemiesDefeated = currentWaveEnemies.every(opp => {
-        let health = opp.vaultHealth !== undefined 
-          ? Math.max(0, Number(opp.vaultHealth))
-          : (opp.health !== undefined 
-            ? Math.max(0, Number(opp.health))
-            : (opp.currentPP !== undefined ? Math.max(0, Number(opp.currentPP)) : 0));
-        let shield = opp.shieldStrength !== undefined 
-          ? Math.max(0, Number(opp.shieldStrength))
-          : 0;
-        
-        // Check Firestore if local state shows alive
-        if (health > 0 || shield > 0) {
-          const firestoreEnemy = firestoreEnemies.find((e: any) => e.id === opp.id);
-          if (firestoreEnemy) {
-            const fsHealth = firestoreEnemy.health !== undefined ? Math.max(0, Number(firestoreEnemy.health)) : health;
-            const fsShield = firestoreEnemy.shieldStrength !== undefined ? Math.max(0, Number(firestoreEnemy.shieldStrength)) : shield;
-            if (fsHealth <= 0 && fsShield <= 0) {
-              health = 0;
-              shield = 0;
-            }
-          }
-        }
-        
-        return health <= 0 && shield <= 0;
-      });
+      const normalized = currentWaveEnemies.map((opp) =>
+        normalizeAwakenCombatantForProgression(opp as AwakenCombatant)
+      );
+      if (
+        normalized.some((opp, i) => {
+          const b = currentWaveEnemies[i];
+          return primaryCombatantHealth(opp) !== primaryCombatantHealth(b as AwakenCombatant);
+        })
+      ) {
+        setOpponents((prev) =>
+          prev.map((opp) => {
+            const idx = currentWaveEnemies.findIndex((e) => e.id === opp.id);
+            return idx >= 0 ? { ...opp, ...normalized[idx] } : opp;
+          })
+        );
+        debug.groupEnd();
+        return false;
+      }
+      allEnemiesDefeated = normalized.every((opp) => isEnemyDefeatedForBattleProgression(opp));
     } else {
       // Fallback: if no enemies match current wave, check if ALL opponents are defeated
       debug.warn('IslandRaidBattle', 'No enemies found for current wave, checking all opponents as fallback');
-      allEnemiesDefeated = opponents.every(opp => {
-        let health = opp.vaultHealth !== undefined 
-          ? Math.max(0, Number(opp.vaultHealth))
-          : (opp.health !== undefined 
-            ? Math.max(0, Number(opp.health))
-            : (opp.currentPP !== undefined ? Math.max(0, Number(opp.currentPP)) : 0));
-        let shield = opp.shieldStrength !== undefined 
-          ? Math.max(0, Number(opp.shieldStrength))
-          : 0;
-        return health <= 0 && shield <= 0;
-      });
+      const normalized = opponents.map((opp) =>
+        normalizeAwakenCombatantForProgression(opp as AwakenCombatant)
+      );
+      allEnemiesDefeated = normalized.every((opp) => isEnemyDefeatedForBattleProgression(opp));
     }
     
     debug.log('IslandRaidBattle', 'Defeat Check', {
@@ -1704,44 +1935,128 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
   useEffect(() => {
     if (!battleRoom || !opponents.length) return;
     if (battleRoom.status === 'victory' || battleRoom.status === 'defeated') return;
+    if (showVictoryModal) return;
 
     // Check if all enemies in final wave are defeated
-    const firestoreEnemies = battleRoom.enemies || [];
     const finalWave = battleRoom.maxWaves || 5;
     
     // Only check for victory if we're on the final wave
     if (waveNumber < finalWave) return;
     
     // Check if all enemies in final wave are defeated
-    const finalWaveEnemies = opponents.filter(opp => {
+    let finalWaveEnemies = opponents.filter(opp => {
       const oppWave = opp.waveNumber !== undefined && opp.waveNumber !== null 
         ? opp.waveNumber 
-        : (opp.id?.match(/enemy_w(\d+)/)?.[1] ? parseInt(opp.id.match(/enemy_w(\d+)/)?.[1] || '0') : finalWave);
+        : (opp.id?.match(/enemy_w(\d+)/)?.[1]
+            ? parseInt(opp.id.match(/enemy_w(\d+)/)?.[1] || '0', 10)
+            : opp.id?.match(/^enemy_(\d+)_/)
+              ? parseInt(opp.id.match(/^enemy_(\d+)_/)?.[1] || '0', 10)
+              : finalWave);
       return oppWave === finalWave;
     });
-    
-    const allFinalWaveEnemiesDefeated = finalWaveEnemies.length > 0 && finalWaveEnemies.every(opp => {
-      const health = opp.vaultHealth !== undefined 
-        ? Math.max(0, Number(opp.vaultHealth))
-        : (opp.health !== undefined ? Math.max(0, Number(opp.health)) : 0);
-      const shield = opp.shieldStrength !== undefined ? Math.max(0, Number(opp.shieldStrength)) : 0;
-      return health <= 0 && shield <= 0;
+    // Mission / single-wave rooms sometimes omit or mismatch waveNumber — fall back to all foes.
+    if (finalWaveEnemies.length === 0 || finalWave === 1) {
+      finalWaveEnemies = opponents;
+    }
+
+    if (finalWaveEnemies.length === 0) return;
+
+    // Repair stuck awaken pools (0/max with AWAKENED tag) before judging victory.
+    const normalized = finalWaveEnemies.map((opp) =>
+      normalizeAwakenCombatantForProgression(opp as AwakenCombatant)
+    );
+    const needsRepair = normalized.some((opp, i) => {
+      const before = finalWaveEnemies[i];
+      return (
+        primaryCombatantHealth(opp) !== primaryCombatantHealth(before as AwakenCombatant) ||
+        (opp.shieldStrength || 0) !== (before.shieldStrength || 0) ||
+        opp.awakenedPhaseReady !== before.awakenedPhaseReady ||
+        opp.isAwakened !== before.isAwakened
+      );
     });
+    if (needsRepair) {
+      setOpponents((prev) =>
+        prev.map((opp) => {
+          const idx = finalWaveEnemies.findIndex((e) => e.id === opp.id);
+          return idx >= 0 ? { ...opp, ...normalized[idx] } : opp;
+        })
+      );
+      return;
+    }
+
+    // Still owe awaken phase — do not complete.
+    if (normalized.some((opp) => cpuMustAwakenBeforeDefeat(opp))) {
+      return;
+    }
+
+    // Mid awaken transition (flags set, pool not fightable yet) — refill then wait.
+    if (
+      normalized.some(
+        (opp) =>
+          hasCpuAwakenConfig(opp) &&
+          (opp.isAwakened === true || opp.awakenedPhaseEntered === true) &&
+          opp.awakenedPhaseReady !== true
+      )
+    ) {
+      setOpponents((prev) =>
+        prev.map((opp) => {
+          const idx = finalWaveEnemies.findIndex((e) => e.id === opp.id);
+          if (idx < 0) return opp;
+          return {
+            ...opp,
+            ...refillAwakenedCombatPoolIfNeeded({
+              ...(normalized[idx] as AwakenCombatant),
+              isAwakened: true,
+              awakenedPhaseEntered: true,
+              isDefeated: false,
+            }),
+          };
+        })
+      );
+      return;
+    }
+
+    // Never overlay MISSION COMPLETE on the awaken cutscene.
+    if (cpuAwakeningActive) {
+      return;
+    }
+
+    // Awaken bosses must have been fightable in phase 2, then emptied.
+    if (
+      normalized.some(
+        (opp) => hasCpuAwakenConfig(opp) && opp.awakenedPhaseReady !== true
+      )
+    ) {
+      return;
+    }
     
-    if (allFinalWaveEnemiesDefeated && waveNumber >= finalWave) {
-      console.log(`\n${'='.repeat(60)}`);
-      console.log(`🏆 [VICTORY] All waves complete! Wave ${waveNumber}/${battleRoom.maxWaves || 5}`);
-      console.log(`${'='.repeat(60)}\n`);
-      // All waves complete - show victory modal
-      const completeRaid = async () => {
-        try {
-          const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
-          const roomSnap = await getDoc(battleRoomRef);
-          const roomData = roomSnap.data() as Record<string, unknown> | undefined;
-          if (!roomData) {
-            console.error('🏝️ Victory finalize: battle room doc missing', gameId);
-            return;
-          }
+    const allFinalWaveEnemiesDefeated = normalized.every((opp) =>
+      isEnemyDefeatedForBattleProgression(opp)
+    );
+
+    if (!allFinalWaveEnemiesDefeated) {
+      return;
+    }
+
+    // Avoid overlapping finalize runs once completeRaid has started.
+    if (victoryFinalizingRef.current) return;
+    
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`🏆 [VICTORY] All waves complete! Wave ${waveNumber}/${battleRoom.maxWaves || 5}`);
+    console.log(`${'='.repeat(60)}\n`);
+    // All waves complete - show victory modal
+    const completeRaid = async () => {
+      if (victoryFinalizingRef.current) return;
+      victoryFinalizingRef.current = true;
+      try {
+        const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
+        const roomSnap = await getDoc(battleRoomRef);
+        const roomData = roomSnap.data() as Record<string, unknown> | undefined;
+        if (!roomData) {
+          console.error('🏝️ Victory finalize: battle room doc missing', gameId);
+          victoryFinalizingRef.current = false;
+          return;
+        }
 
           const fromPlayers = Array.isArray(roomData.players)
             ? (roomData.players as unknown[]).filter((x): x is string => typeof x === 'string' && x.length > 0)
@@ -1787,13 +2102,30 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           // Determine rewards: mission battle uses room.rewards; level config uses level.rewards; else difficulty-based
           const difficultyKey = difficulty.toLowerCase();
           let baseRewards: { pp: number; xp: number; truthMetal: number; elementalRing?: { id: string; name: string; image: string }; captainHelmet?: boolean; artifactIds?: string[] } = { pp: 0, xp: 0, truthMetal: 0 };
-          
+          let missionRewardsAlreadyCollected = false;
+
           if (isMissionBattle && missionRewards) {
             baseRewards = {
               pp: missionRewards.pp ?? 0,
               xp: missionRewards.xp ?? 0,
               truthMetal: Math.max(0, Math.floor(Number(missionRewards.truthMetal)) || 0),
             };
+            // Mission XP/PP are granted once via completeMission claim id — never again on replay.
+            const pmId =
+              typeof roomData.playerMissionId === 'string' ? roomData.playerMissionId.trim() : '';
+            if (pmId && currentUser?.uid) {
+              try {
+                const claimSnap = await getDoc(
+                  doc(db, 'users', currentUser.uid, 'rewardClaims', `mission_complete_${pmId}`)
+                );
+                if (claimSnap.exists() && claimSnap.data()?.claimed === true) {
+                  missionRewardsAlreadyCollected = true;
+                  baseRewards = { pp: 0, xp: 0, truthMetal: 0 };
+                }
+              } catch (e) {
+                console.warn('Could not check mission reward claim status:', e);
+              }
+            }
           } else if (levelConfig?.rewards) {
             const r = levelConfig.rewards;
             baseRewards = { pp: r.pp ?? 0, xp: r.xp ?? 0, truthMetal: r.truthMetal ?? 0, captainHelmet: r.captainHelmet, artifactIds: r.artifactIds && r.artifactIds.length > 0 ? r.artifactIds : undefined };
@@ -1846,18 +2178,49 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 const currentArtifacts = studentData.artifacts || {};
                 let updatedArtifacts = { ...currentArtifacts };
                 
-                // Mission battle: grant artifacts from rewards.drops
-                if (isMissionBattle && missionRewards?.drops?.length) {
-                  for (const drop of missionRewards.drops) {
-                    const qty = Math.max(1, drop.qty ?? 1);
-                    if (drop.type === 'ARTIFACT' && drop.refId) {
-                      for (let i = 0; i < qty; i++) {
-                        try {
-                          await grantArtifactToPlayer(playerId, drop.refId, currentUser?.uid || 'system', 'mission_battle_reward');
-                        } catch (e) {
-                          console.error('Error granting mission artifact:', e);
+                // Mission battle: grant artifacts from rewards.drops once per player mission
+                if (
+                  isMissionBattle &&
+                  !missionRewardsAlreadyCollected &&
+                  missionRewards?.drops?.length
+                ) {
+                  const pmId =
+                    typeof roomData.playerMissionId === 'string' ? roomData.playerMissionId.trim() : '';
+                  const dropsClaimId = pmId
+                    ? `mission_battle_drops_${pmId}`
+                    : `mission_battle_drops_${gameId}`;
+                  const dropsClaimRef = doc(db, 'users', playerId, 'rewardClaims', dropsClaimId);
+                  const dropsClaimSnap = await getDoc(dropsClaimRef);
+                  if (!dropsClaimSnap.exists() || dropsClaimSnap.data()?.claimed !== true) {
+                    for (const drop of missionRewards.drops) {
+                      const qty = Math.max(1, drop.qty ?? 1);
+                      if (drop.type === 'ARTIFACT' && drop.refId) {
+                        for (let i = 0; i < qty; i++) {
+                          try {
+                            await grantArtifactToPlayer(
+                              playerId,
+                              drop.refId,
+                              currentUser?.uid || 'system',
+                              'mission_battle_reward'
+                            );
+                          } catch (e) {
+                            console.error('Error granting mission artifact:', e);
+                          }
                         }
                       }
+                    }
+                    try {
+                      await setDoc(
+                        dropsClaimRef,
+                        {
+                          claimed: true,
+                          claimedAt: serverTimestamp(),
+                          kind: 'mission_battle_drops',
+                        },
+                        { merge: true }
+                      );
+                    } catch (e) {
+                      console.warn('Failed to record mission battle drops claim:', e);
                     }
                   }
                 }
@@ -1987,7 +2350,10 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
               }
               
               if (isMissionBattle) {
-                setVictoryRewards(baseRewards);
+                setVictoryRewards({
+                  ...baseRewards,
+                  alreadyCollected: missionRewardsAlreadyCollected,
+                });
                 setShowVictoryModal(true);
               } else if (isFirstCompletion) {
                 setVictoryRewards(baseRewards);
@@ -2000,14 +2366,16 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           }
         } catch (error) {
           console.error('Error completing raid:', error);
+          victoryFinalizingRef.current = false;
         }
       };
-      // Reduced delay for faster completion
-      const timer = setTimeout(completeRaid, 500);
+      // Short delay so final HP sync can settle; cleanup must NOT lock victoryFinalizingRef
+      // (that previously cancelled the timer and permanently blocked MISSION COMPLETE).
+      const timer = setTimeout(() => {
+        void completeRaid();
+      }, 300);
       return () => clearTimeout(timer);
-    }
-    return undefined;
-  }, [opponents, waveNumber, battleRoom, gameId, difficulty, currentUser, onLeave]);
+  }, [opponents, waveNumber, battleRoom, gameId, difficulty, currentUser, onLeave, cpuAwakeningActive, showVictoryModal, levelConfig]);
 
   // Periodic check as fallback to ensure wave progression (runs every 500ms for faster detection)
   // CONSOLIDATED: Now uses advanceWaveIfNeeded
@@ -2190,6 +2558,142 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
       return;
     }
 
+    // Optimistic local sync FIRST so victory checks see awaken HP before Firestore round-trip.
+    // Otherwise MISSION COMPLETE can fire on stale 0 HP while the awaken cutscene plays.
+    setOpponents((prev) => {
+      const updated = prev.map((opp) => {
+        const updatedOpp = updatedOpponents.find((u) => u.id === opp.id);
+        if (!updatedOpp) return opp;
+        const merged = {
+          ...opp,
+          vaultHealth:
+            updatedOpp.vaultHealth !== undefined ? updatedOpp.vaultHealth : opp.vaultHealth,
+          maxVaultHealth:
+            updatedOpp.maxVaultHealth !== undefined
+              ? updatedOpp.maxVaultHealth
+              : opp.maxVaultHealth,
+          shieldStrength:
+            updatedOpp.shieldStrength !== undefined
+              ? updatedOpp.shieldStrength
+              : opp.shieldStrength,
+          maxShieldStrength:
+            updatedOpp.maxShieldStrength !== undefined
+              ? updatedOpp.maxShieldStrength
+              : opp.maxShieldStrength,
+          health:
+            updatedOpp.vaultHealth !== undefined
+              ? updatedOpp.vaultHealth
+              : updatedOpp.health !== undefined
+                ? updatedOpp.health
+                : opp.health,
+          maxHealth:
+            updatedOpp.maxVaultHealth !== undefined
+              ? updatedOpp.maxVaultHealth
+              : updatedOpp.maxHealth !== undefined
+                ? updatedOpp.maxHealth
+                : opp.maxHealth,
+          currentPP:
+            updatedOpp.vaultHealth !== undefined
+              ? updatedOpp.vaultHealth
+              : updatedOpp.currentPP !== undefined
+                ? updatedOpp.currentPP
+                : opp.currentPP,
+          // Awaken bosses: never keep a phase-1 isDefeated without phase-2 ready.
+          isDefeated: (() => {
+            const canAwaken = hasCpuAwakenConfig({
+              ...opp,
+              ...updatedOpp,
+              awakenedModeEnabled:
+                updatedOpp.awakenedModeEnabled === true || opp.awakenedModeEnabled === true,
+              awakenedHealth: updatedOpp.awakenedHealth ?? opp.awakenedHealth,
+              awakenedMoves: updatedOpp.awakenedMoves ?? opp.awakenedMoves,
+              awakeningAnimation: updatedOpp.awakeningAnimation ?? opp.awakeningAnimation,
+            } as AwakenCombatant);
+            if (!canAwaken) {
+              return updatedOpp.isDefeated === true || opp.isDefeated === true;
+            }
+            const ready =
+              updatedOpp.awakenedPhaseReady === true || opp.awakenedPhaseReady === true;
+            return updatedOpp.isDefeated === true && ready;
+          })(),
+          ...(hasCpuAwakenConfig({
+            ...opp,
+            ...updatedOpp,
+            awakenedModeEnabled:
+              updatedOpp.awakenedModeEnabled === true || opp.awakenedModeEnabled === true,
+            awakenedHealth: updatedOpp.awakenedHealth ?? opp.awakenedHealth,
+            awakenedMoves: updatedOpp.awakenedMoves ?? opp.awakenedMoves,
+            awakeningAnimation: updatedOpp.awakeningAnimation ?? opp.awakeningAnimation,
+          } as AwakenCombatant) &&
+          (updatedOpp.isAwakened === true || updatedOpp.awakenedPhaseEntered === true)
+            ? {
+                isAwakened: true,
+                awakenedPhaseEntered: true,
+                awakenedPhaseReady:
+                  updatedOpp.awakenedPhaseReady === true ||
+                  opp.awakenedPhaseReady === true ||
+                  updatedOpp.isDefeated === true ||
+                  opp.isDefeated === true ||
+                  // Only infer ready from resources after phase 2 has started.
+                  Number(updatedOpp.vaultHealth ?? updatedOpp.health ?? 0) > 0 ||
+                  Number(updatedOpp.shieldStrength || 0) > 0 ||
+                  Number(opp.vaultHealth ?? opp.health ?? 0) > 0 ||
+                  Number(opp.shieldStrength || 0) > 0,
+                awakenedHealth: updatedOpp.awakenedHealth ?? opp.awakenedHealth,
+                awakenedShields: updatedOpp.awakenedShields ?? opp.awakenedShields,
+                awakenedModeEnabled: true,
+                moves:
+                  Array.isArray(updatedOpp.moves) && updatedOpp.moves.length
+                    ? updatedOpp.moves
+                    : opp.moves,
+                image: updatedOpp.image ?? opp.image,
+                enemyType:
+                  updatedOpp.enemyType !== undefined ? updatedOpp.enemyType : opp.enemyType,
+              }
+            : !hasCpuAwakenConfig(opp as AwakenCombatant)
+              ? {
+                  isAwakened: false,
+                  awakenedPhaseEntered: false,
+                  awakenedPhaseReady: false,
+                  awakenedModeEnabled: false,
+                }
+              : {}),
+        };
+        const sticky = preserveAwakenedReadyAfterDamage(
+          opp as AwakenCombatant,
+          merged as AwakenCombatant
+        );
+        // Prefer most-damaged values; never let normalize refill after a real hit.
+        return normalizeAwakenCombatantForProgression(sticky);
+      });
+      const missing = updatedOpponents.filter((u) => !prev.some((p) => p.id === u.id));
+      if (missing.length === 0) return updated;
+      return [
+        ...updated,
+        ...missing.map((missingOpp) =>
+          normalizeAwakenCombatantForProgression({
+            ...missingOpp,
+            vaultHealth:
+              missingOpp.vaultHealth !== undefined
+                ? missingOpp.vaultHealth
+                : missingOpp.health || 0,
+            maxVaultHealth:
+              missingOpp.maxVaultHealth !== undefined
+                ? missingOpp.maxVaultHealth
+                : missingOpp.maxHealth || 100,
+            health:
+              missingOpp.vaultHealth !== undefined
+                ? missingOpp.vaultHealth
+                : missingOpp.health || 0,
+            maxHealth:
+              missingOpp.maxVaultHealth !== undefined
+                ? missingOpp.maxVaultHealth
+                : missingOpp.maxHealth || 100,
+          } as AwakenCombatant)
+        ),
+      ];
+    });
+
     // Set flag to prevent listener from processing this update
     // Track when the flag was set for safety timeout
     isUpdatingEnemiesRef.current = true;
@@ -2294,7 +2798,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 0;
 
               const bo = battleEngineUpdate.opp as Record<string, unknown>;
-              const awakeNow = bo?.isAwakened === true && currentEnemy.isAwakened !== true;
+              const awakeNow = (bo?.isAwakened === true || bo?.awakenedPhaseEntered === true) && currentEnemy.isAwakened !== true;
               const nextMaxS = Number(battleEngineUpdate.maxShield) || 0;
               const prevMaxS = Number(currentEnemy.maxShieldStrength || 0);
               const maxShieldIncreased = nextMaxS > prevMaxS + 0.5;
@@ -2304,11 +2808,12 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
               const structuralTrust = awakeNow || maxShieldIncreased || maxHealthIncreased;
               const persistMode = islandRaidEnemyPersistMergeMode(battleRoom, structuralTrust);
 
-              const mergedHealth = islandRaidMergedHealthPersist(
+              const mergedHealthRaw = islandRaidMergedHealthPersist(
                 battleEngineHealth,
                 currentHealth,
                 persistMode
               );
+              let mergedHealth = mergedHealthRaw;
               let mergedShield = islandRaidMergedShieldPersist(
                 battleEngineShield,
                 currentShield,
@@ -2324,6 +2829,62 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 mergedHealth > 0
               ) {
                 mergedShield = shieldCap;
+              }
+              // Awaken transition only: max jump but current still 0 — force phase-2 pool once.
+              // Do NOT refill when Firestore already had fightable phase-2 stats (that re-heals mid-fight).
+              const hadFightablePhase2 =
+                currentEnemy.awakenedPhaseReady === true ||
+                bo?.awakenedPhaseReady === true ||
+                Number(currentEnemy.health || 0) > 0 ||
+                Number(currentEnemy.shieldStrength || 0) > 0;
+              if (
+                awakeNow &&
+                mergedHealth <= 0 &&
+                mergedShield <= 0 &&
+                bo?.isDefeated !== true &&
+                !hadFightablePhase2
+              ) {
+                const refillProbe = {
+                  ...currentEnemy,
+                  ...bo,
+                  isAwakened: true,
+                  awakenedPhaseEntered: true,
+                  awakenedPhaseReady: false,
+                  isDefeated: false,
+                  maxHealth: battleEngineUpdate.maxHealth || currentEnemy.maxHealth || 100,
+                  maxVaultHealth: battleEngineUpdate.maxHealth || currentEnemy.maxHealth || 100,
+                  maxShieldStrength:
+                    battleEngineUpdate.maxShield || currentEnemy.maxShieldStrength || 0,
+                } as AwakenCombatant;
+                const repaired = refillAwakenedCombatPoolIfNeeded(refillProbe);
+                mergedHealth = primaryCombatantHealth(repaired);
+                mergedShield = Math.max(0, Math.floor(Number(repaired.shieldStrength ?? 0)));
+              } else if (
+                !awakeNow &&
+                (bo?.isAwakened === true || bo?.awakenedPhaseEntered === true) &&
+                currentEnemy.isAwakened === true
+              ) {
+                // Already awakened: always keep the more-damaged values (never trust a higher stale write).
+                mergedHealth = mergeCombatResourceMostDamaged(
+                  battleEngineHealth ?? currentHealth,
+                  currentHealth
+                );
+                mergedShield = mergeCombatResourceMostDamaged(
+                  battleEngineShield ?? currentShield,
+                  currentShield,
+                  shieldCap > 0 ? shieldCap : undefined
+                );
+              } else if (hadFightablePhase2 && (bo?.isAwakened === true || bo?.awakenedPhaseEntered === true)) {
+                // Awaken flags not yet on Firestore, but phase 2 was already fightable — never refill.
+                mergedHealth = mergeCombatResourceMostDamaged(
+                  battleEngineHealth ?? currentHealth,
+                  currentHealth
+                );
+                mergedShield = mergeCombatResourceMostDamaged(
+                  battleEngineShield ?? currentShield,
+                  currentShield,
+                  shieldCap > 0 ? shieldCap : undefined
+                );
               }
 
               // Log if merge resulted in different values (for debugging)
@@ -2342,9 +2903,18 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
               }
               
               const awakenSync =
-                bo?.isAwakened === true
+                bo?.isAwakened === true || bo?.awakenedPhaseEntered === true
                   ? {
                       isAwakened: true,
+                      awakenedPhaseEntered: true,
+                      awakenedPhaseReady:
+                        currentEnemy.awakenedPhaseReady === true ||
+                        bo.awakenedPhaseReady === true ||
+                        (currentEnemy as IslandRaidEnemy & { isDefeated?: boolean }).isDefeated ===
+                          true ||
+                        bo.isDefeated === true ||
+                        mergedHealth > 0 ||
+                        mergedShield > 0,
                       moves: Array.isArray(bo.moves) && (bo.moves as unknown[]).length ? bo.moves : currentEnemy.moves,
                       image:
                         typeof bo.image === 'string' && (bo.image as string).trim()
@@ -2354,9 +2924,28 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                         Object.prototype.hasOwnProperty.call(bo, 'enemyType')
                           ? bo.enemyType
                           : currentEnemy.enemyType,
-                      maxHealth: battleEngineUpdate.maxHealth || currentEnemy.maxHealth || 100,
-                      maxShieldStrength:
-                        battleEngineUpdate.maxShield || currentEnemy.maxShieldStrength || 0,
+                      maxHealth: resolveAwakenedHealthPool({
+                        ...currentEnemy,
+                        ...bo,
+                        awakenedHealth:
+                          (bo.awakenedHealth as number | undefined) ??
+                          currentEnemy.awakenedHealth,
+                        maxHealth:
+                          battleEngineUpdate.maxHealth || currentEnemy.maxHealth || 100,
+                        maxVaultHealth:
+                          battleEngineUpdate.maxHealth || currentEnemy.maxHealth || 100,
+                      } as AwakenCombatant),
+                      maxShieldStrength: resolveAwakenedShieldPool({
+                        ...currentEnemy,
+                        ...bo,
+                        awakenedShields:
+                          (bo.awakenedShields as number | undefined) ??
+                          currentEnemy.awakenedShields,
+                        maxShieldStrength:
+                          battleEngineUpdate.maxShield ||
+                          currentEnemy.maxShieldStrength ||
+                          0,
+                      } as AwakenCombatant),
                     }
                   : {};
               // Preserve all properties from current enemy, update health/shield with merged values
@@ -2442,7 +3031,9 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                   if (!update) return enemy;
                   
                   const bo2 = update.opp as Record<string, unknown>;
-                  const awakeNow2 = bo2?.isAwakened === true && enemy.isAwakened !== true;
+                  const awakeNow2 =
+                    (bo2?.isAwakened === true || bo2?.awakenedPhaseEntered === true) &&
+                    enemy.isAwakened !== true;
                   const nextMaxS2 = Number(update.maxShield) || 0;
                   const prevMaxS2 = Number(enemy.maxShieldStrength || 0);
                   const maxShieldIncreased2 = nextMaxS2 > prevMaxS2 + 0.5;
@@ -2454,9 +3045,10 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                     awakeNow2 || maxShieldIncreased2 || maxHealthIncreased2
                   );
                   const awakenSync2 =
-                    bo2?.isAwakened === true
+                    bo2?.isAwakened === true || bo2?.awakenedPhaseEntered === true
                       ? {
                           isAwakened: true,
+                          awakenedPhaseEntered: true,
                           moves: Array.isArray(bo2.moves) && (bo2.moves as unknown[]).length ? bo2.moves : enemy.moves,
                           image:
                             typeof bo2.image === 'string' && (bo2.image as string).trim()
@@ -2496,6 +3088,14 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                     maxHealth: update.maxHealth || enemy.maxHealth || 100,
                     maxShieldStrength: update.maxShield || enemy.maxShieldStrength || 0,
                     ...awakenSync2,
+                    ...(bo2?.isAwakened === true || bo2?.awakenedPhaseEntered === true
+                      ? {
+                          awakenedPhaseReady:
+                            bo2.awakenedPhaseReady === true ||
+                            enemy.awakenedPhaseReady === true ||
+                            fbMergedHealth > 0,
+                        }
+                      : {}),
                   };
                 });
                 
@@ -2530,18 +3130,29 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
         const updated = prev.map(opp => {
           const updatedOpp = updatedOpponents.find(u => u.id === opp.id);
           if (updatedOpp) {
+            const nextVault =
+              updatedOpp.vaultHealth !== undefined ? updatedOpp.vaultHealth : opp.vaultHealth;
             const newOpp = {
               ...opp,
-              vaultHealth: updatedOpp.vaultHealth !== undefined ? updatedOpp.vaultHealth : opp.vaultHealth,
+              vaultHealth: nextVault,
               maxVaultHealth: updatedOpp.maxVaultHealth !== undefined ? updatedOpp.maxVaultHealth : opp.maxVaultHealth,
               shieldStrength: updatedOpp.shieldStrength !== undefined ? updatedOpp.shieldStrength : opp.shieldStrength,
               maxShieldStrength: updatedOpp.maxShieldStrength !== undefined ? updatedOpp.maxShieldStrength : opp.maxShieldStrength,
               // Also update health and maxHealth for compatibility
               health: updatedOpp.vaultHealth !== undefined ? updatedOpp.vaultHealth : (updatedOpp.health !== undefined ? updatedOpp.health : opp.health),
               maxHealth: updatedOpp.maxVaultHealth !== undefined ? updatedOpp.maxVaultHealth : (updatedOpp.maxHealth !== undefined ? updatedOpp.maxHealth : opp.maxHealth),
-              ...(updatedOpp.isAwakened === true
+              ...(updatedOpp.isAwakened === true || updatedOpp.awakenedPhaseEntered === true
                 ? {
                     isAwakened: true,
+                    awakenedPhaseEntered: true,
+                    isDefeated: updatedOpp.isDefeated === true || opp.isDefeated === true,
+                    awakenedPhaseReady:
+                      updatedOpp.awakenedPhaseReady === true ||
+                      opp.awakenedPhaseReady === true ||
+                      updatedOpp.isDefeated === true ||
+                      opp.isDefeated === true ||
+                      Number(nextVault || 0) > 0 ||
+                      Number(updatedOpp.shieldStrength ?? opp.shieldStrength ?? 0) > 0,
                     moves:
                       Array.isArray(updatedOpp.moves) && updatedOpp.moves.length ? updatedOpp.moves : opp.moves,
                     image: updatedOpp.image ?? opp.image,
@@ -2834,6 +3445,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
             onOpponentsUpdate={handleOpponentsUpdate}
             onAlliesUpdate={handleAlliesUpdate}
             onBattleLogUpdate={setBattleLog}
+            onCpuAwakeningChange={setCpuAwakeningActive}
             initialBattleLog={battleLog}
             gameId={gameId}
             candyChoice={(battleRoom as any)?.candyChoice}
@@ -2858,6 +3470,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           waveNumber={waveNumber}
           difficulty={difficulty}
           rewards={victoryRewards}
+          rewardsAlreadyCollected={!!victoryRewards.alreadyCollected}
           customTitle={(battleRoom as { isMissionBattle?: boolean } | null)?.isMissionBattle ? '✅ MISSION COMPLETE!' : undefined}
         />
       )}

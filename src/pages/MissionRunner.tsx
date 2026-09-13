@@ -28,6 +28,9 @@ import {
   setPlayerMissionSequencePlayheadIndex,
 } from '../utils/missionsService';
 import { computeMissionFixedRewardTotals } from '../utils/missionBattlePassRewards';
+import { isMissionPublished, isSkillMissionVisibleToStudentClasses } from '../utils/missionAdminHelpers';
+import { getClassroomIdsForEnrolledStudent } from '../utils/classroomQueries';
+import { MissionRichText } from '../utils/missionRichText';
 import { normalizeMissionNavigateTo } from '../utils/missionStepNavigate';
 import IslandRaidBattle from '../components/IslandRaidBattle';
 import {
@@ -105,7 +108,7 @@ function missionBattleStatMultiplier(islandDifficulty: 'easy' | 'normal' | 'hard
 const MissionRunner: React.FC = () => {
   const { missionId } = useParams<{ missionId: string }>();
   const navigate = useNavigate();
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const [mission, setMission] = useState<MissionTemplate | null>(null);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -192,6 +195,22 @@ const MissionRunner: React.FC = () => {
           return;
         }
 
+        if (missionData.missionCategory === 'SKILL') {
+          if (!isMissionPublished(missionData) && !isAdmin) {
+            alert('This Skill Mission is not published yet.');
+            navigate('/home');
+            return;
+          }
+          if (!isAdmin) {
+            const enrolled = await getClassroomIdsForEnrolledStudent(currentUser.uid);
+            if (!isSkillMissionVisibleToStudentClasses(missionData, enrolled)) {
+              alert('This Skill Mission is not assigned to your class.');
+              navigate('/home');
+              return;
+            }
+          }
+        }
+
         if (!missionData.sequence || missionData.sequence.length === 0) {
           alert('This mission does not have a playable sequence.');
           navigate('/home');
@@ -228,7 +247,7 @@ const MissionRunner: React.FC = () => {
     };
 
     loadMission();
-  }, [missionId, currentUser, navigate]);
+  }, [missionId, currentUser, navigate, isAdmin]);
 
   const currentStep = mission?.sequence?.[currentStepIndex];
   const isLastStep = mission?.sequence ? currentStepIndex === mission.sequence.length - 1 : false;
@@ -1225,19 +1244,28 @@ const MissionRunner: React.FC = () => {
 
   if (loading) {
     return (
-      <div style={{ padding: '2rem', textAlign: 'center' }}>
-        <div>Loading mission...</div>
+      <div className="mst-mission-shell">
+        <div className="mst-mission-loading" role="status" aria-live="polite">
+          <div className="mst-mission-loading-mark" aria-hidden="true" />
+          <p className="mst-mission-loading-title">Loading Mission...</p>
+          <p className="mst-mission-loading-copy">Preparing your next challenge...</p>
+        </div>
       </div>
     );
   }
 
   if (!mission || !currentStep) {
     return (
-      <div style={{ padding: '2rem', textAlign: 'center' }}>
-        <div>Mission not found or has no sequence.</div>
-        <button onClick={() => navigate('/home')} style={{ marginTop: '1rem', padding: '0.5rem 1rem' }}>
-          Go Home
-        </button>
+      <div className="mst-mission-shell">
+        <div className="mst-mission-error" role="alert">
+          <p className="mst-mission-error-title">Mission unavailable</p>
+          <p style={{ margin: '0 0 1rem', color: 'var(--mst-text-muted)' }}>
+            Mission not found or has no sequence.
+          </p>
+          <button type="button" className="mst-mission-btn mst-mission-btn--primary" onClick={() => navigate('/home')}>
+            Go Home
+          </button>
+        </div>
       </div>
     );
   }
@@ -1261,105 +1289,101 @@ const MissionRunner: React.FC = () => {
     );
   }
 
+  const sequenceLength = mission.sequence?.length || 0;
+  const progressPct =
+    sequenceLength > 0 ? Math.min(100, ((currentStepIndex + 1) / sequenceLength) * 100) : 0;
+
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      padding: '2rem',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center'
-    }}>
-      <div style={{
-        maxWidth: '800px',
-        width: '100%',
-        background: 'white',
-        borderRadius: '1rem',
-        padding: '2rem',
-        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
-      }}>
+    <div className="mst-mission-shell">
+      <div className="mst-mission-layout">
+        <aside className="mst-mission-rail" aria-hidden="true">
+          <div className="mst-mission-rail-mark" />
+          <span className="mst-mission-rail-motto">Same Mind. Higher Purpose.</span>
+        </aside>
+
+        <div className="mst-mission-panel" data-step-type={currentStep.type}>
         {/* Mission Header */}
-        <div style={{ marginBottom: '2rem', textAlign: 'center' }}>
-          <h1 style={{ margin: 0, marginBottom: '0.5rem' }}>{mission.title}</h1>
-          <p style={{ color: '#6b7280', margin: 0 }}>Step {currentStepIndex + 1} of {mission.sequence?.length || 0}</p>
-        </div>
+        <header className="mst-mission-header">
+          <p className="mst-mission-kicker">Missions</p>
+          <h1 className="mst-mission-title">{mission.title}</h1>
+          <p className="mst-mission-step-meta">
+            Step {currentStepIndex + 1} of {sequenceLength}
+          </p>
+          <div className="mst-mission-progress" aria-hidden="true">
+            <div className="mst-mission-progress-fill" style={{ width: `${progressPct}%` }} />
+          </div>
+        </header>
 
         {/* Step Content */}
         {currentStep.type === 'STORY_SLIDE' && (
           <div>
             {currentStep.title && (
-              <h2 style={{ marginBottom: '1rem' }}>{currentStep.title}</h2>
+              <h2 className="mst-mission-step-heading">{currentStep.title}</h2>
             )}
             {currentStep.image.url && (
               <img
                 src={currentStep.image.url}
                 alt={currentStep.image.alt || currentStep.title || 'Story slide'}
-                style={{
-                  width: '100%',
-                  maxHeight: '400px',
-                  objectFit: 'contain',
-                  borderRadius: '0.5rem',
-                  marginBottom: '1rem'
-                }}
+                className="mst-mission-media"
               />
             )}
-            <p style={{ fontSize: '1.1rem', lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>
-              {currentStep.bodyText}
-            </p>
+            <MissionRichText
+              text={currentStep.bodyText}
+              as="p"
+              style={{ fontSize: '1.05rem', lineHeight: '1.7', color: '#e5e7eb' }}
+              linkColor="#f0c96a"
+            />
           </div>
         )}
 
         {currentStep.type === 'VIDEO' && (
           <div>
             {currentStep.title && (
-              <h2 style={{ marginBottom: '1rem' }}>{currentStep.title}</h2>
+              <h2 className="mst-mission-step-heading">{currentStep.title}</h2>
             )}
             {currentStep.video.url && (
-              <video
-                src={currentStep.video.url}
-                poster={currentStep.video.posterUrl}
-                controls={currentStep.video.controls !== false}
-                autoPlay={currentStep.video.autoplay || false}
-                muted={currentStep.video.muted || false}
-                style={{
-                  width: '100%',
-                  maxHeight: '500px',
-                  borderRadius: '0.5rem',
-                  marginBottom: '1rem'
-                }}
-                onEnded={() => {
-                  // Auto-advance when video ends (optional)
-                  // handleNext();
-                }}
-              />
+              <div className="mst-mission-video-frame">
+                <video
+                  src={currentStep.video.url}
+                  poster={currentStep.video.posterUrl}
+                  controls={currentStep.video.controls !== false}
+                  autoPlay={currentStep.video.autoplay || false}
+                  muted={currentStep.video.muted || false}
+                  style={{
+                    width: '100%',
+                    maxHeight: '500px',
+                  }}
+                  onEnded={() => {
+                    // Auto-advance when video ends (optional)
+                    // handleNext();
+                  }}
+                />
+              </div>
             )}
             {currentStep.bodyText && (
-              <p style={{ fontSize: '1.1rem', lineHeight: '1.6', whiteSpace: 'pre-wrap', marginTop: '1rem' }}>
-                {currentStep.bodyText}
-              </p>
+              <MissionRichText
+                text={currentStep.bodyText}
+                as="p"
+                style={{ fontSize: '1.05rem', lineHeight: '1.7', color: '#e5e7eb', marginTop: '1rem' }}
+                linkColor="#f0c96a"
+              />
             )}
           </div>
         )}
 
         {currentStep.type === 'TRAINING_ASSIGNMENT' && (
           <div>
-            {currentStep.title && <h2 style={{ marginBottom: '1rem' }}>{currentStep.title}</h2>}
+            {currentStep.title && <h2 className="mst-mission-step-heading">{currentStep.title}</h2>}
             {currentStep.bodyText && (
-              <p style={{ fontSize: '1.1rem', lineHeight: '1.6', whiteSpace: 'pre-wrap', marginBottom: '1.5rem' }}>
-                {currentStep.bodyText}
-              </p>
+              <MissionRichText
+                text={currentStep.bodyText}
+                as="p"
+                style={{ fontSize: '1.05rem', lineHeight: '1.7', color: '#e5e7eb', marginBottom: '1.5rem' }}
+                linkColor="#f0c96a"
+              />
             )}
-            <div
-              style={{
-                padding: '1.5rem',
-                background: '#f5f3ff',
-                borderRadius: '0.5rem',
-                marginBottom: '1.5rem',
-                border: '1px solid #ddd6fe',
-              }}
-            >
-              <h3 style={{ marginTop: 0 }}>Training Grounds (CFUs) assignment</h3>
+            <div className="mst-mission-block mst-mission-block--accent">
+              <h3>Training Grounds (CFUs) assignment</h3>
               <p style={{ margin: '0.25rem 0' }}>
                 <strong>Quiz:</strong> {trainingQuizTitle || currentStep.training.quizSetId}
               </p>
@@ -1370,11 +1394,11 @@ const MissionRunner: React.FC = () => {
                   : `At least ${currentStep.training.minimumPassPercent}% on a completed run.`}
               </p>
               {trainingGate?.loading ? (
-                <p style={{ marginTop: '1rem', color: '#6b7280' }}>Checking your progress…</p>
+                <p style={{ marginTop: '1rem' }}>Checking your progress…</p>
               ) : trainingGate?.met ? (
-                <p style={{ marginTop: '1rem', color: '#059669', fontWeight: 600 }}>Requirement met — you can continue.</p>
+                <p style={{ marginTop: '1rem', fontWeight: 600 }}>Requirement met — you can continue.</p>
               ) : (
-                <p style={{ marginTop: '1rem', color: '#b45309' }}>
+                <p style={{ marginTop: '1rem' }}>
                   {currentStep.training.minimumPassPercent > 0
                     ? `Your best completed score so far: ${trainingGate?.bestPercent ?? 0}%. Keep practicing until you reach ${currentStep.training.minimumPassPercent}%.`
                     : 'Complete the quiz once to unlock the next step.'}
@@ -1382,22 +1406,13 @@ const MissionRunner: React.FC = () => {
               )}
             </div>
             {!trainingQuizSoloOpen && (
-              <p
-                style={{
-                  marginTop: '0.75rem',
-                  padding: '0.75rem',
-                  background: '#fef3c7',
-                  border: '1px solid #fbbf24',
-                  borderRadius: '0.5rem',
-                  color: '#92400e',
-                  fontSize: '0.95rem',
-                }}
-              >
+              <div className="mst-mission-block mst-mission-block--warn" style={{ fontSize: '0.95rem' }}>
                 This CFU is temporarily <strong>closed for completions</strong>. You can see the assignment here, but your teacher must turn completions back on before you can take the quiz.
-              </p>
+              </div>
             )}
             <button
               type="button"
+              className="mst-mission-btn mst-mission-btn--primary mst-mission-btn--block"
               disabled={!trainingQuizSoloOpen}
               title={
                 !trainingQuizSoloOpen
@@ -1411,18 +1426,6 @@ const MissionRunner: React.FC = () => {
                   `/training-grounds/quiz/${currentStep.training.quizSetId}?returnMission=${encodeURIComponent(returnPath)}`
                 );
               }}
-              style={{
-                width: '100%',
-                padding: '1rem',
-                marginTop: '0.75rem',
-                background: trainingQuizSoloOpen ? '#7c3aed' : '#9ca3af',
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.5rem',
-                fontSize: '1.1rem',
-                fontWeight: 'bold',
-                cursor: trainingQuizSoloOpen ? 'pointer' : 'not-allowed',
-              }}
             >
               {trainingQuizSoloOpen ? 'Open quiz in Training Grounds (CFUs)' : 'Quiz closed for completions'}
             </button>
@@ -1432,20 +1435,18 @@ const MissionRunner: React.FC = () => {
         {currentStep.type === 'BATTLE' && (
           <div>
             {currentStep.title && (
-              <h2 style={{ marginBottom: '1rem' }}>{currentStep.title}</h2>
+              <h2 className="mst-mission-step-heading">{currentStep.title}</h2>
             )}
             {currentStep.bodyText && (
-              <p style={{ fontSize: '1.1rem', lineHeight: '1.6', whiteSpace: 'pre-wrap', marginBottom: '1.5rem' }}>
-                {currentStep.bodyText}
-              </p>
+              <MissionRichText
+                text={currentStep.bodyText}
+                as="p"
+                style={{ fontSize: '1.05rem', lineHeight: '1.7', color: '#e5e7eb', marginBottom: '1.5rem' }}
+                linkColor="#f0c96a"
+              />
             )}
-            <div style={{
-              padding: '1.5rem',
-              background: '#f3f4f6',
-              borderRadius: '0.5rem',
-              marginBottom: '1.5rem'
-            }}>
-              <h3 style={{ marginTop: 0 }}>Battle Configuration</h3>
+            <div className="mst-mission-block mst-mission-block--danger">
+              <h3>Battle Configuration</h3>
               <p><strong>Difficulty:</strong> {currentStep.battle.difficulty}</p>
               <p><strong>Enemy Types:</strong> {currentStep.battle.enemySet.join(', ')}</p>
               <p><strong>Waves:</strong> {currentStep.battle.waves || 3}</p>
@@ -1456,18 +1457,9 @@ const MissionRunner: React.FC = () => {
               </p>
             </div>
             <button
+              type="button"
+              className="mst-mission-btn mst-mission-btn--danger mst-mission-btn--block"
               onClick={handleStartBattle}
-              style={{
-                width: '100%',
-                padding: '1rem',
-                background: '#ef4444',
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.5rem',
-                fontSize: '1.25rem',
-                fontWeight: 'bold',
-                cursor: 'pointer'
-              }}
             >
               Start Battle
             </button>
@@ -1540,19 +1532,14 @@ const MissionRunner: React.FC = () => {
 
         {currentStep.type === 'CHOICE' && (
           <div>
-            {currentStep.title && <h2 style={{ marginBottom: '1rem' }}>{currentStep.title}</h2>}
+            {currentStep.title && <h2 className="mst-mission-step-heading">{currentStep.title}</h2>}
             {currentStep.bodyText && (
-              <p
-                style={{
-                  fontSize: '1.05rem',
-                  lineHeight: 1.6,
-                  whiteSpace: 'pre-wrap',
-                  marginBottom: '1.25rem',
-                  color: '#374151',
-                }}
-              >
-                {currentStep.bodyText}
-              </p>
+              <MissionRichText
+                text={currentStep.bodyText}
+                as="p"
+                style={{ fontSize: '1.05rem', lineHeight: '1.7', marginBottom: '1.25rem', color: '#e5e7eb' }}
+                linkColor="#f0c96a"
+              />
             )}
 
             {!selectedChoice ? (
@@ -1565,80 +1552,51 @@ const MissionRunner: React.FC = () => {
                     <button
                       key={choice.id}
                       type="button"
+                      className="mst-mission-choice"
                       onClick={() => setChoiceSelectedId(choice.id)}
-                      style={{
-                        textAlign: 'left',
-                        padding: '1rem 1.15rem',
-                        background: '#fdf2f8',
-                        border: '2px solid #f9a8d4',
-                        borderRadius: '0.75rem',
-                        cursor: 'pointer',
-                        color: '#831843',
-                      }}
                     >
-                      <div style={{ fontWeight: 700, fontSize: '1.05rem' }}>{choice.label}</div>
+                      <div className="mst-mission-choice-label">{choice.label}</div>
                       {choice.description?.trim() && (
-                        <div style={{ marginTop: '0.35rem', fontSize: '0.9rem', color: '#9d174d' }}>
-                          {choice.description}
-                        </div>
+                        <div className="mst-mission-choice-desc">{choice.description}</div>
                       )}
                     </button>
                   ))}
                 </div>
               </>
             ) : (
-              <div
-                style={{
-                  padding: '1.25rem',
-                  background: '#fff7ed',
-                  border: '1px solid #fdba74',
-                  borderRadius: '0.75rem',
-                }}
-              >
-                <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', fontWeight: 700, color: '#9a3412' }}>
+              <div className="mst-mission-block mst-mission-block--accent">
+                <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', fontWeight: 700 }}>
                   You chose: {selectedChoice.label}
                 </p>
                 {selectedChoice.result.title?.trim() && (
-                  <h3 style={{ margin: '0 0 0.75rem', color: '#9a3412' }}>{selectedChoice.result.title}</h3>
+                  <h3 style={{ margin: '0 0 0.75rem' }}>{selectedChoice.result.title}</h3>
                 )}
                 {selectedChoice.result.imageUrl?.trim() && (
                   <img
                     src={selectedChoice.result.imageUrl}
                     alt={selectedChoice.result.title || selectedChoice.label}
-                    style={{
-                      width: '100%',
-                      maxHeight: '320px',
-                      objectFit: 'contain',
-                      borderRadius: '0.5rem',
-                      marginBottom: '1rem',
-                      background: '#fff',
-                    }}
+                    className="mst-mission-media"
                   />
                 )}
-                <p style={{ margin: 0, fontSize: '1.05rem', lineHeight: 1.65, whiteSpace: 'pre-wrap', color: '#374151' }}>
-                  {selectedChoice.result.bodyText}
-                </p>
+                <MissionRichText
+                  text={selectedChoice.result.bodyText}
+                  as="p"
+                  style={{ margin: 0, fontSize: '1.05rem', lineHeight: 1.7, color: '#e5e7eb' }}
+                  linkColor="#f0c96a"
+                />
                 {((selectedChoice.result.grantArtifactIds || []).filter((id) => id?.trim()).length > 0) && (
-                  <div
-                    style={{
-                      marginTop: '1rem',
-                      padding: '0.75rem 0.9rem',
-                      background: '#ecfdf5',
-                      border: '1px solid #6ee7b7',
-                      borderRadius: '0.5rem',
-                    }}
-                  >
-                    <p style={{ margin: '0 0 0.35rem', fontWeight: 700, fontSize: '0.85rem', color: '#065f46' }}>
+                  <div className="mst-mission-block mst-mission-block--success" style={{ marginTop: '1rem', marginBottom: 0 }}>
+                    <p style={{ margin: '0 0 0.35rem', fontWeight: 700, fontSize: '0.85rem' }}>
                       Artifact reward
                     </p>
-                    <ul style={{ margin: 0, paddingLeft: '1.1rem', color: '#047857', fontSize: '0.95rem' }}>
+                    <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.95rem' }}>
                       {(selectedChoice.result.grantArtifactIds || [])
                         .filter((id) => id?.trim())
                         .map((id) => (
                           <li key={id}>{choiceGrantPreviewNames[id] || choiceGrantPreviewNames[id.trim()] || id}</li>
                         ))}
                     </ul>
-                    <p style={{ margin: '0.5rem 0 0', fontSize: '0.8rem', color: '#065f46' }}>
+                    <p style={{ margin: '0.5rem 0 0', fontSize: '0.8rem' }}>
                       Continue to claim {((selectedChoice.result.grantArtifactIds || []).filter((id) => id?.trim()).length === 1) ? 'this artifact' : 'these artifacts'}.
                     </p>
                   </div>
@@ -1650,43 +1608,30 @@ const MissionRunner: React.FC = () => {
 
         {currentStep.type === 'REFLECTION' && (
           <div>
-            {currentStep.title && <h2 style={{ marginBottom: '1rem' }}>{currentStep.title}</h2>}
+            {currentStep.title && <h2 className="mst-mission-step-heading">{currentStep.title}</h2>}
             {currentStep.bodyText && (
-              <p
-                style={{
-                  fontSize: '1.05rem',
-                  lineHeight: 1.6,
-                  whiteSpace: 'pre-wrap',
-                  marginBottom: '1.25rem',
-                  color: '#374151',
-                }}
-              >
-                {currentStep.bodyText}
-              </p>
+              <MissionRichText
+                text={currentStep.bodyText}
+                as="p"
+                style={{ fontSize: '1.05rem', lineHeight: '1.7', marginBottom: '1.25rem', color: '#e5e7eb' }}
+                linkColor="#f0c96a"
+              />
             )}
-            <p style={{ fontWeight: 700, marginBottom: '0.35rem' }}>Reflection question</p>
-            <p style={{ margin: '0 0 1rem', color: '#4b5563', fontSize: '1.02rem', lineHeight: 1.5 }}>
+            <p className="mst-mission-label" style={{ marginBottom: '0.35rem' }}>Reflection question</p>
+            <p style={{ margin: '0 0 1rem', fontSize: '1.02rem', lineHeight: 1.5 }}>
               {currentStep.prompt}
             </p>
 
             {aidTrim && reflectionLinkCtx?.loading && (
-              <p style={{ color: '#6b7280', marginBottom: '1rem' }}>Loading linked assessment…</p>
+              <p style={{ marginBottom: '1rem' }}>Loading linked assessment…</p>
             )}
 
             {aidTrim && reflectionLinkCtx && !reflectionLinkCtx.loading && (
-              <div
-                style={{
-                  marginBottom: '1rem',
-                  padding: '0.75rem',
-                  background: '#f0fdf4',
-                  borderRadius: '0.5rem',
-                  border: '1px solid #86efac',
-                }}
-              >
+              <div className="mst-mission-block mst-mission-block--success">
                 <strong>Linked assessment:</strong>{' '}
                 {reflectionLinkCtx.assessmentTitle || aidTrim}
                 {reflectionLinkCtx.goalHint && (
-                  <p style={{ margin: '0.5rem 0 0', fontSize: '0.9rem', color: '#166534' }}>
+                  <p style={{ margin: '0.5rem 0 0', fontSize: '0.9rem' }}>
                     {reflectionLinkCtx.goalHint}
                   </p>
                 )}
@@ -1694,16 +1639,7 @@ const MissionRunner: React.FC = () => {
             )}
 
             {aidTrim && reflectionLinkCtx?.isLocked && (
-              <div
-                style={{
-                  marginBottom: '1rem',
-                  padding: '0.75rem',
-                  background: '#eff6ff',
-                  border: '1px solid #93c5fd',
-                  borderRadius: '0.5rem',
-                  color: '#1e3a8a',
-                }}
-              >
+              <div className="mst-mission-block mst-mission-block--info">
                 This assessment is locked in Assessment Goals (students can&apos;t edit goals there), but this mission
                 is linked by your teacher — what you enter here still saves to the class dashboard for habits /
                 story-goal, or merges into your goal evidence for other types.
@@ -1713,14 +1649,12 @@ const MissionRunner: React.FC = () => {
             {habitsGoalForm && (
               <>
                 <div style={{ marginBottom: '1rem' }}>
-                  <label
-                    htmlFor="mission-reflection-habit"
-                    style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}
-                  >
+                  <label htmlFor="mission-reflection-habit" className="mst-mission-label">
                     What habit are you committing to?
                   </label>
                   <textarea
                     id="mission-reflection-habit"
+                    className="mst-mission-textarea"
                     value={reflectionHabitText}
                     onChange={(e) => setReflectionHabitText(e.target.value)}
                     disabled={reflectionSaving}
@@ -1728,22 +1662,13 @@ const MissionRunner: React.FC = () => {
                     minLength={3}
                     maxLength={180}
                     rows={3}
-                    style={{
-                      width: '100%',
-                      padding: '0.75rem',
-                      borderRadius: '0.5rem',
-                      border: '1px solid #d1d5db',
-                      fontSize: '1rem',
-                      fontFamily: 'inherit',
-                      resize: 'vertical',
-                    }}
                   />
-                  <p style={{ marginTop: '0.35rem', color: '#6b7280', fontSize: '0.875rem' }}>
+                  <p style={{ marginTop: '0.35rem', fontSize: '0.875rem' }}>
                     {reflectionHabitText.length}/180 characters
                   </p>
                 </div>
                 <div style={{ marginBottom: '1rem' }}>
-                  <span style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Duration</span>
+                  <span className="mst-mission-label">Duration</span>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
                     {(
                       [
@@ -1753,10 +1678,7 @@ const MissionRunner: React.FC = () => {
                         ['1_week', '1 Week'],
                       ] as const
                     ).map(([val, label]) => (
-                      <label
-                        key={val}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}
-                      >
+                      <label key={val} className="mst-mission-radio">
                         <input
                           type="radio"
                           name="mission-habit-duration"
@@ -1770,21 +1692,13 @@ const MissionRunner: React.FC = () => {
                     ))}
                   </div>
                 </div>
-                <div
-                  style={{
-                    marginBottom: '1rem',
-                    padding: '1rem',
-                    background: '#f0f9ff',
-                    borderRadius: '0.5rem',
-                    border: '2px solid #3b82f6',
-                  }}
-                >
-                  <div style={{ fontWeight: 'bold', color: '#1e40af', marginBottom: '0.5rem' }}>2 — Evidence</div>
-                  <p style={{ margin: '0 0 0.75rem', fontSize: '0.875rem', color: '#475569' }}>
+                <div className="mst-mission-block mst-mission-block--info">
+                  <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>2 — Evidence</div>
+                  <p style={{ margin: '0 0 0.75rem', fontSize: '0.875rem' }}>
                     Live Event options track Class Flow sprints when you join a session.
                   </p>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', marginBottom: '0.75rem' }}>
-                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer' }}>
+                    <label className="mst-mission-radio" style={{ alignItems: 'flex-start' }}>
                       <input
                         type="radio"
                         name="mission-habit-evidence-type"
@@ -1796,7 +1710,7 @@ const MissionRunner: React.FC = () => {
                         <strong>Sprint completion rate</strong> (offered vs. completed per session)
                       </span>
                     </label>
-                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer' }}>
+                    <label className="mst-mission-radio" style={{ alignItems: 'flex-start' }}>
                       <input
                         type="radio"
                         name="mission-habit-evidence-type"
@@ -1808,7 +1722,7 @@ const MissionRunner: React.FC = () => {
                         <strong>Consistency</strong> (days with a completed sprint)
                       </span>
                     </label>
-                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer' }}>
+                    <label className="mst-mission-radio" style={{ alignItems: 'flex-start' }}>
                       <input
                         type="radio"
                         name="mission-habit-evidence-type"
@@ -1823,28 +1737,17 @@ const MissionRunner: React.FC = () => {
                   </div>
                   {reflectionHabitEvidenceType === 'other' && (
                     <>
-                      <label
-                        htmlFor="mission-habit-evidence"
-                        style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', color: '#1e40af' }}
-                      >
+                      <label htmlFor="mission-habit-evidence" className="mst-mission-label">
                         Reflection or proof (optional)
                       </label>
                       <textarea
                         id="mission-habit-evidence"
+                        className="mst-mission-textarea"
                         value={reflectionHabitEvidence}
                         onChange={(e) => setReflectionHabitEvidence(e.target.value)}
                         disabled={reflectionSaving}
                         placeholder="Share evidence of how you've been maintaining your habit consistently."
                         rows={4}
-                        style={{
-                          width: '100%',
-                          padding: '0.75rem',
-                          borderRadius: '0.5rem',
-                          border: '1px solid #3b82f6',
-                          fontSize: '1rem',
-                          fontFamily: 'inherit',
-                          resize: 'vertical',
-                        }}
                       />
                     </>
                   )}
@@ -1855,14 +1758,12 @@ const MissionRunner: React.FC = () => {
             {storyGoalForm && (
               <>
                 <div style={{ marginBottom: '1rem' }}>
-                  <label
-                    htmlFor="mission-story-goal"
-                    style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold', color: '#92400e' }}
-                  >
+                  <label htmlFor="mission-story-goal" className="mst-mission-label">
                     Describe your goal
                   </label>
                   <textarea
                     id="mission-story-goal"
+                    className="mst-mission-textarea"
                     value={reflectionStoryTextGoal}
                     onChange={(e) => setReflectionStoryTextGoal(e.target.value)}
                     disabled={reflectionSaving}
@@ -1870,51 +1771,23 @@ const MissionRunner: React.FC = () => {
                     minLength={3}
                     maxLength={500}
                     rows={4}
-                    style={{
-                      width: '100%',
-                      padding: '0.75rem',
-                      borderRadius: '0.5rem',
-                      border: '2px solid #fbbf24',
-                      fontSize: '1rem',
-                      fontFamily: 'inherit',
-                      resize: 'vertical',
-                    }}
                   />
-                  <p style={{ marginTop: '0.35rem', color: '#6b7280', fontSize: '0.875rem' }}>
+                  <p style={{ marginTop: '0.35rem', fontSize: '0.875rem' }}>
                     {reflectionStoryTextGoal.length}/500 characters
                   </p>
                 </div>
-                <div
-                  style={{
-                    marginBottom: '1rem',
-                    padding: '1rem',
-                    background: '#f0f9ff',
-                    borderRadius: '0.5rem',
-                    border: '2px solid #3b82f6',
-                  }}
-                >
-                  <label
-                    htmlFor="mission-story-evidence"
-                    style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold', color: '#1e40af' }}
-                  >
+                <div className="mst-mission-block mst-mission-block--info">
+                  <label htmlFor="mission-story-evidence" className="mst-mission-label">
                     Area of Consistency (optional)
                   </label>
                   <textarea
                     id="mission-story-evidence"
+                    className="mst-mission-textarea"
                     value={reflectionStoryEvidence}
                     onChange={(e) => setReflectionStoryEvidence(e.target.value)}
                     disabled={reflectionSaving}
                     placeholder="Describe how you've been consistent toward your goal…"
                     rows={4}
-                    style={{
-                      width: '100%',
-                      padding: '0.75rem',
-                      borderRadius: '0.5rem',
-                      border: '1px solid #3b82f6',
-                      fontSize: '1rem',
-                      fontFamily: 'inherit',
-                      resize: 'vertical',
-                    }}
                   />
                 </div>
               </>
@@ -1922,58 +1795,39 @@ const MissionRunner: React.FC = () => {
 
             {(habitsGoalForm || storyGoalForm) && (
               <div style={{ marginBottom: '1rem' }}>
-                <label
-                  htmlFor="mission-reflection-extra"
-                  style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: '#4b5563' }}
-                >
+                <label htmlFor="mission-reflection-extra" className="mst-mission-label">
                   Additional reflection (optional)
                 </label>
-                <p style={{ margin: '0 0 0.5rem', fontSize: '0.85rem', color: '#6b7280' }}>
+                <p style={{ margin: '0 0 0.5rem', fontSize: '0.85rem' }}>
                   Appended to your evidence with a timestamp so teachers can see it with your goal.
                 </p>
                 <textarea
                   id="mission-reflection-extra"
+                  className="mst-mission-textarea"
                   value={reflectionDraft}
                   onChange={(e) => setReflectionDraft(e.target.value)}
                   disabled={reflectionSaving}
                   placeholder={currentStep.textareaPlaceholder || 'Optional notes…'}
                   maxLength={4000}
                   rows={4}
-                  style={{
-                    width: '100%',
-                    padding: '0.75rem',
-                    borderRadius: '0.5rem',
-                    border: '1px solid #d1d5db',
-                    fontSize: '1rem',
-                    fontFamily: 'inherit',
-                    resize: 'vertical',
-                  }}
                 />
               </div>
             )}
 
             {!habitsGoalForm && !storyGoalForm && !(aidTrim && reflectionLinkCtx?.loading) && (
               <div style={{ marginBottom: '1rem' }}>
-                <label htmlFor="mission-reflection-main" style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>
+                <label htmlFor="mission-reflection-main" className="mst-mission-label">
                   {aidTrim && reflectionLinkCtx?.isLocked ? 'Your note (optional)' : 'Your response'}
                 </label>
                 <textarea
                   id="mission-reflection-main"
+                  className="mst-mission-textarea"
                   value={reflectionDraft}
                   onChange={(e) => setReflectionDraft(e.target.value)}
                   disabled={reflectionSaving || (!!aidTrim && reflectionLinkCtx?.loading)}
                   placeholder={currentStep.textareaPlaceholder || 'Write your reflection…'}
                   maxLength={4000}
                   rows={6}
-                  style={{
-                    width: '100%',
-                    padding: '0.75rem',
-                    borderRadius: '0.5rem',
-                    border: '1px solid #d1d5db',
-                    fontSize: '1rem',
-                    fontFamily: 'inherit',
-                    resize: 'vertical',
-                  }}
                 />
               </div>
             )}
@@ -1981,44 +1835,19 @@ const MissionRunner: React.FC = () => {
         )}
 
         {/* Navigation */}
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          marginTop: '2rem',
-          gap: '1rem'
-        }}>
+        <div className="mst-mission-nav">
           <button
+            type="button"
+            className="mst-mission-btn mst-mission-btn--secondary"
             onClick={handleBack}
             disabled={currentStepIndex === 0 && !(currentStep.type === 'CHOICE' && choiceSelectedId)}
-            style={{
-              padding: '0.75rem 1.5rem',
-              background:
-                currentStepIndex === 0 && !(currentStep.type === 'CHOICE' && choiceSelectedId)
-                  ? '#e5e7eb'
-                  : '#6b7280',
-              color: 'white',
-              border: 'none',
-              borderRadius: '0.5rem',
-              cursor:
-                currentStepIndex === 0 && !(currentStep.type === 'CHOICE' && choiceSelectedId)
-                  ? 'not-allowed'
-                  : 'pointer',
-              fontWeight: 'bold'
-            }}
           >
             ← Back
           </button>
           <button
+            type="button"
+            className="mst-mission-btn mst-mission-btn--ghost"
             onClick={() => navigate('/home')}
-            style={{
-              padding: '0.75rem 1.5rem',
-              background: '#9ca3af',
-              color: 'white',
-              border: 'none',
-              borderRadius: '0.5rem',
-              cursor: 'pointer',
-              fontWeight: 'bold'
-            }}
           >
             Exit
           </button>
@@ -2046,17 +1875,10 @@ const MissionRunner: React.FC = () => {
               powerCardBlocksNext;
             return (
             <button
+              type="button"
+              className={`mst-mission-btn ${nextCompletes ? 'mst-mission-btn--complete' : 'mst-mission-btn--primary'}`}
               onClick={() => void handleNext()}
               disabled={nextBlocked}
-              style={{
-                padding: '0.75rem 1.5rem',
-                background: nextBlocked ? '#9ca3af' : nextCompletes ? '#10b981' : '#3b82f6',
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.5rem',
-                cursor: nextBlocked ? 'not-allowed' : 'pointer',
-                fontWeight: 'bold',
-              }}
             >
               {reflectionSaving
                 ? 'Saving…'
@@ -2081,40 +1903,26 @@ const MissionRunner: React.FC = () => {
             );
           })()}
         </div>
+        </div>
+
+        <aside className="mst-mission-rail mst-mission-rail--right" aria-hidden="true">
+          <div className="mst-mission-rail-mark" />
+          <span className="mst-mission-rail-motto">Knowledge is Power. Truth is Freedom.</span>
+        </aside>
       </div>
 
       {pendingRewardChoiceGroups.length > 0 && (
         <div
+          className="mst-mission-modal-backdrop"
           role="dialog"
           aria-modal="true"
           aria-labelledby="mission-reward-choice-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15, 23, 42, 0.65)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '1rem',
-          }}
         >
-          <div
-            style={{
-              background: 'white',
-              borderRadius: '1rem',
-              maxWidth: '520px',
-              width: '100%',
-              maxHeight: '90vh',
-              overflow: 'auto',
-              padding: '1.5rem',
-              boxShadow: '0 24px 48px rgba(0, 0, 0, 0.25)',
-            }}
-          >
+          <div className="mst-mission-modal">
             <h2 id="mission-reward-choice-title" style={{ margin: '0 0 0.5rem' }}>
               Choose your rewards
             </h2>
-            <p style={{ margin: '0 0 1.25rem', color: '#64748b', fontSize: '0.95rem' }}>
+            <p style={{ margin: '0 0 1.25rem', fontSize: '0.95rem' }}>
               This mission includes reward choices. Pick the options you want, then confirm to finish.
             </p>
             {pendingRewardChoiceGroups.map((g) => (
@@ -2123,11 +1931,11 @@ const MissionRunner: React.FC = () => {
                   {g.displayName || 'Reward choice'}
                 </h3>
                 {g.description ? (
-                  <p style={{ margin: '0 0 0.75rem', color: '#64748b', fontSize: '0.9rem' }}>
+                  <p style={{ margin: '0 0 0.75rem', fontSize: '0.9rem' }}>
                     {g.description}
                   </p>
                 ) : null}
-                <p style={{ margin: '0 0 0.75rem', fontSize: '0.85rem', color: '#94a3b8' }}>
+                <p style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
                   Pick {g.pickCount} of {g.options.length}
                 </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -2137,22 +1945,15 @@ const MissionRunner: React.FC = () => {
                       <button
                         key={opt.id}
                         type="button"
+                        className={`mst-mission-modal-option${selected ? ' is-selected' : ''}`}
                         onClick={() => toggleMissionRewardPick(g.groupId, opt.id, g.pickCount)}
-                        style={{
-                          textAlign: 'left',
-                          padding: '0.75rem 1rem',
-                          borderRadius: '0.5rem',
-                          border: selected ? '2px solid #4f46e5' : '2px solid #e2e8f0',
-                          background: selected ? '#eef2ff' : '#f8fafc',
-                          cursor: 'pointer',
-                        }}
                       >
                         <div style={{ fontWeight: 600 }}>{opt.displayName}</div>
-                        <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.25rem' }}>
+                        <div style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
                           {summarizeMissionBattlePassReward(opt)}
                         </div>
                         {opt.description ? (
-                          <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '0.35rem' }}>
+                          <div style={{ fontSize: '0.8rem', marginTop: '0.35rem' }}>
                             {opt.description}
                           </div>
                         ) : null}
@@ -2164,19 +1965,9 @@ const MissionRunner: React.FC = () => {
             ))}
             <button
               type="button"
+              className="mst-mission-btn mst-mission-btn--primary mst-mission-btn--block"
               disabled={claimingMissionChoices}
               onClick={() => void handleClaimMissionRewardChoices()}
-              style={{
-                marginTop: '0.5rem',
-                width: '100%',
-                padding: '0.85rem',
-                background: claimingMissionChoices ? '#94a3b8' : '#4f46e5',
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.5rem',
-                fontWeight: 'bold',
-                cursor: claimingMissionChoices ? 'not-allowed' : 'pointer',
-              }}
             >
               {claimingMissionChoices ? 'Claiming…' : 'Claim rewards & finish'}
             </button>
