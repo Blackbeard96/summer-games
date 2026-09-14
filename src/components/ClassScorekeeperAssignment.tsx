@@ -202,8 +202,8 @@ const ClassScorekeeperAssignment: React.FC<ClassScorekeeperAssignmentProps> = ({
           <h2 style={{ margin: 0, fontSize: '1.15rem', color: '#f0c96a', letterSpacing: '0.04em' }}>
             📊 Assign Class Scorekeepers
           </h2>
-          <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem', color: '#9ca3af' }}>
-            Choose a player in <strong style={{ color: '#e5e7eb' }}>{className || classId}</strong> who
+          <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem', color: '#d1d5db', lineHeight: 1.45 }}>
+            Choose a player in <strong style={{ color: '#f9fafb' }}>{className || classId}</strong> who
             can add/subtract PP for classmates (changes still need admin approval).
           </p>
         </div>
@@ -222,7 +222,7 @@ const ClassScorekeeperAssignment: React.FC<ClassScorekeeperAssignmentProps> = ({
           </span>
           <Link
             to="/admin?tab=roles"
-            style={{ fontSize: '0.85rem', color: '#93c5fd', fontWeight: 600, textDecoration: 'none' }}
+            style={{ fontSize: '0.85rem', color: '#bfdbfe', fontWeight: 700, textDecoration: 'none' }}
           >
             Full Role Manager →
           </Link>

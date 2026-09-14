@@ -2,7 +2,7 @@
  * NPC Mission Modal
  * 
  * Shows missions available from a specific NPC (Sonido, Zeke, Luz, Kon)
- * Displays STORY missions pinned at top, then Demo / Sovereign lore, Profile, and Side missions below
+ * Skill Missions first, then STORY, Demo, Sovereign, Profile, and Side missions
  */
 
 import React, { useState, useEffect } from 'react';
@@ -22,6 +22,8 @@ import {
 } from '../utils/missionsService';
 import { MissionTemplate, PlayerMission, DeliveryChannel } from '../types/missions';
 import { getMissionRewardPreviewLines } from '../utils/missionRewardPreview';
+import { getClassroomIdsForEnrolledStudent } from '../utils/classroomQueries';
+import { isSkillMissionVisibleToStudentClasses } from '../utils/missionAdminHelpers';
 
 function MissionRewardsPreview({ mission }: { mission: MissionTemplate }) {
   const lines = getMissionRewardPreviewLines(mission);
@@ -64,6 +66,116 @@ function MissionRewardsPreview({ mission }: { mission: MissionTemplate }) {
   );
 }
 
+/** Completed missions collapse to a compact row; Expand restores full card. */
+function CollapsibleHubMissionCard({
+  title,
+  status,
+  backgroundColor,
+  borderColor,
+  titleSize = '1rem',
+  headerExtra,
+  expanded,
+  onToggleExpanded,
+  children,
+}: {
+  title: React.ReactNode;
+  status: 'available' | 'active' | 'completed';
+  backgroundColor: string;
+  borderColor: string;
+  titleSize?: string;
+  headerExtra?: React.ReactNode;
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  children: React.ReactNode;
+}) {
+  const minimized = status === 'completed' && !expanded;
+  return (
+    <div
+      style={{
+        backgroundColor,
+        border: `2px solid ${borderColor}`,
+        borderRadius: '0.5rem',
+        padding: minimized ? '0.65rem 1rem' : '1rem',
+        marginBottom: '1rem',
+        opacity: minimized ? 0.88 : 1,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '0.5rem',
+          flexWrap: 'wrap',
+          marginBottom: minimized ? 0 : '0.5rem',
+        }}
+      >
+        <h4 style={{ color: 'white', margin: 0, fontSize: titleSize, flex: 1, minWidth: 0 }}>
+          {title}
+        </h4>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.35rem',
+            flexWrap: 'wrap',
+            flexShrink: 0,
+          }}
+        >
+          {headerExtra}
+          {status === 'active' && (
+            <span
+              style={{
+                backgroundColor: borderColor,
+                color: borderColor === '#fbbf24' || borderColor === '#a78bfa' ? '#1f2937' : 'white',
+                padding: '0.25rem 0.5rem',
+                borderRadius: '0.25rem',
+                fontSize: '0.75rem',
+                fontWeight: 'bold',
+              }}
+            >
+              ACTIVE
+            </span>
+          )}
+          {status === 'completed' && (
+            <span
+              style={{
+                backgroundColor: '#10b981',
+                color: 'white',
+                padding: '0.25rem 0.5rem',
+                borderRadius: '0.25rem',
+                fontSize: '0.75rem',
+                fontWeight: 'bold',
+              }}
+            >
+              ✓ COMPLETED
+            </span>
+          )}
+          {status === 'completed' && (
+            <button
+              type="button"
+              onClick={onToggleExpanded}
+              style={{
+                background: 'rgba(255,255,255,0.1)',
+                color: '#e5e7eb',
+                border: '1px solid rgba(255,255,255,0.28)',
+                borderRadius: '0.35rem',
+                padding: '0.2rem 0.55rem',
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              {minimized ? 'Expand' : 'Minimize'}
+            </button>
+          )}
+        </div>
+      </div>
+      {!minimized && children}
+    </div>
+  );
+}
+
 interface NPCMissionModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -79,9 +191,10 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
   npcName,
   npcImage
 }) => {
-  const { currentUser, loading: authLoading } = useAuth();
+  const { currentUser, loading: authLoading, isAdmin } = useAuth();
   const navigate = useNavigate();
   const [sideMissions, setSideMissions] = useState<MissionTemplate[]>([]);
+  const [skillMissions, setSkillMissions] = useState<MissionTemplate[]>([]);
   const [sovereignMissions, setSovereignMissions] = useState<MissionTemplate[]>([]);
   const [demoMissions, setDemoMissions] = useState<MissionTemplate[]>([]);
   const [storyMissions, setStoryMissions] = useState<MissionTemplate[]>([]);
@@ -95,6 +208,12 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
   const [loading, setLoading] = useState(true);
   const [acceptingMissionId, setAcceptingMissionId] = useState<string | null>(null);
   const [redoingMissionId, setRedoingMissionId] = useState<string | null>(null);
+  /** Completed missions start minimized; ids here are expanded back to full size. */
+  const [expandedCompletedIds, setExpandedCompletedIds] = useState<Record<string, boolean>>({});
+
+  const toggleCompletedExpanded = (missionId: string) => {
+    setExpandedCompletedIds((prev) => ({ ...prev, [missionId]: !prev[missionId] }));
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -132,27 +251,40 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
         const playerMissionsData = await getPlayerMissions(currentUser.uid);
         setPlayerMissions(playerMissionsData);
 
-        // Fetch all HUB_NPC missions for this NPC (SIDE, DEMO, SOVEREIGN, STORY, PROFILE) in one query
+        // Fetch all HUB_NPC missions for this NPC (SIDE, SKILL, DEMO, SOVEREIGN, STORY, PROFILE) in one query
         const allMissionsData = await getMissionTemplates({
           npc,
           deliveryChannel: 'HUB_NPC'
         });
+        const enrolledClassIds = await getClassroomIdsForEnrolledStudent(currentUser.uid);
+        // getMissionTemplates already excludes unpublished drafts from hub lists
+        const publishedHub = allMissionsData;
+
         setSideMissions(
-          sortMissionsForHubList(allMissionsData.filter((m) => m.missionCategory === 'SIDE'))
+          sortMissionsForHubList(publishedHub.filter((m) => m.missionCategory === 'SIDE'))
+        );
+        setSkillMissions(
+          sortMissionsForHubList(
+            publishedHub.filter(
+              (m) =>
+                m.missionCategory === 'SKILL' &&
+                isSkillMissionVisibleToStudentClasses(m, enrolledClassIds, { isAdmin })
+            )
+          )
         );
         setSovereignMissions(
-          sortMissionsForHubList(allMissionsData.filter((m) => m.missionCategory === 'SOVEREIGN'))
+          sortMissionsForHubList(publishedHub.filter((m) => m.missionCategory === 'SOVEREIGN'))
         );
         setDemoMissions(
-          sortMissionsForHubList(allMissionsData.filter((m) => m.missionCategory === 'DEMO'))
+          sortMissionsForHubList(publishedHub.filter((m) => m.missionCategory === 'DEMO'))
         );
-        const profileList = allMissionsData.filter(m => m.missionCategory === 'PROFILE');
+        const profileList = publishedHub.filter((m) => m.missionCategory === 'PROFILE');
         setProfileMissions(profileList);
 
         // STORY: show every HUB_NPC story mission for this NPC — not only the chapter matching
         // `playerStoryProgress.currentChapterId`. Custom chapter ids (e.g. Manifest_Level_2) would
         // otherwise never appear while the player is still on chapter_1 in the main story tracker.
-        const hubStory = allMissionsData.filter((m) => m.missionCategory === 'STORY');
+        const hubStory = publishedHub.filter((m) => m.missionCategory === 'STORY');
         const curChapter = progress?.currentChapterId;
         if (curChapter) {
           const forCur = hubStory.filter((m) => m.story?.chapterId === curChapter);
@@ -185,14 +317,14 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, currentUser, npc, authLoading]);
+  }, [isOpen, currentUser, npc, authLoading, isAdmin]);
 
   const handleAcceptMission = async (missionId: string) => {
     if (!currentUser || acceptingMissionId) return;
 
     setAcceptingMissionId(missionId);
     try {
-      const result = await acceptMission(currentUser.uid, missionId, 'HUB_NPC');
+      const result = await acceptMission(currentUser.uid, missionId, 'HUB_NPC', { isAdmin });
       if (result.success) {
         // Reload missions
         const playerMissionsData = await getPlayerMissions(currentUser.uid);
@@ -227,16 +359,17 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
 
   const handleRedoDemoMission = async (mission: MissionTemplate) => {
     if (!currentUser || redoingMissionId || acceptingMissionId) return;
+    if (mission.missionCategory !== 'DEMO' && mission.missionCategory !== 'SKILL') return;
     if (!(mission.sequence && mission.sequence.length > 0)) {
-      alert('This demo has no playable steps yet.');
+      alert('This mission has no playable steps yet.');
       return;
     }
 
     setRedoingMissionId(mission.id);
     try {
-      const result = await redoDemoMission(currentUser.uid, mission.id, 'HUB_NPC');
+      const result = await redoDemoMission(currentUser.uid, mission.id, 'HUB_NPC', { isAdmin });
       if (!result.success) {
-        alert(result.error || 'Failed to restart demo');
+        alert(result.error || 'Failed to restart mission');
         return;
       }
       const playerMissionsData = await getPlayerMissions(currentUser.uid);
@@ -244,8 +377,8 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
       onClose();
       navigate(`/mission/${encodeURIComponent(mission.id)}/play`);
     } catch (error) {
-      console.error('Error redoing demo mission:', error);
-      alert('Failed to restart demo');
+      console.error('Error replaying mission:', error);
+      alert('Failed to restart mission');
     } finally {
       setRedoingMissionId(null);
     }
@@ -262,7 +395,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
     try {
       await saveProfileJourneyText(currentUser.uid, mission.profile.journeyStageId, text);
       setJourneyStageContent(prev => ({ ...prev, [mission.profile!.journeyStageId]: text }));
-      const result = await acceptMission(currentUser.uid, mission.id, 'HUB_NPC');
+      const result = await acceptMission(currentUser.uid, mission.id, 'HUB_NPC', { isAdmin });
       if (result.success) {
         const playerMissionsData = await getPlayerMissions(currentUser.uid);
         setPlayerMissions(playerMissionsData);
@@ -303,6 +436,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
     storyMissions.length === 0 &&
     sovereignMissions.length === 0 &&
     demoMissions.length === 0 &&
+    skillMissions.length === 0 &&
     sideMissions.length === 0 &&
     profileMissions.length === 0;
 
@@ -387,6 +521,117 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
           </div>
         ) : (
           <>
+            {/* SKILL Missions Section (class-gated) */}
+            {skillMissions.length > 0 && (
+              <div style={{ marginBottom: '2rem' }}>
+                <h3 style={{ color: '#f59e0b', marginBottom: '1rem', fontSize: '1.25rem' }}>
+                  Skill Missions
+                </h3>
+                <p style={{ color: '#9ca3af', fontSize: '0.8rem', marginTop: '-0.5rem', marginBottom: '1rem' }}>
+                  Class skills — may unlock Skill Moves, Skill Trees, and other abilities.
+                </p>
+                {skillMissions.map((mission, skillIndex) => {
+                  const status = getMissionPlayerStatus(mission.id);
+                  const displayNum = skillIndex + 1;
+
+                  return (
+                    <CollapsibleHubMissionCard
+                      key={mission.id}
+                      title={
+                        <>
+                          <span style={{ color: '#fcd34d', fontWeight: 800, marginRight: '0.35rem' }}>
+                            {displayNum}.
+                          </span>
+                          {mission.title}
+                        </>
+                      }
+                      status={status}
+                      backgroundColor="rgba(245, 158, 11, 0.1)"
+                      borderColor="#f59e0b"
+                      expanded={!!expandedCompletedIds[mission.id]}
+                      onToggleExpanded={() => toggleCompletedExpanded(mission.id)}
+                    >
+                      <p style={{ color: '#d1d5db', marginBottom: '1rem', fontSize: '0.875rem' }}>
+                        {mission.description}
+                      </p>
+                      <MissionRewardsPreview mission={mission} />
+                      {status === 'available' && (
+                        <button
+                          onClick={() => handleAcceptMission(mission.id)}
+                          disabled={acceptingMissionId === mission.id}
+                          style={{
+                            backgroundColor: '#d97706',
+                            color: 'white',
+                            border: 'none',
+                            padding: '0.5rem 1rem',
+                            borderRadius: '0.5rem',
+                            cursor: acceptingMissionId === mission.id ? 'not-allowed' : 'pointer',
+                            fontWeight: 'bold',
+                            opacity: acceptingMissionId === mission.id ? 0.5 : 1
+                          }}
+                        >
+                          {acceptingMissionId === mission.id ? 'Accepting...' : 'Accept Mission'}
+                        </button>
+                      )}
+                      {status === 'active' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {mission.sequence && mission.sequence.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClose();
+                                navigate(`/mission/${encodeURIComponent(mission.id)}/play`);
+                              }}
+                              style={{
+                                backgroundColor: '#d97706',
+                                color: 'white',
+                                border: 'none',
+                                padding: '0.5rem 1rem',
+                                borderRadius: '0.5rem',
+                                cursor: 'pointer',
+                                fontWeight: 'bold',
+                              }}
+                            >
+                              Continue mission →
+                            </button>
+                          ) : (
+                            <p style={{ margin: 0, fontSize: '0.8rem', color: '#9ca3af' }}>
+                              This mission has no playable steps yet. Check back later or contact an admin.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      {status === 'completed' && mission.sequence && mission.sequence.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => void handleRedoDemoMission(mission)}
+                          disabled={redoingMissionId === mission.id || acceptingMissionId === mission.id}
+                          style={{
+                            backgroundColor: 'transparent',
+                            color: '#fbbf24',
+                            border: '1px solid #f59e0b',
+                            padding: '0.5rem 1rem',
+                            borderRadius: '0.5rem',
+                            cursor:
+                              redoingMissionId === mission.id || acceptingMissionId === mission.id
+                                ? 'not-allowed'
+                                : 'pointer',
+                            fontWeight: 'bold',
+                            opacity:
+                              redoingMissionId === mission.id || acceptingMissionId === mission.id
+                                ? 0.5
+                                : 1,
+                          }}
+                        >
+                          {redoingMissionId === mission.id ? 'Restarting…' : 'Replay mission'}
+                        </button>
+                      )}
+                    </CollapsibleHubMissionCard>
+                  );
+                })}
+              </div>
+            )}
+
             {/* STORY Missions Section */}
             {storyMissions.length > 0 && (
               <div style={{ marginBottom: '2rem' }}>
@@ -395,66 +640,38 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                 </h3>
                 {storyMissions.map((mission) => {
                   const status = getMissionPlayerStatus(mission.id);
-                  const isActive = activeStoryMission?.missionId === mission.id;
-                  
+                  const storyBg = status === 'active' ? 'rgba(251, 191, 36, 0.1)' : 'rgba(59, 130, 246, 0.1)';
+                  const storyBorder = status === 'active' ? '#fbbf24' : '#3b82f6';
+
                   return (
-                    <div
+                    <CollapsibleHubMissionCard
                       key={mission.id}
-                      style={{
-                        backgroundColor: status === 'active' ? 'rgba(251, 191, 36, 0.1)' : 'rgba(59, 130, 246, 0.1)',
-                        border: `2px solid ${status === 'active' ? '#fbbf24' : '#3b82f6'}`,
-                        borderRadius: '0.5rem',
-                        padding: '1rem',
-                        marginBottom: '1rem'
-                      }}
+                      title={mission.title}
+                      status={status}
+                      backgroundColor={storyBg}
+                      borderColor={storyBorder}
+                      titleSize="1.1rem"
+                      headerExtra={
+                        mission.story?.chapterId &&
+                        mission.story.chapterId !== currentChapterId ? (
+                          <span
+                            style={{
+                              backgroundColor: 'rgba(156, 163, 175, 0.35)',
+                              color: '#e5e7eb',
+                              padding: '0.2rem 0.45rem',
+                              borderRadius: '0.25rem',
+                              fontSize: '0.68rem',
+                              fontWeight: 700,
+                            }}
+                            title="Story arc chapter (may differ from your current Journey chapter)"
+                          >
+                            Arc: {mission.story.chapterId}
+                          </span>
+                        ) : undefined
+                      }
+                      expanded={!!expandedCompletedIds[mission.id]}
+                      onToggleExpanded={() => toggleCompletedExpanded(mission.id)}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.35rem' }}>
-                        <h4 style={{ color: 'white', margin: 0, fontSize: '1.1rem' }}>
-                          {mission.title}
-                        </h4>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-                        {mission.story?.chapterId &&
-                          mission.story.chapterId !== currentChapterId && (
-                            <span
-                              style={{
-                                backgroundColor: 'rgba(156, 163, 175, 0.35)',
-                                color: '#e5e7eb',
-                                padding: '0.2rem 0.45rem',
-                                borderRadius: '0.25rem',
-                                fontSize: '0.68rem',
-                                fontWeight: 700,
-                              }}
-                              title="Story arc chapter (may differ from your current Journey chapter)"
-                            >
-                              Arc: {mission.story.chapterId}
-                            </span>
-                          )}
-                        {status === 'active' && (
-                          <span style={{ 
-                            backgroundColor: '#fbbf24', 
-                            color: '#1f2937',
-                            padding: '0.25rem 0.5rem',
-                            borderRadius: '0.25rem',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold'
-                          }}>
-                            ACTIVE
-                          </span>
-                        )}
-                        {status === 'completed' && (
-                          <span style={{ 
-                            backgroundColor: '#10b981', 
-                            color: 'white',
-                            padding: '0.25rem 0.5rem',
-                            borderRadius: '0.25rem',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold'
-                          }}>
-                            ✓ COMPLETED
-                          </span>
-                        )}
-                        </div>
-                      </div>
                       <p style={{ color: '#d1d5db', marginBottom: '1rem', fontSize: '0.9rem' }}>
                         {mission.description}
                       </p>
@@ -538,7 +755,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                           )}
                         </div>
                       )}
-                    </div>
+                    </CollapsibleHubMissionCard>
                   );
                 })}
               </div>
@@ -557,48 +774,22 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                   const status = getMissionPlayerStatus(mission.id);
                   const displayNum = demoIndex + 1;
                   return (
-                    <div
+                    <CollapsibleHubMissionCard
                       key={mission.id}
-                      style={{
-                        backgroundColor: 'rgba(6, 182, 212, 0.12)',
-                        border: '2px solid #06b6d4',
-                        borderRadius: '0.5rem',
-                        padding: '1rem',
-                        marginBottom: '1rem'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem' }}>
-                        <h4 style={{ color: 'white', margin: 0, fontSize: '1rem' }}>
+                      title={
+                        <>
                           <span style={{ color: '#a5f3fc', fontWeight: 800, marginRight: '0.35rem' }}>
                             {displayNum}.
                           </span>
                           {mission.title}
-                        </h4>
-                        {status === 'active' && (
-                          <span style={{
-                            backgroundColor: '#0891b2',
-                            color: 'white',
-                            padding: '0.25rem 0.5rem',
-                            borderRadius: '0.25rem',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold'
-                          }}>
-                            ACTIVE
-                          </span>
-                        )}
-                        {status === 'completed' && (
-                          <span style={{
-                            backgroundColor: '#10b981',
-                            color: 'white',
-                            padding: '0.25rem 0.5rem',
-                            borderRadius: '0.25rem',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold'
-                          }}>
-                            ✓ COMPLETED
-                          </span>
-                        )}
-                      </div>
+                        </>
+                      }
+                      status={status}
+                      backgroundColor="rgba(6, 182, 212, 0.12)"
+                      borderColor="#06b6d4"
+                      expanded={!!expandedCompletedIds[mission.id]}
+                      onToggleExpanded={() => toggleCompletedExpanded(mission.id)}
+                    >
                       <p style={{ color: '#d1d5db', marginBottom: '1rem', fontSize: '0.875rem' }}>
                         {mission.description}
                       </p>
@@ -649,38 +840,32 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                           )}
                         </div>
                       )}
-                      {status === 'completed' && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                          {mission.sequence && mission.sequence.length > 0 ? (
-                            <button
-                              type="button"
-                              onClick={() => void handleRedoDemoMission(mission)}
-                              disabled={redoingMissionId === mission.id || acceptingMissionId === mission.id}
-                              style={{
-                                backgroundColor: 'transparent',
-                                color: '#67e8f9',
-                                border: '1px solid #06b6d4',
-                                padding: '0.5rem 1rem',
-                                borderRadius: '0.5rem',
-                                cursor:
-                                  redoingMissionId === mission.id || acceptingMissionId === mission.id
-                                    ? 'not-allowed'
-                                    : 'pointer',
-                                fontWeight: 'bold',
-                                opacity:
-                                  redoingMissionId === mission.id || acceptingMissionId === mission.id
-                                    ? 0.5
-                                    : 1,
-                              }}
-                            >
-                              {redoingMissionId === mission.id ? 'Restarting…' : 'Redo demo'}
-                            </button>
-                          ) : (
-                            <p style={{ margin: 0, fontSize: '0.85rem', color: '#9ca3af' }}>Completed.</p>
-                          )}
-                        </div>
+                      {status === 'completed' && mission.sequence && mission.sequence.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => void handleRedoDemoMission(mission)}
+                          disabled={redoingMissionId === mission.id || acceptingMissionId === mission.id}
+                          style={{
+                            backgroundColor: 'transparent',
+                            color: '#67e8f9',
+                            border: '1px solid #06b6d4',
+                            padding: '0.5rem 1rem',
+                            borderRadius: '0.5rem',
+                            cursor:
+                              redoingMissionId === mission.id || acceptingMissionId === mission.id
+                                ? 'not-allowed'
+                                : 'pointer',
+                            fontWeight: 'bold',
+                            opacity:
+                              redoingMissionId === mission.id || acceptingMissionId === mission.id
+                                ? 0.5
+                                : 1,
+                          }}
+                        >
+                          {redoingMissionId === mission.id ? 'Restarting…' : 'Redo demo'}
+                        </button>
                       )}
-                    </div>
+                    </CollapsibleHubMissionCard>
                   );
                 })}
               </div>
@@ -699,48 +884,22 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                   const status = getMissionPlayerStatus(mission.id);
                   const displayNum = sovereignIndex + 1;
                   return (
-                    <div
+                    <CollapsibleHubMissionCard
                       key={mission.id}
-                      style={{
-                        backgroundColor: 'rgba(139, 92, 246, 0.12)',
-                        border: '2px solid #8b5cf6',
-                        borderRadius: '0.5rem',
-                        padding: '1rem',
-                        marginBottom: '1rem'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem' }}>
-                        <h4 style={{ color: 'white', margin: 0, fontSize: '1rem' }}>
+                      title={
+                        <>
                           <span style={{ color: '#ddd6fe', fontWeight: 800, marginRight: '0.35rem' }}>
                             {displayNum}.
                           </span>
                           {mission.title}
-                        </h4>
-                        {status === 'active' && (
-                          <span style={{
-                            backgroundColor: '#8b5cf6',
-                            color: 'white',
-                            padding: '0.25rem 0.5rem',
-                            borderRadius: '0.25rem',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold'
-                          }}>
-                            ACTIVE
-                          </span>
-                        )}
-                        {status === 'completed' && (
-                          <span style={{
-                            backgroundColor: '#10b981',
-                            color: 'white',
-                            padding: '0.25rem 0.5rem',
-                            borderRadius: '0.25rem',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold'
-                          }}>
-                            ✓ COMPLETED
-                          </span>
-                        )}
-                      </div>
+                        </>
+                      }
+                      status={status}
+                      backgroundColor="rgba(139, 92, 246, 0.12)"
+                      borderColor="#8b5cf6"
+                      expanded={!!expandedCompletedIds[mission.id]}
+                      onToggleExpanded={() => toggleCompletedExpanded(mission.id)}
+                    >
                       <p style={{ color: '#d1d5db', marginBottom: '1rem', fontSize: '0.875rem' }}>
                         {mission.description}
                       </p>
@@ -810,10 +969,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                           )}
                         </div>
                       )}
-                      {status === 'completed' && (
-                        <p style={{ margin: 0, fontSize: '0.85rem', color: '#9ca3af' }}>Completed.</p>
-                      )}
-                    </div>
+                    </CollapsibleHubMissionCard>
                   );
                 })}
               </div>
@@ -827,31 +983,19 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                 </h3>
                 {profileMissions.map((mission) => {
                   const status = getMissionPlayerStatus(mission.id);
-                  const stageId = mission.profile?.journeyStageId;
                   const draftText = profileMissionDraft[mission.id] ?? '';
                   const isSaving = savingProfileMissionId === mission.id;
                   return (
-                    <div
+                    <CollapsibleHubMissionCard
                       key={mission.id}
-                      style={{
-                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                        border: '2px solid #10b981',
-                        borderRadius: '0.5rem',
-                        padding: '1rem',
-                        marginBottom: '1rem'
-                      }}
+                      title={mission.title}
+                      status={status}
+                      backgroundColor="rgba(16, 185, 129, 0.1)"
+                      borderColor="#10b981"
+                      titleSize="1.1rem"
+                      expanded={!!expandedCompletedIds[mission.id]}
+                      onToggleExpanded={() => toggleCompletedExpanded(mission.id)}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem' }}>
-                        <h4 style={{ color: 'white', margin: 0, fontSize: '1.1rem' }}>
-                          {mission.title}
-                        </h4>
-                        {status === 'active' && (
-                          <span style={{ backgroundColor: '#10b981', color: 'white', padding: '0.25rem 0.5rem', borderRadius: '0.25rem', fontSize: '0.75rem', fontWeight: 'bold' }}>ACTIVE</span>
-                        )}
-                        {status === 'completed' && (
-                          <span style={{ backgroundColor: '#10b981', color: 'white', padding: '0.25rem 0.5rem', borderRadius: '0.25rem', fontSize: '0.75rem', fontWeight: 'bold' }}>✓ COMPLETED</span>
-                        )}
-                      </div>
                       <p style={{ color: '#d1d5db', marginBottom: '0.75rem', fontSize: '0.9rem' }}>{mission.description}</p>
                       <MissionRewardsPreview mission={mission} />
                       <div style={{ marginBottom: '1rem' }}>
@@ -930,7 +1074,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                       {status === 'completed' && (
                         <p style={{ color: '#9ca3af', fontSize: '0.85rem', margin: 0 }}>This reflection is on your Profile.</p>
                       )}
-                    </div>
+                    </CollapsibleHubMissionCard>
                   );
                 })}
               </div>
@@ -945,50 +1089,24 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                 {sideMissions.map((mission, sideIndex) => {
                   const status = getMissionPlayerStatus(mission.id);
                   const displayNum = sideIndex + 1;
-                  
+
                   return (
-                    <div
+                    <CollapsibleHubMissionCard
                       key={mission.id}
-                      style={{
-                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                        border: '2px solid #3b82f6',
-                        borderRadius: '0.5rem',
-                        padding: '1rem',
-                        marginBottom: '1rem'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem' }}>
-                        <h4 style={{ color: 'white', margin: 0, fontSize: '1rem' }}>
+                      title={
+                        <>
                           <span style={{ color: '#93c5fd', fontWeight: 800, marginRight: '0.35rem' }}>
                             {displayNum}.
                           </span>
                           {mission.title}
-                        </h4>
-                        {status === 'active' && (
-                          <span style={{ 
-                            backgroundColor: '#3b82f6', 
-                            color: 'white',
-                            padding: '0.25rem 0.5rem',
-                            borderRadius: '0.25rem',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold'
-                          }}>
-                            ACTIVE
-                          </span>
-                        )}
-                        {status === 'completed' && (
-                          <span style={{ 
-                            backgroundColor: '#10b981', 
-                            color: 'white',
-                            padding: '0.25rem 0.5rem',
-                            borderRadius: '0.25rem',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold'
-                          }}>
-                            ✓ COMPLETED
-                          </span>
-                        )}
-                      </div>
+                        </>
+                      }
+                      status={status}
+                      backgroundColor="rgba(59, 130, 246, 0.1)"
+                      borderColor="#3b82f6"
+                      expanded={!!expandedCompletedIds[mission.id]}
+                      onToggleExpanded={() => toggleCompletedExpanded(mission.id)}
+                    >
                       <p style={{ color: '#d1d5db', marginBottom: '1rem', fontSize: '0.875rem' }}>
                         {mission.description}
                       </p>
@@ -1058,10 +1176,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                           )}
                         </div>
                       )}
-                      {status === 'completed' && (
-                        <p style={{ margin: 0, fontSize: '0.85rem', color: '#9ca3af' }}>Completed.</p>
-                      )}
-                    </div>
+                    </CollapsibleHubMissionCard>
                   );
                 })}
               </div>
@@ -1074,7 +1189,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                 </p>
                 <p style={{ margin: 0, fontSize: '0.8rem' }}>
                   In Mission Admin, set <strong style={{ color: '#e5e7eb' }}>NPC</strong> to {npcName},{' '}
-                  check <strong style={{ color: '#e5e7eb' }}>HUB_NPC</strong>, and save. STORY, Demo, Sovereign, SIDE, and
+                  check <strong style={{ color: '#e5e7eb' }}>HUB_NPC</strong>, and save. STORY, Demo, Sovereign, Skill, SIDE, and
                   Profile missions all appear here once assigned.
                 </p>
               </div>

@@ -827,7 +827,8 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
                     border: '1px solid #d1d5db',
                     borderRadius: '0.25rem',
                     cursor: index === 0 ? 'not-allowed' : 'pointer',
-                    fontSize: '0.875rem'
+                    fontSize: '0.875rem',
+                    color: '#000000',
                   }}
                 >
                   ↑
@@ -842,7 +843,8 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
                     border: '1px solid #d1d5db',
                     borderRadius: '0.25rem',
                     cursor: index === sequence.length - 1 ? 'not-allowed' : 'pointer',
-                    fontSize: '0.875rem'
+                    fontSize: '0.875rem',
+                    color: '#000000',
                   }}
                 >
                   ↓
@@ -965,7 +967,7 @@ const StepEditorModal: React.FC<StepEditorModalProps> = ({
     let cancelled = false;
     getAllQuizSets(true)
       .then((list) => {
-        if (!cancelled) setQuizOptions(list);
+        if (!cancelled) setQuizOptions(list.filter((q) => q.isArchived !== true));
       })
       .catch(() => {
         if (!cancelled) setQuizOptions([]);
@@ -1385,7 +1387,11 @@ const StepEditorModal: React.FC<StepEditorModalProps> = ({
               required
               rows={4}
               style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+              placeholder="Caption under the image. Links: https://… or [Open guide](https://…)"
             />
+            <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', color: '#000000' }}>
+              Hyperlinks: paste a full URL, or write [Link text](https://example.com). In-app: [Training Grounds](/training-grounds).
+            </p>
           </div>
 
           {!isMediaOnly && (

@@ -11,6 +11,7 @@ import {
   addDoc, 
   updateDoc, 
   deleteDoc,
+  setDoc,
   query,
   where,
   orderBy,
@@ -79,6 +80,11 @@ export function isTrainingQuizAcceptingSoloCompletions(quiz: TrainingQuizSet): b
   return quiz.playerCompletionsEnabled !== false;
 }
 
+/** Archived CFUs stay in the bank for question import but leave active lists. */
+export function isTrainingQuizArchived(quiz: TrainingQuizSet): boolean {
+  return quiz.isArchived === true;
+}
+
 /** Live Event / Exam Mode can use this CFU when unset or true. */
 export function isTrainingQuizLiveEventCompatible(quiz: TrainingQuizSet): boolean {
   return quiz.isLiveEventCompatible !== false;
@@ -105,22 +111,96 @@ function quizCreatedAtMs(quiz: TrainingQuizSet): number {
   return 0;
 }
 
-/** Admin list: group order by assigned class names (unassigned last), then newest first within a group. */
+/** List order: optional classDisplayOrder, then quiz sortOrder, then newest. */
 export function sortQuizSetsForAdminByClass(
   sets: TrainingQuizSet[],
-  classrooms: Array<{ id: string; name: string }>
+  classrooms: Array<{ id: string; name: string }>,
+  classDisplayOrder?: string[]
 ): TrainingQuizSet[] {
-  const nameForId = (id: string) => classrooms.find((c) => c.id === id)?.name?.trim() || id;
+  const orderMap = new Map<string, number>();
+  (classDisplayOrder || []).forEach((id, idx) => {
+    if (!orderMap.has(id)) orderMap.set(id, idx);
+  });
+  const fallbackName = (id: string) =>
+    classrooms.find((c) => c.id === id)?.name?.trim() || id;
+
+  // Classes not in custom order: alphabetical after custom ranks
+  const unlisted = Array.from(
+    new Set([...classrooms.map((c) => c.id), ...sets.flatMap((s) => assignedClassIdsForQuiz(s))])
+  )
+    .filter((id) => !orderMap.has(id))
+    .sort((a, b) => fallbackName(a).localeCompare(fallbackName(b)));
+  unlisted.forEach((id, idx) => orderMap.set(id, 50_000 + idx));
+
+  const rankOf = (id: string) => orderMap.get(id) ?? 99_000;
+
+  const sectionRank = (classIds: string[]): number => {
+    if (classIds.length === 0) return 1_000_000;
+    return Math.min(...classIds.map(rankOf));
+  };
+
+  const sectionKey = (classIds: string[]): string => {
+    if (classIds.length === 0) return '\uFFFF__unassigned';
+    return [...classIds]
+      .sort((a, b) => {
+        const diff = rankOf(a) - rankOf(b);
+        if (diff !== 0) return diff;
+        return fallbackName(a).localeCompare(fallbackName(b));
+      })
+      .join('|');
+  };
+
   return [...sets].sort((a, b) => {
-    const aAssigned = assignedClassIdsForQuiz(a);
-    const bAssigned = assignedClassIdsForQuiz(b);
-    const aKey =
-      aAssigned.length === 0 ? '\uFFFF__unassigned' : [...aAssigned].sort().map(nameForId).join(' | ');
-    const bKey =
-      bAssigned.length === 0 ? '\uFFFF__unassigned' : [...bAssigned].sort().map(nameForId).join(' | ');
-    if (aKey !== bKey) return aKey.localeCompare(bKey);
+    const aIds = assignedClassIdsForQuiz(a);
+    const bIds = assignedClassIdsForQuiz(b);
+    const ar = sectionRank(aIds);
+    const br = sectionRank(bIds);
+    if (ar !== br) return ar - br;
+    const ak = sectionKey(aIds);
+    const bk = sectionKey(bIds);
+    if (ak !== bk) return ak.localeCompare(bk);
+    const as = typeof a.sortOrder === 'number' ? a.sortOrder : Number.MAX_SAFE_INTEGER / 2;
+    const bs = typeof b.sortOrder === 'number' ? b.sortOrder : Number.MAX_SAFE_INTEGER / 2;
+    if (as !== bs) return as - bs;
     return quizCreatedAtMs(b) - quizCreatedAtMs(a);
   });
+}
+
+const TRAINING_GROUNDS_META_DOC = doc(db, 'trainingGroundsMeta', 'config');
+
+export async function getTrainingGroundsClassDisplayOrder(): Promise<string[]> {
+  try {
+    const snap = await getDoc(TRAINING_GROUNDS_META_DOC);
+    if (!snap.exists()) return [];
+    const raw = snap.data()?.classDisplayOrder;
+    return Array.isArray(raw) ? raw.filter((id: unknown) => typeof id === 'string' && id) : [];
+  } catch (e) {
+    console.warn('Could not load CFU class display order:', e);
+    return [];
+  }
+}
+
+export async function saveTrainingGroundsClassDisplayOrder(classIds: string[]): Promise<void> {
+  await setDoc(
+    TRAINING_GROUNDS_META_DOC,
+    {
+      classDisplayOrder: classIds,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+/** Re-number sortOrder for quizzes in the given ordered list (0..n-1). */
+export async function saveQuizSetSortOrders(orderedIds: string[]): Promise<void> {
+  await Promise.all(
+    orderedIds.map((id, index) =>
+      updateDoc(doc(db, 'trainingQuizSets', id), {
+        sortOrder: index,
+        updatedAt: serverTimestamp(),
+      })
+    )
+  );
 }
 
 /**
@@ -140,19 +220,22 @@ export async function getPublishedQuizSets(studentClassIds?: string[]): Promise<
     quizSets.push({ id: docSnap.id, ...docSnap.data() } as TrainingQuizSet);
   });
 
+  // Archived never appear for students / live pickers (even if still marked published)
+  let filtered = quizSets.filter((quiz) => !isTrainingQuizArchived(quiz));
   const restrict = studentClassIds !== undefined;
-  let filtered = quizSets;
   if (restrict) {
     const ids = studentClassIds ?? [];
-    filtered = quizSets.filter((quiz) => isTrainingQuizVisibleToStudentClasses(quiz, ids));
+    filtered = filtered.filter((quiz) => isTrainingQuizVisibleToStudentClasses(quiz, ids));
   }
 
-  filtered.sort((a, b) => quizCreatedAtMs(b) - quizCreatedAtMs(a));
-
-  return filtered;
+  const classDisplayOrder = await getTrainingGroundsClassDisplayOrder();
+  return sortQuizSetsForAdminByClass(filtered, [], classDisplayOrder);
 }
 
-export async function getAllQuizSets(includeUnpublished: boolean = false): Promise<TrainingQuizSet[]> {
+export async function getAllQuizSets(
+  includeUnpublished: boolean = false,
+  options?: { includeArchived?: boolean }
+): Promise<TrainingQuizSet[]> {
   let q = query(
     collection(db, 'trainingQuizSets'),
     orderBy('createdAt', 'desc')
@@ -160,9 +243,11 @@ export async function getAllQuizSets(includeUnpublished: boolean = false): Promi
   
   const snapshot = await getDocs(q);
   const quizSets: TrainingQuizSet[] = [];
+  const includeArchived = options?.includeArchived !== false;
   
   snapshot.forEach(doc => {
     const data = { id: doc.id, ...doc.data() } as TrainingQuizSet;
+    if (!includeArchived && isTrainingQuizArchived(data)) return;
     if (includeUnpublished || data.isPublished) {
       quizSets.push(data);
     }
@@ -176,6 +261,34 @@ export async function updateQuizSet(quizSetId: string, updates: Partial<Training
     ...updates,
     updatedAt: serverTimestamp(),
   });
+}
+
+/**
+ * Move quiz sets into / out of the Archived folder.
+ * Archived sets are hidden from players and the admin Active list; questions remain importable.
+ */
+export async function setQuizSetsArchived(quizIds: string[], archived: boolean): Promise<void> {
+  const uniqueIds = Array.from(new Set(quizIds.filter((id) => typeof id === 'string' && id)));
+  if (uniqueIds.length === 0) return;
+
+  await Promise.all(
+    uniqueIds.map((id) => {
+      if (archived) {
+        return updateDoc(doc(db, 'trainingQuizSets', id), {
+          isArchived: true,
+          isPublished: false,
+          playerCompletionsEnabled: false,
+          archivedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      return updateDoc(doc(db, 'trainingQuizSets', id), {
+        isArchived: false,
+        archivedAt: null,
+        updatedAt: serverTimestamp(),
+      });
+    })
+  );
 }
 
 export async function deleteQuizSet(quizSetId: string): Promise<void> {

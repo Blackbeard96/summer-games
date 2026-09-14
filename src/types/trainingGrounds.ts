@@ -16,6 +16,8 @@ export interface TrainingQuestion {
   pointsXP: number; // XP reward for fully correct answer (partial credit calculated proportionally)
   artifactRewards?: string[]; // Array of artifact IDs to grant for correct answer
   order: number; // Order within quiz set
+  /** Academic skill IDs assessed by this question (Skill Mastery system). */
+  skillIds?: string[];
   createdAt?: any;
   updatedAt?: any;
 }
@@ -30,6 +32,12 @@ export interface TrainingQuizSet {
   groupIds?: string[]; // Array of group IDs (optional)
   isPublished: boolean;
   /**
+   * When true, hidden from student/admin active lists and live pickers.
+   * Still available as a question source when importing into new CFUs.
+   * Missing/false = active (backward compatible).
+   */
+  isArchived?: boolean;
+  /**
    * When false, students still see this published CFU but cannot start or submit solo attempts.
    * Missing or true = accepting completions (backward compatible).
    */
@@ -40,6 +48,12 @@ export interface TrainingQuizSet {
   isLiveEventCompatible?: boolean;
   /** Per-question time limit in seconds for live mode. Override default (e.g. 20). */
   timeLimitSeconds?: number;
+  /** Academic skills this CFU covers (organizational; questions carry scoring tags). */
+  skillIds?: string[];
+  /** Display order among CFUs (lower = higher in lists). Missing sorts after numbered items by createdAt. */
+  sortOrder?: number;
+  /** Set when moved to the Archived folder. */
+  archivedAt?: any;
   createdAt: any;
   updatedAt: any;
 }
@@ -71,6 +85,9 @@ export interface TrainingAnswer {
   isCorrect: boolean; // Fully correct (all correct answers selected, no incorrect)
   partialCredit: number; // 0.0 to 1.0 - percentage credit for partial correctness
   timeSpentMs: number; // Time taken to answer (optional, can be 0)
+  /** Denormalized skill tags at answer time (Skill Mastery). */
+  skillIds?: string[];
+  difficulty?: 'easy' | 'medium' | 'hard';
 }
 
 export interface TrainingGroundsStats {

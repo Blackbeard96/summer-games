@@ -70,19 +70,23 @@ const QuizResults: React.FC = () => {
 
   if (loading || !attempt || !quizSet) {
     return (
-      <div style={{ padding: '2rem', textAlign: 'center' }}>
-        <div>Loading results...</div>
+      <div className="mst-mission-shell">
+        <div className="mst-mission-loading" role="status" aria-live="polite">
+          <div className="mst-mission-loading-mark" aria-hidden="true" />
+          <p className="mst-mission-loading-title">Loading results...</p>
+          <p className="mst-mission-loading-copy">Calculating your CFU score...</p>
+        </div>
       </div>
     );
   }
 
-  const scoreColor = attempt.percent >= 70 ? '#10b981' : attempt.percent >= 50 ? '#f59e0b' : '#ef4444';
+  const scoreTier =
+    attempt.percent >= 70 ? 'is-high' : attempt.percent >= 50 ? 'is-mid' : 'is-low';
   const playerName = currentUser?.displayName ?? currentUser?.email ?? 'You';
   const canRetrySolo = isTrainingQuizAcceptingSoloCompletions(quizSet);
 
   return (
     <>
-      {/* Same-style summary as Live Event quiz — shown first, then close to see full results */}
       <TrainingQuizSummaryModal
         isOpen={showSummaryModal}
         onClose={() => setShowSummaryModal(false)}
@@ -91,298 +95,202 @@ const QuizResults: React.FC = () => {
         playerName={playerName}
       />
 
-    <div style={{ 
-      minHeight: '100vh', 
-      background: 'linear-gradient(to bottom, #f3f4f6, #e5e7eb)',
-      padding: '2rem'
-    }}>
-      <div style={{ maxWidth: '900px', margin: '0 auto' }}>
-        {/* Score card */}
-        <div style={{
-          background: 'white',
-          borderRadius: '1rem',
-          padding: '2rem',
-          marginBottom: '1.5rem',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-          textAlign: 'center'
-        }}>
-          <h1 style={{ 
-            fontSize: '2rem', 
-            fontWeight: 'bold',
-            marginBottom: '1rem',
-            color: '#1f2937'
-          }}>
-            Quiz Complete!
-          </h1>
-          <div style={{
-            fontSize: '4rem',
-            fontWeight: 'bold',
-            color: scoreColor,
-            marginBottom: '0.5rem'
-          }}>
-            {attempt.percent}%
-          </div>
-          <div style={{ fontSize: '1.125rem', color: '#6b7280', marginBottom: '2rem' }}>
-            {attempt.scoreCorrect} out of {attempt.scoreTotal} correct
-          </div>
+      <div className="mst-mission-shell">
+        <div className="mst-quiz-layout">
+          <div className="mst-mission-panel mst-quiz-panel">
+            <header className="mst-mission-header">
+              <p className="mst-mission-kicker">Training Grounds · CFU</p>
+              <h1 className="mst-mission-title">Quiz Complete</h1>
+              <p className="mst-mission-step-meta">{quizSet.title}</p>
+            </header>
 
-          {/* Rewards */}
-          <div style={{
-            background: '#f3f4f6',
-            borderRadius: '0.75rem',
-            padding: '1.5rem',
-            marginBottom: '1.5rem'
-          }}>
-            <h3 style={{ 
-              fontSize: '1.25rem', 
-              fontWeight: 'bold',
-              marginBottom: '1rem',
-              color: '#1f2937'
-            }}>
-              Rewards Earned
-            </h3>
-            <div style={{ 
-              display: 'flex', 
-              justifyContent: 'center',
-              gap: '2rem',
-              flexWrap: 'wrap'
-            }}>
-              <div>
-                <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-                  Participation Points
-                </div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>
-                  +{attempt.rewards.ppGained} PP
-                </div>
-              </div>
-              <div>
-                <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-                  Experience Points
-                </div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#10b981' }}>
-                  +{attempt.rewards.xpGained} XP
-                </div>
-              </div>
+            <div className="mst-quiz-score">
+              <div className={`mst-quiz-score-value ${scoreTier}`}>{attempt.percent}%</div>
+              <p className="mst-quiz-score-meta">
+                {attempt.scoreCorrect} out of {attempt.scoreTotal} correct
+              </p>
             </div>
-            {attempt.rewards.bonuses.length > 0 && (
-              <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #e5e7eb' }}>
-                <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
-                  Bonuses:
+
+            <div className="mst-mission-block mst-mission-block--accent">
+              <h3>Rewards Earned</h3>
+              <div className="mst-quiz-rewards">
+                <div>
+                  <div className="mst-quiz-reward-label">Power Points</div>
+                  <div className="mst-quiz-reward-value mst-quiz-reward-value--pp">
+                    +{attempt.rewards.ppGained} PP
+                  </div>
                 </div>
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                <div>
+                  <div className="mst-quiz-reward-label">Experience</div>
+                  <div className="mst-quiz-reward-value mst-quiz-reward-value--xp">
+                    +{attempt.rewards.xpGained} XP
+                  </div>
+                </div>
+              </div>
+              {attempt.rewards.bonuses.length > 0 && (
+                <div className="mst-quiz-bonus-row">
                   {attempt.rewards.bonuses.map((bonus, index) => (
-                    <span 
-                      key={index}
-                      style={{
-                        background: '#fef3c7',
-                        color: '#92400e',
-                        padding: '0.25rem 0.75rem',
-                        borderRadius: '9999px',
-                        fontSize: '0.875rem',
-                        fontWeight: '600'
-                      }}
-                    >
+                    <span key={index} className="mst-quiz-bonus">
                       {bonus}
                     </span>
                   ))}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
-        </div>
 
-        {/* Question breakdown */}
-        <div style={{
-          background: 'white',
-          borderRadius: '1rem',
-          padding: '2rem',
-          marginBottom: '1.5rem',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-        }}>
-          <h2 style={{ 
-            fontSize: '1.5rem', 
-            fontWeight: 'bold',
-            marginBottom: '1.5rem',
-            color: '#1f2937'
-          }}>
-            Question Breakdown
-          </h2>
+          <div className="mst-mission-panel mst-quiz-panel">
+            <h2 className="mst-mission-step-heading">Question Breakdown</h2>
+            <div className="mst-quiz-breakdown">
+              {questions.map((question, index) => {
+                const answer = attempt.answers.find((a) => a.questionId === question.id);
+                const isCorrect = answer?.isCorrect || false;
+                const isExpanded = expandedQuestions.has(question.id);
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            {questions.map((question, index) => {
-              const answer = attempt.answers.find(a => a.questionId === question.id);
-              const isCorrect = answer?.isCorrect || false;
-              const isExpanded = expandedQuestions.has(question.id);
-
-              return (
-                <div
-                  key={question.id}
-                  style={{
-                    border: `2px solid ${isCorrect ? '#10b981' : '#ef4444'}`,
-                    borderRadius: '0.5rem',
-                    overflow: 'hidden'
-                  }}
-                >
+                return (
                   <div
-                    onClick={() => toggleQuestion(question.id)}
-                    style={{
-                      padding: '1rem',
-                      background: isCorrect ? '#ecfdf5' : '#fef2f2',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center'
-                    }}
+                    key={question.id}
+                    className={`mst-quiz-row ${isCorrect ? 'is-ok' : 'is-bad'}`}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                      <span style={{ 
-                        fontSize: '1.25rem',
-                        fontWeight: 'bold'
-                      }}>
-                        {isCorrect ? '✓' : '✗'}
-                      </span>
-                      <span style={{ fontWeight: '600' }}>
-                        Question {index + 1}: {question.prompt.length > 50 
-                          ? question.prompt.substring(0, 50) + '...' 
+                    <button
+                      type="button"
+                      className="mst-quiz-row-head"
+                      onClick={() => toggleQuestion(question.id)}
+                      aria-expanded={isExpanded}
+                    >
+                      <span>
+                        {isCorrect ? '✓' : '✗'} Question {index + 1}:{' '}
+                        {question.prompt.length > 50
+                          ? `${question.prompt.substring(0, 50)}...`
                           : question.prompt}
                       </span>
-                    </div>
-                    <span style={{ fontSize: '1.5rem' }}>
-                      {isExpanded ? '▼' : '▶'}
-                    </span>
-                  </div>
+                      <span aria-hidden="true">{isExpanded ? '▼' : '▶'}</span>
+                    </button>
 
-                  {isExpanded && (
-                    <div style={{ padding: '1rem', background: 'white' }}>
-                      <div style={{ marginBottom: '1rem' }}>
-                        <strong>Question:</strong> {question.prompt}
-                      </div>
-                      {question.imageUrl && (
-                        <div style={{ marginBottom: '1rem', textAlign: 'center' }}>
-                          <img 
-                            src={question.imageUrl} 
-                            alt="Question illustration"
-                            style={{
-                              maxWidth: '100%',
-                              maxHeight: '300px',
-                              borderRadius: '0.5rem'
-                            }}
-                          />
+                    {isExpanded && (
+                      <div className="mst-quiz-row-body">
+                        <div style={{ marginBottom: '0.85rem' }}>
+                          <strong style={{ color: 'var(--mst-text-primary)' }}>Question:</strong>{' '}
+                          {question.prompt}
                         </div>
-                      )}
-                      <div style={{ marginBottom: '1rem' }}>
-                        <strong>Your answer(s):</strong>{' '}
-                        <span style={{ color: isCorrect ? '#10b981' : (answer?.partialCredit && answer.partialCredit > 0 ? '#f59e0b' : '#ef4444'), fontWeight: '600' }}>
-                          {(() => {
-                            const selectedIndices = answer?.selectedIndices || 
-                              (answer?.selectedIndex !== undefined ? [answer.selectedIndex] : []);
-                            if (selectedIndices.length === 0) return 'None selected';
-                            return selectedIndices.map(idx => `${String.fromCharCode(65 + idx)}: ${question.options[idx]}`).join(', ');
-                          })()}
-                        </span>
-                        {answer?.partialCredit && answer.partialCredit > 0 && answer.partialCredit < 1 && (
-                          <span style={{ color: '#f59e0b', marginLeft: '0.5rem' }}>
-                            ({Math.round(answer.partialCredit * 100)}% credit)
+                        {question.imageUrl && (
+                          <img
+                            className="mst-mission-media"
+                            src={question.imageUrl}
+                            alt="Question illustration"
+                          />
+                        )}
+                        <div style={{ marginBottom: '0.75rem' }}>
+                          <strong style={{ color: 'var(--mst-text-primary)' }}>Your answer(s):</strong>{' '}
+                          <span
+                            style={{
+                              color: isCorrect
+                                ? '#6ee7a8'
+                                : answer?.partialCredit && answer.partialCredit > 0
+                                  ? 'var(--mst-gold-bright)'
+                                  : '#fca5a5',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {(() => {
+                              const selectedIndices =
+                                answer?.selectedIndices ||
+                                (answer?.selectedIndex !== undefined
+                                  ? [answer.selectedIndex]
+                                  : []);
+                              if (selectedIndices.length === 0) return 'None selected';
+                              return selectedIndices
+                                .map(
+                                  (idx) =>
+                                    `${String.fromCharCode(65 + idx)}: ${question.options[idx]}`
+                                )
+                                .join(', ');
+                            })()}
                           </span>
+                          {answer?.partialCredit &&
+                            answer.partialCredit > 0 &&
+                            answer.partialCredit < 1 && (
+                              <span style={{ color: 'var(--mst-gold-bright)', marginLeft: '0.5rem' }}>
+                                ({Math.round(answer.partialCredit * 100)}% credit)
+                              </span>
+                            )}
+                        </div>
+                        <div style={{ marginBottom: question.explanation ? '0.75rem' : 0 }}>
+                          <strong style={{ color: 'var(--mst-text-primary)' }}>
+                            Correct answer(s):
+                          </strong>{' '}
+                          <span style={{ color: '#6ee7a8', fontWeight: 600 }}>
+                            {(() => {
+                              const idxs =
+                                (question as { correctIndices?: number[] }).correctIndices ||
+                                (question.correctIndex !== undefined
+                                  ? [question.correctIndex]
+                                  : []);
+                              if (idxs.length === 0) return 'None';
+                              return idxs
+                                .map(
+                                  (idx: number) =>
+                                    `${String.fromCharCode(65 + idx)}: ${question.options[idx]}`
+                                )
+                                .join(', ');
+                            })()}
+                          </span>
+                        </div>
+                        {question.explanation && (
+                          <div className="mst-mission-block mst-mission-block--info" style={{ marginBottom: 0 }}>
+                            <strong style={{ color: 'var(--mst-text-primary)' }}>Explanation:</strong>{' '}
+                            {question.explanation}
+                          </div>
                         )}
                       </div>
-                      <div style={{ marginBottom: '1rem' }}>
-                        <strong>Correct answer(s):</strong>{' '}
-                        <span style={{ color: '#10b981', fontWeight: '600' }}>
-                          {(() => {
-                            const correctIndices = (question as any).correctIndices || 
-                              (question.correctIndex !== undefined ? [question.correctIndex] : []);
-                            if (correctIndices.length === 0) return 'None';
-                            return correctIndices.map((idx: number) => `${String.fromCharCode(65 + idx)}: ${question.options[idx]}`).join(', ');
-                          })()}
-                        </span>
-                      </div>
-                      {question.explanation && (
-                        <div style={{
-                          padding: '0.75rem',
-                          background: '#f3f4f6',
-                          borderRadius: '0.5rem',
-                          color: '#6b7280'
-                        }}>
-                          <strong>Explanation:</strong> {question.explanation}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        </div>
 
-        {/* Action buttons */}
-        <div style={{
-          display: 'flex',
-          gap: '1rem',
-          justifyContent: 'center',
-          flexWrap: 'wrap'
-        }}>
-          {returnMission && (
+          <div className="mst-quiz-actions mst-quiz-actions--center">
+            {returnMission && (
+              <button
+                type="button"
+                className="mst-mission-btn mst-mission-btn--primary"
+                onClick={() => navigate(returnMission)}
+              >
+                Back to mission
+              </button>
+            )}
             <button
-              onClick={() => navigate(returnMission)}
-              style={{
-                padding: '0.75rem 2rem',
-                background: '#7c3aed',
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.5rem',
-                fontSize: '1rem',
-                fontWeight: '600',
-                cursor: 'pointer',
+              type="button"
+              className="mst-mission-btn mst-mission-btn--complete"
+              disabled={!canRetrySolo}
+              title={
+                !canRetrySolo
+                  ? 'This CFU is temporarily closed for completions. Your teacher can turn it back on.'
+                  : undefined
+              }
+              onClick={() => {
+                if (!canRetrySolo) return;
+                const base = `/training-grounds/quiz/${attempt.quizSetId}`;
+                navigate(
+                  returnMission
+                    ? `${base}?returnMission=${encodeURIComponent(returnMission)}`
+                    : base
+                );
               }}
             >
-              Back to mission
+              {canRetrySolo ? 'Retry Quiz' : 'Retry unavailable'}
             </button>
-          )}
-          <button
-            type="button"
-            disabled={!canRetrySolo}
-            title={
-              !canRetrySolo
-                ? 'This CFU is temporarily closed for completions. Your teacher can turn it back on.'
-                : undefined
-            }
-            onClick={() => {
-              if (!canRetrySolo) return;
-              const base = `/training-grounds/quiz/${attempt.quizSetId}`;
-              navigate(returnMission ? `${base}?returnMission=${encodeURIComponent(returnMission)}` : base);
-            }}
-            style={{
-              padding: '0.75rem 2rem',
-              background: canRetrySolo ? '#4f46e5' : '#9ca3af',
-              color: 'white',
-              border: 'none',
-              borderRadius: '0.5rem',
-              fontSize: '1rem',
-              fontWeight: '600',
-              cursor: canRetrySolo ? 'pointer' : 'not-allowed',
-            }}
-          >
-            {canRetrySolo ? 'Retry Quiz' : 'Retry unavailable'}
-          </button>
-          <button
-            onClick={() => navigate('/training-grounds')}
-            style={{
-              padding: '0.75rem 2rem',
-              background: '#6b7280',
-              color: 'white',
-              border: 'none',
-              borderRadius: '0.5rem',
-              fontSize: '1rem',
-              fontWeight: '600',
-              cursor: 'pointer',
-            }}
-          >
-            Back to Training Grounds (CFUs)
-          </button>
+            <button
+              type="button"
+              className="mst-mission-btn mst-mission-btn--secondary"
+              onClick={() => navigate('/training-grounds')}
+            >
+              Back to Training Grounds
+            </button>
+          </div>
         </div>
       </div>
-    </div>
     </>
   );
 };

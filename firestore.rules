@@ -1153,6 +1153,12 @@ service cloud.firestore {
       allow update, delete: if isLiveEventStaff();
     }
 
+    // Training Grounds meta (e.g. class section display order for CFU lists)
+    match /trainingGroundsMeta/{docId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if isLiveEventStaff();
+    }
+
     // Training Grounds — published quiz sets + questions (live event quiz launch, Training Grounds page).
     // Was missing: fell through to deny-all and caused permission errors on getQuizSet / getQuestions.
     match /trainingQuizSets/{quizSetId} {
@@ -1168,6 +1174,48 @@ service cloud.firestore {
         );
         allow create, update, delete: if isLiveEventStaff();
       }
+    }
+
+    // Academic Skill Library (universal MST skills — not battle Skill Mastery)
+    match /academicSkills/{skillId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if isLiveEventStaff();
+    }
+
+    // Per-player skill mastery aggregates
+    match /skillMastery/{userId} {
+      allow read: if request.auth != null && (
+        request.auth.uid == userId || isLiveEventStaff()
+      );
+      match /skills/{skillId} {
+        allow read: if request.auth != null && (
+          request.auth.uid == userId || isLiveEventStaff()
+        );
+        // Clients may update their own mastery after CFU attempts; staff may write any.
+        allow create, update: if request.auth != null && (
+          request.auth.uid == userId || isLiveEventStaff()
+        );
+        allow delete: if isLiveEventStaff();
+      }
+    }
+
+    // Question-level skill evidence events
+    match /skillEvidence/{evidenceId} {
+      allow read: if request.auth != null && (
+        resource.data.userId == request.auth.uid || isLiveEventStaff()
+      );
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isLiveEventStaff();
+    }
+
+    match /skillMasteryEvents/{eventId} {
+      allow read: if request.auth != null && (
+        resource.data.userId == request.auth.uid || isLiveEventStaff()
+      );
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isLiveEventStaff();
     }
 
     // --- Player Journey & missions (were missing; default deny blocked templates + progress) ---

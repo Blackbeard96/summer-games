@@ -19,7 +19,7 @@ import {
   writeBatch,
   runTransaction
 } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { updateProgressOnChallengeComplete } from './chapterProgression';
 import { grantChallengeRewards } from './challengeRewards';
@@ -43,6 +43,9 @@ import {
   ProfileJourneyStageId,
   normalizeMissionCategory,
 } from '../types/missions';
+import { isMissionPublished, isSkillMissionVisibleToStudentClasses } from './missionAdminHelpers';
+import { getClassroomIdsForEnrolledStudent } from './classroomQueries';
+import { isUserAdmin } from './roleManagement';
 
 export function parseMissionRewardsFromDoc(raw: unknown): MissionTemplate['rewards'] {
   if (!raw || typeof raw !== 'object') return {};
@@ -120,8 +123,14 @@ export async function getMissionTemplate(missionId: string): Promise<MissionTemp
       title: data.title || 'Untitled Mission',
       description: data.description || '',
       npc: data.npc || null,
-      missionCategory: data.missionCategory || 'SIDE',
+      missionCategory: normalizeMissionCategory(data.missionCategory),
       deliveryChannels: data.deliveryChannels || ['HUB_NPC'],
+      classIds: Array.isArray(data.classIds)
+        ? data.classIds.filter((id: unknown) => typeof id === 'string' && id)
+        : undefined,
+      skillIds: Array.isArray(data.skillIds)
+        ? data.skillIds.filter((id: unknown) => typeof id === 'string' && id)
+        : undefined,
       story: data.story || undefined,
       profile: data.profile || undefined,
       playerJourneyLink: data.playerJourneyLink || undefined,
@@ -134,6 +143,7 @@ export async function getMissionTemplate(missionId: string): Promise<MissionTemp
         typeof data.hubDisplayOrder === 'number' && Number.isFinite(data.hubDisplayOrder)
           ? data.hubDisplayOrder
           : undefined,
+      isPublished: data.isPublished !== false,
       createdAt: data.createdAt,
       updatedAt: data.updatedAt
     } as MissionTemplate;
@@ -144,13 +154,16 @@ export async function getMissionTemplate(missionId: string): Promise<MissionTemp
 }
 
 /**
- * Get all mission templates (with optional filters)
+ * Get mission templates (with optional filters).
+ * By default excludes unpublished drafts (Home hub / player lists).
+ * Pass `includeUnpublished: true` for admin or internal tooling.
  */
 export async function getMissionTemplates(filters?: {
   category?: MissionCategory;
   npc?: string;
   chapterId?: string;
   deliveryChannel?: DeliveryChannel;
+  includeUnpublished?: boolean;
 }): Promise<MissionTemplate[]> {
   try {
     const missionsRef = collection(db, 'missions');
@@ -169,6 +182,7 @@ export async function getMissionTemplates(filters?: {
     
     const snapshot = await getDocs(q);
     const missions: MissionTemplate[] = [];
+    const includeUnpublished = filters?.includeUnpublished === true;
     
     snapshot.forEach((doc) => {
       const data = doc.data();
@@ -181,6 +195,12 @@ export async function getMissionTemplates(filters?: {
         npc: data.npc || null,
         missionCategory: normalizeMissionCategory(data.missionCategory),
         deliveryChannels: data.deliveryChannels || ['HUB_NPC'],
+        classIds: Array.isArray(data.classIds)
+          ? data.classIds.filter((id: unknown) => typeof id === 'string' && id)
+          : undefined,
+        skillIds: Array.isArray(data.skillIds)
+          ? data.skillIds.filter((id: unknown) => typeof id === 'string' && id)
+          : undefined,
         story: data.story || undefined,
         profile: data.profile || undefined,
         playerJourneyLink: data.playerJourneyLink || undefined,
@@ -193,6 +213,7 @@ export async function getMissionTemplates(filters?: {
           typeof data.hubDisplayOrder === 'number' && Number.isFinite(data.hubDisplayOrder)
             ? data.hubDisplayOrder
             : undefined,
+        isPublished: data.isPublished !== false,
         createdAt: data.createdAt,
         updatedAt: data.updatedAt
       };
@@ -202,6 +223,10 @@ export async function getMissionTemplates(filters?: {
         if (!mission.deliveryChannels.includes(filters.deliveryChannel)) {
           return; // Skip this mission
         }
+      }
+
+      if (!includeUnpublished && !isMissionPublished(mission)) {
+        return;
       }
       
       missions.push(mission);
@@ -400,18 +425,38 @@ export async function checkGating(
  * Accept a mission
  * 
  * For STORY missions: Only one active STORY mission per chapter allowed
- * For SIDE missions: Multiple active missions allowed
+ * For SIDE / SKILL missions: Multiple active missions allowed
+ * For SKILL missions: Must be published and assigned to a class the student is in
  */
 export async function acceptMission(
   userId: string,
   missionId: string,
-  source: MissionSource
+  source: MissionSource,
+  options?: { isAdmin?: boolean }
 ): Promise<{ success: boolean; error?: string; playerMissionId?: string }> {
   try {
     // Get mission template
     const mission = await getMissionTemplate(missionId);
     if (!mission) {
       return { success: false, error: 'Mission not found' };
+    }
+
+    const admin =
+      options?.isAdmin === true ||
+      (await isUserAdmin(userId, auth.currentUser?.uid === userId ? auth.currentUser?.email : null));
+
+    // Admins may accept unpublished missions for testing; students cannot.
+    if (!isMissionPublished(mission) && !admin) {
+      return { success: false, error: 'This mission is not published yet.' };
+    }
+
+    if (mission.missionCategory === 'SKILL') {
+      if (!admin) {
+        const enrolled = await getClassroomIdsForEnrolledStudent(userId);
+        if (!isSkillMissionVisibleToStudentClasses(mission, enrolled)) {
+          return { success: false, error: 'This Skill Mission is not assigned to your class.' };
+        }
+      }
     }
     
     // Check if already accepted
@@ -521,20 +566,38 @@ export async function acceptMission(
 }
 
 /**
- * Reopen a completed DEMO mission for practice (resets sequence progress; does not re-grant first-time rewards if claim ids already used).
+ * Reopen a completed DEMO or SKILL mission for practice
+ * (resets sequence progress; does not re-grant first-time rewards if claim ids already used).
  */
 export async function redoDemoMission(
   userId: string,
   missionId: string,
-  source: MissionSource = 'HUB_NPC'
+  source: MissionSource = 'HUB_NPC',
+  options?: { isAdmin?: boolean }
 ): Promise<{ success: boolean; error?: string; playerMissionId?: string }> {
   try {
     const mission = await getMissionTemplate(missionId);
     if (!mission) {
       return { success: false, error: 'Mission not found' };
     }
-    if (mission.missionCategory !== 'DEMO') {
-      return { success: false, error: 'Only Demo missions can be redone.' };
+    if (mission.missionCategory !== 'DEMO' && mission.missionCategory !== 'SKILL') {
+      return { success: false, error: 'Only Demo and Skill missions can be replayed.' };
+    }
+
+    const admin =
+      options?.isAdmin === true ||
+      (await isUserAdmin(userId, auth.currentUser?.uid === userId ? auth.currentUser?.email : null));
+
+    if (mission.missionCategory === 'SKILL') {
+      if (!isMissionPublished(mission) && !admin) {
+        return { success: false, error: 'This Skill Mission is not published yet.' };
+      }
+      if (!admin) {
+        const enrolled = await getClassroomIdsForEnrolledStudent(userId);
+        if (!isSkillMissionVisibleToStudentClasses(mission, enrolled)) {
+          return { success: false, error: 'This Skill Mission is not assigned to your class.' };
+        }
+      }
     }
 
     const playerMissions = await getPlayerMissions(userId);
@@ -543,13 +606,13 @@ export async function redoDemoMission(
       playerMissions.find((pm) => pm.missionId === missionId);
 
     if (!existing) {
-      return acceptMission(userId, missionId, source);
+      return acceptMission(userId, missionId, source, { isAdmin: admin });
     }
     if (existing.status === 'active') {
       return { success: true, playerMissionId: existing.id };
     }
     if (existing.status !== 'completed') {
-      return { success: false, error: 'Mission cannot be redone right now.' };
+      return { success: false, error: 'Mission cannot be replayed right now.' };
     }
 
     await updateDoc(doc(db, 'playerMissions', existing.id), {
@@ -565,8 +628,8 @@ export async function redoDemoMission(
 
     return { success: true, playerMissionId: existing.id };
   } catch (error) {
-    console.error('Error redoing demo mission:', error);
-    return { success: false, error: 'Failed to restart demo mission' };
+    console.error('Error replaying mission:', error);
+    return { success: false, error: 'Failed to restart mission' };
   }
 }
 
@@ -946,8 +1009,11 @@ async function hubMissionNeedsPlayerAttention(
     if (Array.isArray(pendingGroups) && pendingGroups.length > 0) return true;
     if (pm.status === 'completed') return false;
     if (pm.status === 'locked') return false;
+    // In-progress missions still need attention even if the template was unpublished later
     return true;
   }
+  // Unpublished drafts never appear as “available” on Home heroes
+  if (!isMissionPublished(mission)) return false;
   const [prerequisitesMet, gatingCheck] = await Promise.all([
     checkPrerequisites(userId, mission),
     checkGating(userId, mission),

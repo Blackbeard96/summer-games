@@ -19,6 +19,7 @@ import {
   limit,
   Timestamp,
 } from 'firebase/firestore';
+import ProfileSkillMasterySection from '../components/skills/ProfileSkillMasterySection';
 import type { ProductivityStatDoc } from '../utils/productivityTracking';
 import { tsMs } from '../utils/productivityTracking';
 import {
@@ -2073,6 +2074,8 @@ const Profile = () => {
           )}
         </div>
       )}
+
+      {currentUser && <ProfileSkillMasterySection userId={currentUser.uid} />}
 
       {/* Secondary profile panels under the top card row */}
       <div className="mst-profile-secondary">

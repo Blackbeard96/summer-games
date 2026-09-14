@@ -175,6 +175,8 @@ const InSessionBattleView = withRouteSplitting(() => import('./components/InSess
 const AssessmentGoalsStudent = withRouteSplitting(() => import('./components/AssessmentGoalsStudent'));
 const WeeklyGoalsPage = withRouteSplitting(() => import('./pages/WeeklyGoalsPage'));
 const TrainingGrounds = withRouteSplitting(() => import('./pages/TrainingGrounds'));
+const SkillLibraryAdmin = withRouteSplitting(() => import('./pages/admin/SkillLibraryAdmin'));
+const SkillAnalyticsAdmin = withRouteSplitting(() => import('./pages/admin/SkillAnalyticsAdmin'));
 const MissionRunner = withRouteSplitting(() => import('./pages/MissionRunner'));
 const Level2ManifestBuilderPage = withRouteSplitting(() => import('./pages/Level2ManifestBuilderPage'));
 const QuizPlayer = withRouteSplitting(() => import('./pages/QuizPlayer'));
@@ -735,6 +737,16 @@ const AppContent = () => {
               <ProtectedRoute user={true}>
                 <TrainingGrounds />
               </ProtectedRoute>
+            } />
+            <Route path="/admin/skill-library" element={
+              <RequireAdmin>
+                <SkillLibraryAdmin />
+              </RequireAdmin>
+            } />
+            <Route path="/admin/skill-analytics" element={
+              <RequireAdmin>
+                <SkillAnalyticsAdmin />
+              </RequireAdmin>
             } />
             <Route path="/training-grounds/quiz/:quizSetId" element={
               <ProtectedRoute user={true}>

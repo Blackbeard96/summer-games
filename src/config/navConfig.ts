@@ -122,6 +122,18 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
               visibility: 'all'
             },
             {
+              label: 'Skill Library',
+              path: '/admin/skill-library',
+              icon: '✦',
+              visibility: 'admin'
+            },
+            {
+              label: 'Skill Analytics',
+              path: '/admin/skill-analytics',
+              icon: '📈',
+              visibility: 'admin'
+            },
+            {
               label: 'Goals & Habits',
               path: '/assessment-goals',
               icon: '🎯',

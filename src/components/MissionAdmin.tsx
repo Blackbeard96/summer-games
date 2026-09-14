@@ -3,7 +3,8 @@
  * 
  * Allows admins to:
  * - Create/edit missions
- * - Designate missions as STORY, SIDE, Sovereign (SOVEREIGN), or PROFILE
+ * - Designate missions as STORY, SIDE, SKILL, Sovereign (SOVEREIGN), DEMO, or PROFILE
+ * - Assign Skill Missions to specific classes (class-gated visibility)
  * - Set chapter metadata for story missions
  * - Assign NPCs and delivery channels
  */
@@ -44,8 +45,10 @@ import {
   mergeJourneyMissionsForAdmin,
   isHardcodedJourneyMissionId,
   challengeIdFromJourneyMissionId,
+  assignedClassIdsForMission,
   type MissionAdminFilter,
 } from '../utils/missionAdminHelpers';
+import SkillPicker from './skills/SkillPicker';
 import {
   uploadMissionPreviewImage,
   validateMissionPreviewImage,
@@ -88,6 +91,8 @@ type MissionCreateFormData = {
   profileOrder: number;
   linkedJourneyStep: string;
   hubDisplayOrder: string;
+  classIds: string[];
+  skillIds: string[];
 };
 
 type MissionCreateDraftPersist = {
@@ -142,7 +147,7 @@ function writeMissionAdminUi(ui: { listFilter: MissionAdminFilter; showCreateMod
 }
 
 function usesHubDisplayOrder(category: MissionCategory): boolean {
-  return category === 'SIDE' || category === 'SOVEREIGN' || category === 'DEMO';
+  return category === 'SIDE' || category === 'SOVEREIGN' || category === 'DEMO' || category === 'SKILL';
 }
 
 function missionCategoryListChrome(category: MissionCategory): {
@@ -180,6 +185,13 @@ function missionCategoryListChrome(category: MissionCategory): {
         badgeBg: '#0891b2',
         badgeColor: 'white',
       };
+    case 'SKILL':
+      return {
+        panelBg: 'rgba(245, 158, 11, 0.12)',
+        borderColor: '#f59e0b',
+        badgeBg: '#d97706',
+        badgeColor: 'white',
+      };
     default:
       return {
         panelBg: 'rgba(59, 130, 246, 0.1)',
@@ -193,6 +205,7 @@ function missionCategoryListChrome(category: MissionCategory): {
 function missionCategoryBadgeLabel(category: MissionCategory): string {
   if (category === 'SOVEREIGN') return 'Sovereign';
   if (category === 'DEMO') return 'Demo';
+  if (category === 'SKILL') return 'Skill';
   return category;
 }
 
@@ -210,10 +223,24 @@ const MissionAdmin: React.FC = () => {
   const [previewMission, setPreviewMission] = useState<MissionTemplate | null>(null);
   const [imageEditMission, setImageEditMission] = useState<MissionTemplate | null>(null);
   const [journeyMedia, setJourneyMedia] = useState<Record<string, JourneyChallengeMedia>>({});
+  const [classrooms, setClassrooms] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {
     loadMissions();
+    loadClassrooms();
   }, []);
+
+  const loadClassrooms = async () => {
+    try {
+      const snap = await getDocs(collection(db, 'classrooms'));
+      const list = snap.docs
+        .map((d) => ({ id: d.id, name: (d.data().name as string) || d.id }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setClassrooms(list);
+    } catch (e) {
+      console.warn('Could not load classrooms for Skill Missions:', e);
+    }
+  };
 
   useEffect(() => {
     writeMissionAdminUi({ listFilter, showCreateModal });
@@ -274,6 +301,12 @@ const MissionAdmin: React.FC = () => {
             typeof data.hubDisplayOrder === 'number' && Number.isFinite(data.hubDisplayOrder)
               ? data.hubDisplayOrder
               : undefined,
+          classIds: Array.isArray(data.classIds)
+            ? data.classIds.filter((id: unknown) => typeof id === 'string' && id)
+            : undefined,
+          skillIds: Array.isArray(data.skillIds)
+            ? data.skillIds.filter((id: unknown) => typeof id === 'string' && id)
+            : undefined,
           createdAt: data.createdAt,
           updatedAt: data.updatedAt
         });
@@ -418,6 +451,10 @@ const MissionAdmin: React.FC = () => {
     }
     try {
       const next = !isMissionPublished(mission);
+      if (next && mission.missionCategory === 'SKILL' && assignedClassIdsForMission(mission).length === 0) {
+        alert('Assign this Skill Mission to at least one class before publishing.');
+        return;
+      }
       await updateDoc(doc(db, 'missions', mission.id), {
         isPublished: next,
         updatedAt: serverTimestamp(),
@@ -485,6 +522,7 @@ const MissionAdmin: React.FC = () => {
     { id: 'all', label: 'All Missions' },
     { id: 'journey', label: "Player's Journey" },
     { id: 'side', label: 'Side Missions' },
+    { id: 'skill', label: 'Skill Missions' },
     { id: 'demo', label: 'Demo' },
     { id: 'drafts', label: 'Drafts' },
     { id: 'published', label: 'Published' },
@@ -633,6 +671,13 @@ const MissionAdmin: React.FC = () => {
                         {mission.journeyMissionType}
                       </span>
                     )}
+                    {mission.missionCategory === 'SKILL' && (
+                      <span style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: 600 }}>
+                        {assignedClassIdsForMission(mission).length > 0
+                          ? `${assignedClassIdsForMission(mission).length} class${assignedClassIdsForMission(mission).length === 1 ? '' : 'es'}`
+                          : 'No classes assigned'}
+                      </span>
+                    )}
                   </div>
                   <p style={{ margin: 0, color: '#6b7280', fontSize: '0.9rem' }}>
                     {mission.shortDescription || mission.description}
@@ -699,6 +744,7 @@ const MissionAdmin: React.FC = () => {
         <MissionEditModal
           key={selectedMission.id}
           mission={selectedMission}
+          classrooms={classrooms}
           onClose={() => setSelectedMission(null)}
           onSave={handleSaveMission}
           onDelete={handleDeleteMission}
@@ -710,6 +756,7 @@ const MissionAdmin: React.FC = () => {
       {/* Create Modal */}
       {showCreateModal && (
         <MissionCreateModal
+          classrooms={classrooms}
           onClose={() => setShowCreateModal(false)}
           onCreate={handleCreateMission}
           saving={saving}
@@ -1100,6 +1147,7 @@ const MissionImageEditModal: React.FC<MissionImageEditModalProps> = ({
 
 interface MissionEditModalProps {
   mission: MissionTemplate;
+  classrooms: Array<{ id: string; name: string }>;
   onClose: () => void;
   onSave: (data: Partial<MissionTemplate> & { hubDisplayOrderClear?: boolean }) => void;
   onDelete: (missionId: string) => void | Promise<void>;
@@ -1107,7 +1155,15 @@ interface MissionEditModalProps {
   deleting: boolean;
 }
 
-const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, onClose, onDelete, saving, deleting }) => {
+const MissionEditModal: React.FC<MissionEditModalProps> = ({
+  mission,
+  classrooms,
+  onSave,
+  onClose,
+  onDelete,
+  saving,
+  deleting,
+}) => {
   const [resettingProgress, setResettingProgress] = useState(false);
   const busy = saving || deleting || resettingProgress;
   const [formData, setFormData] = useState({
@@ -1143,6 +1199,8 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
     previewImageStoragePath: mission.previewImageStoragePath || '',
     modalImageUrl: mission.modalImageUrl || '',
     modalImageStoragePath: mission.modalImageStoragePath || '',
+    classIds: assignedClassIdsForMission(mission),
+    skillIds: Array.isArray(mission.skillIds) ? [...mission.skillIds] : [],
   });
 
   const [imageUploading, setImageUploading] = useState<'preview' | 'modal' | null>(null);
@@ -1158,6 +1216,15 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (
+      formData.missionCategory === 'SKILL' &&
+      formData.isPublished &&
+      formData.classIds.length === 0
+    ) {
+      alert('Assign this Skill Mission to at least one class before publishing. Only students in those classes can see it.');
+      return;
+    }
     
     const missionData: Partial<MissionTemplate> & { hubDisplayOrderClear?: boolean } = {
       title: formData.title,
@@ -1173,6 +1240,8 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
       previewImageStoragePath: formData.previewImageStoragePath || undefined,
       modalImageUrl: formData.modalImageUrl || undefined,
       modalImageStoragePath: formData.modalImageStoragePath || undefined,
+      classIds: formData.missionCategory === 'SKILL' ? formData.classIds : [],
+      skillIds: formData.missionCategory === 'SKILL' ? formData.skillIds : [],
     };
 
     if (formData.missionCategory === 'STORY') {
@@ -1645,12 +1714,70 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
               style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
             >
               <option value="SIDE">SIDE (Side Missions)</option>
+              <option value="SKILL">SKILL (Skill Missions — class-assigned)</option>
               <option value="STORY">STORY (Player's Journey)</option>
               <option value="DEMO">DEMO (Game demos & feature showcases)</option>
               <option value="SOVEREIGN">Sovereign Missions</option>
               <option value="PROFILE">PROFILE</option>
             </select>
           </div>
+
+          {formData.missionCategory === 'SKILL' && (
+            <div
+              style={{
+                marginBottom: '1rem',
+                padding: '0.85rem',
+                background: '#fffbeb',
+                border: '1px solid #fcd34d',
+                borderRadius: '0.5rem',
+              }}
+            >
+              <div style={{ fontWeight: 'bold', marginBottom: '0.35rem', color: '#000000' }}>
+                Classes (who can see this Skill Mission)
+              </div>
+              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', color: '#000000' }}>
+                Only students enrolled in a selected class can see and accept this mission. Required to publish.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginBottom: '0.75rem' }}>
+                {classrooms.length === 0 && (
+                  <span style={{ fontSize: '0.8rem', color: '#6b7280' }}>No classrooms found.</span>
+                )}
+                {classrooms.map((classroom) => (
+                  <label
+                    key={classroom.id}
+                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: '#000000' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={formData.classIds.includes(classroom.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setFormData({ ...formData, classIds: [...formData.classIds, classroom.id] });
+                        } else {
+                          setFormData({
+                            ...formData,
+                            classIds: formData.classIds.filter((id) => id !== classroom.id),
+                          });
+                        }
+                      }}
+                    />
+                    {classroom.name}
+                  </label>
+                ))}
+              </div>
+              <div style={{ fontWeight: 'bold', marginBottom: '0.35rem', color: '#000000' }}>
+                Skills taught (optional)
+              </div>
+              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', color: '#000000' }}>
+                Tag academic skills this mission covers. Unlock Skill Moves / Trees / abilities via Completion Rewards
+                (moves &amp; abilities).
+              </p>
+              <SkillPicker
+                selectedIds={formData.skillIds}
+                onChange={(ids) => setFormData({ ...formData, skillIds: ids })}
+              />
+            </div>
+          )}
 
           {usesHubDisplayOrder(formData.missionCategory) && (
             <div style={{ marginBottom: '1rem' }}>
@@ -1667,7 +1794,7 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
                 style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
               />
               <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
-                Lower numbers appear first in this NPC&apos;s Side / Sovereign / Demo Missions list. Leave blank to sort by
+                Lower numbers appear first in this NPC&apos;s Side / Sovereign / Demo / Skill Missions list. Leave blank to sort by
                 creation time (oldest first). Players still see numbered steps 1, 2, 3… in that order.
               </p>
             </div>
@@ -2050,16 +2177,19 @@ const DEFAULT_CREATE_FORM: MissionCreateFormData = {
   profileOrder: 1,
   linkedJourneyStep: '',
   hubDisplayOrder: '',
+  classIds: [],
+  skillIds: [],
 };
 
 const MissionCreateModal: React.FC<{
+  classrooms: Array<{ id: string; name: string }>;
   onClose: () => void;
   onCreate: (data: Omit<MissionTemplate, 'id' | 'createdAt' | 'updatedAt'>, playerJourneyLink?: PlayerJourneyLink, sequence?: MissionSequenceStep[], draftMissionId?: string) => void;
   saving: boolean;
-}> = ({ onClose, onCreate, saving }) => {
+}> = ({ classrooms, onClose, onCreate, saving }) => {
   const restored = readMissionCreateDraft();
   const [formData, setFormData] = useState<MissionCreateFormData>(
-    () => restored?.formData || { ...DEFAULT_CREATE_FORM }
+    () => ({ ...DEFAULT_CREATE_FORM, ...(restored?.formData || {}), classIds: restored?.formData?.classIds || [], skillIds: restored?.formData?.skillIds || [] })
   );
 
   const [rewardEntries, setRewardEntries] = useState<BattlePassTierRewardEntry[]>(
@@ -2164,13 +2294,21 @@ const MissionCreateModal: React.FC<{
       alert('Please select an NPC when HUB_NPC delivery channel is selected.');
       return;
     }
+
+    if (formData.missionCategory === 'SKILL' && formData.classIds.length === 0) {
+      alert('Assign this Skill Mission to at least one class. Only students in those classes can see it.');
+      return;
+    }
     
     const missionData: Omit<MissionTemplate, 'id' | 'createdAt' | 'updatedAt'> = {
       title: formData.title,
       description: formData.description,
       npc: formData.npc || undefined,
       missionCategory: formData.missionCategory,
-      deliveryChannels: formData.deliveryChannels
+      deliveryChannels: formData.deliveryChannels,
+      classIds: formData.missionCategory === 'SKILL' ? formData.classIds : undefined,
+      skillIds: formData.missionCategory === 'SKILL' && formData.skillIds.length > 0 ? formData.skillIds : undefined,
+      isPublished: formData.missionCategory === 'SKILL' ? true : undefined,
     };
 
     if (usesHubDisplayOrder(formData.missionCategory)) {
@@ -2430,12 +2568,67 @@ const MissionCreateModal: React.FC<{
               style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
             >
               <option value="SIDE">SIDE</option>
+              <option value="SKILL">SKILL (Skill Missions — class-assigned)</option>
               <option value="STORY">STORY</option>
               <option value="DEMO">DEMO (Game demos & feature showcases)</option>
               <option value="SOVEREIGN">Sovereign Missions</option>
               <option value="PROFILE">PROFILE</option>
             </select>
           </div>
+
+          {formData.missionCategory === 'SKILL' && (
+            <div
+              style={{
+                marginBottom: '1rem',
+                padding: '0.85rem',
+                background: '#fffbeb',
+                border: '1px solid #fcd34d',
+                borderRadius: '0.5rem',
+              }}
+            >
+              <div style={{ fontWeight: 'bold', marginBottom: '0.35rem', color: '#000000' }}>
+                Classes (who can see this Skill Mission)
+              </div>
+              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', color: '#000000' }}>
+                Only students enrolled in a selected class can see and accept this mission.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginBottom: '0.75rem' }}>
+                {classrooms.length === 0 && (
+                  <span style={{ fontSize: '0.8rem', color: '#6b7280' }}>No classrooms found.</span>
+                )}
+                {classrooms.map((classroom) => (
+                  <label
+                    key={classroom.id}
+                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: '#000000' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={(formData.classIds || []).includes(classroom.id)}
+                      onChange={(e) => {
+                        const current = formData.classIds || [];
+                        if (e.target.checked) {
+                          setFormData({ ...formData, classIds: [...current, classroom.id] });
+                        } else {
+                          setFormData({
+                            ...formData,
+                            classIds: current.filter((id) => id !== classroom.id),
+                          });
+                        }
+                      }}
+                    />
+                    {classroom.name}
+                  </label>
+                ))}
+              </div>
+              <div style={{ fontWeight: 'bold', marginBottom: '0.35rem', color: '#000000' }}>
+                Skills taught (optional)
+              </div>
+              <SkillPicker
+                selectedIds={formData.skillIds || []}
+                onChange={(ids) => setFormData({ ...formData, skillIds: ids })}
+              />
+            </div>
+          )}
 
           {usesHubDisplayOrder(formData.missionCategory) && (
             <div style={{ marginBottom: '1rem' }}>
@@ -2452,7 +2645,7 @@ const MissionCreateModal: React.FC<{
                 style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
               />
               <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
-                Lower numbers appear first in this NPC&apos;s Side / Sovereign / Demo Missions list. Leave blank to sort by
+                Lower numbers appear first in this NPC&apos;s Side / Sovereign / Demo / Skill Missions list. Leave blank to sort by
                 creation time (oldest first). Players still see numbered steps 1, 2, 3… in that order.
               </p>
             </div>

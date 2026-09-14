@@ -1,6 +1,7 @@
 import {
   challengeTypesForSkillUse,
   classifyMoveForDailyChallenge,
+  dailyChallengeMatchesGameplayEvent,
   dailyChallengeStoredTypeMatchesEvent,
   getEffectiveDailyChallengeTarget,
   moveCountsForDailyElementalChallenge,
@@ -29,6 +30,24 @@ describe('dailyChallengeShared', () => {
     ).toBe(true);
     expect(dailyChallengeStoredTypeMatchesEvent('Use ONE (1) Health Potion', 'use_health_potion')).toBe(true);
     expect(dailyChallengeStoredTypeMatchesEvent('win_battle', 'earn_pp')).toBe(false);
+  });
+
+  test('dailyChallengeMatchesGameplayEvent matches custom challenges by title', () => {
+    expect(
+      dailyChallengeMatchesGameplayEvent(
+        {
+          storedType: 'custom',
+          title: 'Use your Manifest Abilities THREE (3) Times',
+        },
+        'use_manifest_ability'
+      )
+    ).toBe(true);
+    expect(
+      dailyChallengeMatchesGameplayEvent(
+        { storedType: 'custom', title: 'Win a Battle' },
+        'use_manifest_ability'
+      )
+    ).toBe(false);
   });
 
   test('earn_xp challenge type synonyms', () => {

@@ -780,8 +780,10 @@ const ScorekeeperInterface: React.FC = () => {
           fontSize: '2rem', 
           fontWeight: 'bold', 
           margin: 0, 
-          color: '#1f2937',
-          marginBottom: '0.5rem'
+          color: 'var(--mst-gold-bright)',
+          marginBottom: '0.5rem',
+          fontFamily: 'var(--mst-font-display)',
+          letterSpacing: '0.04em',
         }}>
           ⚡ Class Power Points Overview
         </h1>
@@ -828,7 +830,7 @@ const ScorekeeperInterface: React.FC = () => {
             </select>
             <span style={{ 
               fontSize: '1rem', 
-              color: '#6b7280' 
+              color: 'var(--mst-text-secondary)' 
             }}>
               - Manage Power Points for all students
             </span>
@@ -881,7 +883,7 @@ const ScorekeeperInterface: React.FC = () => {
         alignItems: 'center',
         flexWrap: 'wrap'
       }}>
-        <label style={{ fontSize: '0.875rem', fontWeight: '500', color: '#374151' }}>
+        <label style={{ fontSize: '0.875rem', fontWeight: '500', color: 'var(--mst-text-secondary)' }}>
           Sort by:
         </label>
         <select

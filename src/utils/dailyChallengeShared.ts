@@ -187,8 +187,64 @@ export function dailyChallengeStoredTypeMatchesEvent(
   // Admin text / legacy: full sentence saved as `type`, or title pasted into type field
   if (ne === 'use_manifest_ability' && ns.includes('manifest')) return true;
   if (ne === 'use_elemental_move' && ns.includes('elemental')) return true;
-  if (ne === 'use_health_potion' && ns.includes('health')) return true;
+  if (ne === 'use_health_potion' && (ns.includes('health') || ns.includes('potion'))) return true;
+  if (ne === 'defeat_enemies' && (ns.includes('defeat') || ns.includes('enemy'))) return true;
+  if (ne === 'win_battle' && (ns.includes('win') && ns.includes('battle'))) return true;
+  if (ne === 'attack_vault' && ns.includes('vault')) return true;
+  if (ne === 'earn_pp' && (ns.includes('earn_pp') || ns.includes('power_point'))) return true;
+  if (ne === 'earn_xp' && (ns.includes('earn_xp') || ns.includes('experience') || ns.includes('xp'))) {
+    // Avoid matching "Use your Manifest Abilities…" which does not contain earn_xp tokens above alone —
+    // "experience" in unrelated titles is rare; keep as-is.
+    if (!ns.includes('manifest') && !ns.includes('elemental')) return true;
+  }
 
+  return false;
+}
+
+/**
+ * Match a player's assigned challenge to a gameplay event.
+ * Uses stored type, admin challenge type, and title/description so `custom`
+ * challenges like "Use your Manifest Abilities THREE (3) Times" still increment.
+ */
+export function dailyChallengeMatchesGameplayEvent(
+  opts: {
+    storedType?: string;
+    detailsType?: string;
+    title?: string;
+    description?: string;
+  },
+  eventChallengeType: string
+): boolean {
+  const { storedType, detailsType, title, description } = opts;
+  if (dailyChallengeStoredTypeMatchesEvent(storedType, eventChallengeType)) return true;
+  if (dailyChallengeStoredTypeMatchesEvent(detailsType, eventChallengeType)) return true;
+  if (dailyChallengeStoredTypeMatchesEvent(title, eventChallengeType)) return true;
+  if (dailyChallengeStoredTypeMatchesEvent(description, eventChallengeType)) return true;
+
+  // Explicit custom type: infer only from title/description text
+  const st = normalizeDailyChallengeTypeKey(storedType || detailsType || '');
+  if (st === 'custom' || st === '') {
+    const blob = normalizeDailyChallengeTypeKey(`${title || ''} ${description || ''}`);
+    if (!blob) return false;
+    if (eventChallengeType === 'use_manifest_ability' && blob.includes('manifest')) return true;
+    if (eventChallengeType === 'use_elemental_move' && blob.includes('elemental')) return true;
+    if (
+      eventChallengeType === 'use_health_potion' &&
+      (blob.includes('health') || blob.includes('potion'))
+    ) {
+      return true;
+    }
+    if (
+      eventChallengeType === 'defeat_enemies' &&
+      (blob.includes('defeat') || blob.includes('enemy'))
+    ) {
+      return true;
+    }
+    if (eventChallengeType === 'win_battle' && blob.includes('win') && blob.includes('battle')) {
+      return true;
+    }
+    if (eventChallengeType === 'attack_vault' && blob.includes('vault')) return true;
+  }
   return false;
 }
 
@@ -292,6 +348,7 @@ export function classifyMoveForDailyChallenge(
   if (idLower.startsWith('l2-manifest::') || idLower.includes('manifest-')) return 'manifest';
 
   if (move.category === 'manifest' || move.manifestType) return 'manifest';
+  if (typeof move.category === 'string' && move.category.toLowerCase() === 'manifest') return 'manifest';
   if (moveMatchesKnownManifestTemplate(move)) return 'manifest';
 
   const raw = (move.name || '').trim();
@@ -301,6 +358,7 @@ export function classifyMoveForDailyChallenge(
 
   // Elemental only after manifest is ruled out
   if (move.category === 'elemental') return 'elemental';
+  if (typeof move.category === 'string' && move.category.toLowerCase() === 'elemental') return 'elemental';
   if (moveMatchesKnownElementalTemplate(move)) return 'elemental';
   // Affinity with an explicit non-empty category (manifest already returned above).
   if (move.elementalAffinity && move.category) return 'elemental';

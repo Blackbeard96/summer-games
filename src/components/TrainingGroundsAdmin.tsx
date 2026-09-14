@@ -17,10 +17,19 @@ import {
   getQuizSetAttempts,
   assignedClassIdsForQuiz,
   sortQuizSetsForAdminByClass,
+  getTrainingGroundsClassDisplayOrder,
+  saveTrainingGroundsClassDisplayOrder,
+  saveQuizSetSortOrders,
+  isTrainingQuizArchived,
+  setQuizSetsArchived,
 } from '../utils/trainingGroundsService';
 import { TrainingQuizSet, TrainingQuestion, DEFAULT_REWARDS } from '../types/trainingGrounds';
 import { getAvailableArtifacts } from '../utils/artifactCompensation';
 import { exportTrainingGroundCFUsToCSV } from '../utils/exportTrainingGroundCFUsToCSV';
+import SkillPicker from './skills/SkillPicker';
+import SkillChip from './skills/SkillChip';
+import { listAcademicSkills } from '../utils/academicSkillService';
+import { AcademicSkill } from '../types/academicSkills';
 
 const MIN_TRAINING_ANSWER_CHOICES = 2;
 const MAX_TRAINING_ANSWER_CHOICES = 6;
@@ -97,6 +106,12 @@ const TrainingGroundsAdmin: React.FC = () => {
   const [savingPlayerCompletions, setSavingPlayerCompletions] = useState(false);
   const [exportingCsv, setExportingCsv] = useState(false);
   const [csvTopicFilter, setCsvTopicFilter] = useState('');
+  const [classDisplayOrder, setClassDisplayOrder] = useState<string[]>([]);
+  const [savingClassOrder, setSavingClassOrder] = useState(false);
+  const [savingQuizOrder, setSavingQuizOrder] = useState(false);
+  const [showArchivedQuizSets, setShowArchivedQuizSets] = useState(false);
+  const [savingArchive, setSavingArchive] = useState(false);
+  const [bulkSelectedQuizIds, setBulkSelectedQuizIds] = useState<string[]>([]);
 
   // Form state
   const [quizSetForm, setQuizSetForm] = useState({
@@ -120,13 +135,30 @@ const TrainingGroundsAdmin: React.FC = () => {
     pointsPP: 10,
     pointsXP: 10,
     artifactRewards: [] as string[],
+    skillIds: [] as string[],
   });
+  const [editSkillIds, setEditSkillIds] = useState<string[]>([]);
+  const [savingSkillIds, setSavingSkillIds] = useState(false);
+  const [skillCatalog, setSkillCatalog] = useState<AcademicSkill[]>([]);
 
   useEffect(() => {
     loadQuizSets();
     loadClassrooms();
     loadArtifacts();
+    loadClassDisplayOrder();
+    listAcademicSkills({ activeOnly: true })
+      .then(setSkillCatalog)
+      .catch((e) => console.warn('Could not load skill catalog', e));
   }, []);
+
+  const loadClassDisplayOrder = async () => {
+    try {
+      const order = await getTrainingGroundsClassDisplayOrder();
+      setClassDisplayOrder(order);
+    } catch (e) {
+      console.warn('Could not load class display order', e);
+    }
+  };
 
   const loadArtifacts = () => {
     const artifacts = getAvailableArtifacts();
@@ -142,22 +174,68 @@ const TrainingGroundsAdmin: React.FC = () => {
   useEffect(() => {
     if (selectedQuizSet) {
       setEditClassIds(assignedClassIdsForQuiz(selectedQuizSet));
+      setEditSkillIds(Array.isArray(selectedQuizSet.skillIds) ? [...selectedQuizSet.skillIds] : []);
     } else {
       setEditClassIds([]);
+      setEditSkillIds([]);
     }
-  }, [selectedQuizSet?.id, (selectedQuizSet?.classIds || []).join(',')]);
+  }, [selectedQuizSet?.id, (selectedQuizSet?.classIds || []).join(','), (selectedQuizSet?.skillIds || []).join(',')]);
 
   const sortedQuizSetsForAdmin = useMemo(
-    () => sortQuizSetsForAdminByClass(quizSets, classrooms),
-    [quizSets, classrooms]
+    () =>
+      sortQuizSetsForAdminByClass(
+        quizSets.filter((q) => (showArchivedQuizSets ? isTrainingQuizArchived(q) : !isTrainingQuizArchived(q))),
+        classrooms,
+        classDisplayOrder
+      ),
+    [quizSets, classrooms, classDisplayOrder, showArchivedQuizSets]
   );
+
+  const archivedQuizSetCount = useMemo(
+    () => quizSets.filter((q) => isTrainingQuizArchived(q)).length,
+    [quizSets]
+  );
+
+  /** All classrooms in display order (custom order first, then A–Z). */
+  const orderedClassroomsForPanel = useMemo(() => {
+    const byId = new Map(classrooms.map((c) => [c.id, c]));
+    const seen = new Set<string>();
+    const ordered: Array<{ id: string; name: string }> = [];
+    for (const id of classDisplayOrder) {
+      const c = byId.get(id);
+      if (c && !seen.has(id)) {
+        ordered.push(c);
+        seen.add(id);
+      }
+    }
+    [...classrooms]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .forEach((c) => {
+        if (!seen.has(c.id)) {
+          ordered.push(c);
+          seen.add(c.id);
+        }
+      });
+    return ordered;
+  }, [classrooms, classDisplayOrder]);
+
+  const classRank = (id: string) => {
+    const idx = orderedClassroomsForPanel.findIndex((c) => c.id === id);
+    return idx >= 0 ? idx : 99_000;
+  };
 
   const classLabelsForQuiz = (quiz: TrainingQuizSet): string => {
     const ids = assignedClassIdsForQuiz(quiz);
     if (ids.length === 0) return 'Unassigned';
-    return ids
+    return [...ids]
+      .sort((a, b) => {
+        const d = classRank(a) - classRank(b);
+        if (d !== 0) return d;
+        const na = classrooms.find((c) => c.id === a)?.name?.trim() || a;
+        const nb = classrooms.find((c) => c.id === b)?.name?.trim() || b;
+        return na.localeCompare(nb);
+      })
       .map((id) => classrooms.find((c) => c.id === id)?.name?.trim() || id)
-      .sort((a, b) => a.localeCompare(b))
       .join(' · ');
   };
 
@@ -165,21 +243,82 @@ const TrainingGroundsAdmin: React.FC = () => {
     const ids = assignedClassIdsForQuiz(quiz);
     if (ids.length === 0) return '__unassigned';
     return [...ids]
-      .sort()
+      .sort((a, b) => {
+        const d = classRank(a) - classRank(b);
+        if (d !== 0) return d;
+        const na = classrooms.find((c) => c.id === a)?.name?.trim() || a;
+        const nb = classrooms.find((c) => c.id === b)?.name?.trim() || b;
+        return na.localeCompare(nb);
+      })
       .map((id) => classrooms.find((c) => c.id === id)?.name?.trim() || id)
       .join(' | ');
   };
 
-  const loadQuizSets = async () => {
+  const persistClassOrder = async (nextIds: string[]) => {
+    setClassDisplayOrder(nextIds);
+    setSavingClassOrder(true);
     try {
-      setLoading(true);
-      const all = await getAllQuizSets(true);
+      await saveTrainingGroundsClassDisplayOrder(nextIds);
+    } catch (e) {
+      console.error('Failed to save class order', e);
+      alert('Failed to save class order');
+      await loadClassDisplayOrder();
+    } finally {
+      setSavingClassOrder(false);
+    }
+  };
+
+  const moveClassInOrder = (classId: string, direction: -1 | 1) => {
+    const list = orderedClassroomsForPanel.map((c) => c.id);
+    const i = list.indexOf(classId);
+    const j = i + direction;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    const next = [...list];
+    [next[i], next[j]] = [next[j], next[i]];
+    void persistClassOrder(next);
+  };
+
+  const moveQuizInSection = async (quizId: string, direction: -1 | 1) => {
+    const quiz = sortedQuizSetsForAdmin.find((q) => q.id === quizId);
+    if (!quiz) return;
+    const section = sectionHeaderKeyForQuiz(quiz);
+    const sectionQuizzes = sortedQuizSetsForAdmin.filter(
+      (q) => sectionHeaderKeyForQuiz(q) === section
+    );
+    const i = sectionQuizzes.findIndex((q) => q.id === quizId);
+    const j = i + direction;
+    if (i < 0 || j < 0 || j >= sectionQuizzes.length) return;
+    const reordered = [...sectionQuizzes];
+    [reordered[i], reordered[j]] = [reordered[j], reordered[i]];
+    const orderedIds = reordered.map((q) => q.id);
+    setSavingQuizOrder(true);
+    try {
+      await saveQuizSetSortOrders(orderedIds);
+      setQuizSets((prev) =>
+        prev.map((q) => {
+          const idx = orderedIds.indexOf(q.id);
+          return idx >= 0 ? { ...q, sortOrder: idx } : q;
+        })
+      );
+    } catch (e) {
+      console.error('Failed to save assignment order', e);
+      alert('Failed to save assignment order');
+      await loadQuizSets();
+    } finally {
+      setSavingQuizOrder(false);
+    }
+  };
+
+  const loadQuizSets = async (opts?: { quiet?: boolean }) => {
+    try {
+      if (!opts?.quiet) setLoading(true);
+      const all = await getAllQuizSets(true, { includeArchived: true });
       setQuizSets(all);
     } catch (error) {
       console.error('Error loading quiz sets:', error);
       alert('Failed to load quiz sets');
     } finally {
-      setLoading(false);
+      if (!opts?.quiet) setLoading(false);
     }
   };
 
@@ -442,6 +581,41 @@ const TrainingGroundsAdmin: React.FC = () => {
     }
   };
 
+  const handleSaveQuizSetSkills = async () => {
+    if (!selectedQuizSet) return;
+    setSavingSkillIds(true);
+    try {
+      await updateQuizSet(selectedQuizSet.id, { skillIds: editSkillIds });
+      await loadQuizSets();
+      const refreshed = await getDoc(doc(db, 'trainingQuizSets', selectedQuizSet.id));
+      if (refreshed.exists()) {
+        setSelectedQuizSet({ id: refreshed.id, ...refreshed.data() } as TrainingQuizSet);
+      }
+      alert('CFU skills saved. These are topical tags — question-level skills drive mastery scoring.');
+    } catch (error) {
+      console.error('Error updating CFU skills:', error);
+      alert('Failed to save CFU skills');
+    } finally {
+      setSavingSkillIds(false);
+    }
+  };
+
+  const emptyQuestionForm = () => ({
+    prompt: '',
+    options: ['', '', '', ''],
+    correctIndex: 0,
+    correctIndices: [] as number[],
+    explanation: '',
+    difficulty: 'medium' as 'easy' | 'medium' | 'hard',
+    category: '',
+    imageFile: null as File | null,
+    imageUrl: null as string | null,
+    pointsPP: 10,
+    pointsXP: 10,
+    artifactRewards: [] as string[],
+    skillIds: [] as string[],
+  });
+
   const handleSetPlayerCompletionsEnabled = async (enabled: boolean) => {
     if (!selectedQuizSet || savingPlayerCompletions) return;
     setSavingPlayerCompletions(true);
@@ -462,6 +636,10 @@ const TrainingGroundsAdmin: React.FC = () => {
 
   const handleTogglePublish = async (quizSet: TrainingQuizSet) => {
     const turningOn = !quizSet.isPublished;
+    if (turningOn && isTrainingQuizArchived(quizSet)) {
+      alert('Unarchive this problem set before publishing.');
+      return;
+    }
     const effectiveClassIds =
       selectedQuizSet?.id === quizSet.id ? editClassIds : assignedClassIdsForQuiz(quizSet);
     if (turningOn && effectiveClassIds.length === 0) {
@@ -487,6 +665,69 @@ const TrainingGroundsAdmin: React.FC = () => {
       console.error('Error updating quiz set:', error);
       alert('Failed to update quiz set');
     }
+  };
+
+  const handleToggleArchive = async (quizSet: TrainingQuizSet) => {
+    await handleBulkArchiveOrRestore([quizSet.id], !isTrainingQuizArchived(quizSet));
+  };
+
+  const handleBulkArchiveOrRestore = async (quizIds: string[], archiving: boolean) => {
+    if (savingArchive || quizIds.length === 0) return;
+    const uniqueIds = Array.from(new Set(quizIds));
+    const msg = archiving
+      ? uniqueIds.length === 1
+        ? `Move this problem set to the Archived folder?\n\nIt will leave the Active list and stay hidden from players. You can still import its questions into new CFUs.`
+        : `Move ${uniqueIds.length} problem sets to the Archived folder?\n\nThey will leave the Active list and stay hidden from players. You can still import their questions into new CFUs.`
+      : uniqueIds.length === 1
+        ? 'Restore this problem set to the Active list?'
+        : `Restore ${uniqueIds.length} problem sets to the Active list?`;
+    if (!window.confirm(msg)) return;
+    setSavingArchive(true);
+    try {
+      // Optimistic UI: leave Active list immediately
+      setQuizSets((prev) =>
+        prev.map((q) =>
+          uniqueIds.includes(q.id)
+            ? {
+                ...q,
+                isArchived: archiving,
+                ...(archiving
+                  ? { isPublished: false, playerCompletionsEnabled: false }
+                  : {}),
+              }
+            : q
+        )
+      );
+      setBulkSelectedQuizIds([]);
+      if (selectedQuizSet && uniqueIds.includes(selectedQuizSet.id)) {
+        if (archiving && !showArchivedQuizSets) setSelectedQuizSet(null);
+        else if (!archiving && showArchivedQuizSets) setSelectedQuizSet(null);
+      }
+
+      await setQuizSetsArchived(uniqueIds, archiving);
+      await loadQuizSets({ quiet: true });
+
+      if (archiving && !showArchivedQuizSets) {
+        alert(
+          uniqueIds.length === 1
+            ? 'Moved to Archived folder. Open the Archived tab to view or restore it.'
+            : `Moved ${uniqueIds.length} problem sets to the Archived folder.`
+        );
+      }
+    } catch (error) {
+      console.error('Error updating archive state:', error);
+      alert('Failed to update archive state');
+      await loadQuizSets({ quiet: true });
+    } finally {
+      setSavingArchive(false);
+    }
+  };
+
+  const toggleBulkQuizSelection = (quizId: string, checked: boolean) => {
+    setBulkSelectedQuizIds((prev) => {
+      if (checked) return prev.includes(quizId) ? prev : [...prev, quizId];
+      return prev.filter((id) => id !== quizId);
+    });
   };
 
   const handleAddQuestion = async () => {
@@ -534,6 +775,7 @@ const TrainingGroundsAdmin: React.FC = () => {
       if (questionForm.category && questionForm.category.trim()) {
         questionData.category = questionForm.category.trim();
       }
+      questionData.skillIds = Array.isArray(questionForm.skillIds) ? questionForm.skillIds : [];
       
       const questionId = await addQuestion(selectedQuizSet.id, questionData);
 
@@ -551,20 +793,7 @@ const TrainingGroundsAdmin: React.FC = () => {
 
       alert('Question added successfully!');
       setShowQuestionForm(false);
-    setQuestionForm({
-      prompt: '',
-      options: ['', '', '', ''],
-      correctIndex: 0,
-      correctIndices: [],
-      explanation: '',
-      difficulty: 'medium',
-      category: '',
-      imageFile: null,
-      imageUrl: null,
-      pointsPP: 10,
-      pointsXP: 10,
-      artifactRewards: [],
-    });
+      setQuestionForm(emptyQuestionForm());
       await loadQuestions(selectedQuizSet.id);
     } catch (error) {
       console.error('Error adding question:', error);
@@ -642,26 +871,14 @@ const TrainingGroundsAdmin: React.FC = () => {
       if (questionForm.category && questionForm.category.trim()) {
         updateData.category = questionForm.category.trim();
       }
+      updateData.skillIds = Array.isArray(questionForm.skillIds) ? questionForm.skillIds : [];
       
       await updateQuestion(selectedQuizSet.id, editingQuestion.id, updateData);
 
       alert('Question updated successfully!');
       setEditingQuestion(null);
       setShowQuestionForm(false);
-    setQuestionForm({
-      prompt: '',
-      options: ['', '', '', ''],
-      correctIndex: 0,
-      correctIndices: [],
-      explanation: '',
-      difficulty: 'medium',
-      category: '',
-      imageFile: null,
-      imageUrl: null,
-      pointsPP: 10,
-      pointsXP: 10,
-      artifactRewards: [],
-    });
+      setQuestionForm(emptyQuestionForm());
       await loadQuestions(selectedQuizSet.id);
     } catch (error) {
       console.error('Error updating question:', error);
@@ -867,6 +1084,7 @@ const TrainingGroundsAdmin: React.FC = () => {
       pointsPP: question.pointsPP || DEFAULT_REWARDS[question.difficulty]?.basePP || 10,
       pointsXP: question.pointsXP || DEFAULT_REWARDS[question.difficulty]?.baseXP || 10,
       artifactRewards: question.artifactRewards || [],
+      skillIds: Array.isArray(question.skillIds) ? [...question.skillIds] : [],
     });
     setShowQuestionForm(true);
   };
@@ -1075,9 +1293,272 @@ const TrainingGroundsAdmin: React.FC = () => {
         <div>
           <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold', marginBottom: '1rem' }}>Quiz Sets</h3>
           <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '-0.5rem 0 0.75rem' }}>
-            Sorted by assigned class. Students only see published sets for classes they are enrolled in.
+            Active CFUs show here for players. Archived stays in a folder for question reuse only.
           </p>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: '0.35rem',
+              marginBottom: '0.75rem',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setShowArchivedQuizSets(false);
+                setSelectedQuizSet(null);
+                setBulkSelectedQuizIds([]);
+              }}
+              style={{
+                padding: '0.45rem 0.5rem',
+                fontSize: '0.78rem',
+                fontWeight: 700,
+                border: '1px solid #d1d5db',
+                borderRadius: '0.4rem',
+                cursor: 'pointer',
+                background: !showArchivedQuizSets ? '#4f46e5' : 'white',
+                color: !showArchivedQuizSets ? 'white' : '#000000',
+              }}
+            >
+              Active ({quizSets.filter((q) => !isTrainingQuizArchived(q)).length})
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowArchivedQuizSets(true);
+                setSelectedQuizSet(null);
+                setBulkSelectedQuizIds([]);
+              }}
+              style={{
+                padding: '0.45rem 0.5rem',
+                fontSize: '0.78rem',
+                fontWeight: 700,
+                border: '1px solid #d1d5db',
+                borderRadius: '0.4rem',
+                cursor: 'pointer',
+                background: showArchivedQuizSets ? '#4f46e5' : 'white',
+                color: showArchivedQuizSets ? 'white' : '#000000',
+              }}
+            >
+              Archived ({archivedQuizSetCount})
+            </button>
+          </div>
+
+          {showArchivedQuizSets && (
+            <p style={{ fontSize: '0.72rem', color: '#000000', margin: '0 0 0.75rem' }}>
+              Archived folder — hidden from players and the Active list. Import Questions can still use these.
+            </p>
+          )}
+
+          {sortedQuizSetsForAdmin.length > 0 && (
+            <div
+              style={{
+                marginBottom: '0.75rem',
+                padding: '0.55rem 0.65rem',
+                background: bulkSelectedQuizIds.length > 0 ? '#eef2ff' : '#f9fafb',
+                border: '1px solid #e5e7eb',
+                borderRadius: '0.5rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.4rem',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '0.5rem',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    fontSize: '0.75rem',
+                    color: '#000000',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={
+                      sortedQuizSetsForAdmin.length > 0 &&
+                      sortedQuizSetsForAdmin.every((q) => bulkSelectedQuizIds.includes(q.id))
+                    }
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setBulkSelectedQuizIds(sortedQuizSetsForAdmin.map((q) => q.id));
+                      } else {
+                        setBulkSelectedQuizIds([]);
+                      }
+                    }}
+                  />
+                  Select all visible
+                </label>
+                <span style={{ fontSize: '0.72rem', color: '#000000' }}>
+                  {bulkSelectedQuizIds.length} selected
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  disabled={savingArchive || bulkSelectedQuizIds.length === 0}
+                  onClick={() =>
+                    void handleBulkArchiveOrRestore(bulkSelectedQuizIds, !showArchivedQuizSets)
+                  }
+                  style={{
+                    padding: '0.3rem 0.55rem',
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    border: 'none',
+                    borderRadius: '0.35rem',
+                    background:
+                      savingArchive || bulkSelectedQuizIds.length === 0
+                        ? '#9ca3af'
+                        : showArchivedQuizSets
+                          ? '#10b981'
+                          : '#6b7280',
+                    color: 'white',
+                    cursor:
+                      savingArchive || bulkSelectedQuizIds.length === 0
+                        ? 'not-allowed'
+                        : 'pointer',
+                  }}
+                >
+                  {savingArchive
+                    ? 'Saving…'
+                    : showArchivedQuizSets
+                      ? `Restore to Active (${bulkSelectedQuizIds.length})`
+                      : `Move to Archived (${bulkSelectedQuizIds.length})`}
+                </button>
+                {bulkSelectedQuizIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setBulkSelectedQuizIds([])}
+                    style={{
+                      padding: '0.3rem 0.55rem',
+                      fontSize: '0.72rem',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '0.35rem',
+                      background: 'white',
+                      color: '#000000',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {orderedClassroomsForPanel.length > 0 && !showArchivedQuizSets && (
+            <div
+              style={{
+                marginBottom: '0.85rem',
+                padding: '0.65rem',
+                background: '#f9fafb',
+                border: '1px solid #e5e7eb',
+                borderRadius: '0.5rem',
+              }}
+            >
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#000000', marginBottom: '0.35rem' }}>
+                Class section order
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                {orderedClassroomsForPanel.map((classroom, index) => (
+                  <div
+                    key={classroom.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '0.35rem',
+                      fontSize: '0.78rem',
+                      color: '#000000',
+                      background: 'white',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '0.35rem',
+                      padding: '0.3rem 0.4rem',
+                    }}
+                  >
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {classroom.name}
+                    </span>
+                    <span style={{ display: 'flex', gap: '0.2rem', flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        title="Move class up"
+                        disabled={savingClassOrder || index === 0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          moveClassInOrder(classroom.id, -1);
+                        }}
+                        style={{
+                          padding: '0.1rem 0.35rem',
+                          fontSize: '0.7rem',
+                          border: '1px solid #d1d5db',
+                          borderRadius: '0.25rem',
+                          background: index === 0 ? '#f3f4f6' : 'white',
+                          color: '#000000',
+                          cursor: index === 0 || savingClassOrder ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        title="Move class down"
+                        disabled={savingClassOrder || index === orderedClassroomsForPanel.length - 1}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          moveClassInOrder(classroom.id, 1);
+                        }}
+                        style={{
+                          padding: '0.1rem 0.35rem',
+                          fontSize: '0.7rem',
+                          border: '1px solid #d1d5db',
+                          borderRadius: '0.25rem',
+                          background:
+                            index === orderedClassroomsForPanel.length - 1 ? '#f3f4f6' : 'white',
+                          color: '#000000',
+                          cursor:
+                            index === orderedClassroomsForPanel.length - 1 || savingClassOrder
+                              ? 'not-allowed'
+                              : 'pointer',
+                        }}
+                      >
+                        ↓
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {sortedQuizSetsForAdmin.length === 0 && (
+              <div
+                style={{
+                  padding: '0.85rem',
+                  fontSize: '0.8rem',
+                  color: '#6b7280',
+                  background: '#f9fafb',
+                  border: '1px dashed #d1d5db',
+                  borderRadius: '0.5rem',
+                }}
+              >
+                {showArchivedQuizSets
+                  ? 'Archived folder is empty.'
+                  : 'No active problem sets. Open the Archived tab to restore or import from old CFUs.'}
+              </div>
+            )}
             {(() => {
               let lastSection = '';
               const nodes: React.ReactNode[] = [];
@@ -1106,26 +1587,122 @@ const TrainingGroundsAdmin: React.FC = () => {
                     </div>
                   );
                 }
+                const sectionQuizzes = sortedQuizSetsForAdmin.filter(
+                  (q) => sectionHeaderKeyForQuiz(q) === section
+                );
+                const sectionIndex = sectionQuizzes.findIndex((q) => q.id === quizSet.id);
                 nodes.push(
                   <div
                     key={quizSet.id}
                     onClick={() => setSelectedQuizSet(quizSet)}
                     style={{
                       padding: '1rem',
-                      background: selectedQuizSet?.id === quizSet.id ? '#eef2ff' : 'white',
-                      border: `2px solid ${selectedQuizSet?.id === quizSet.id ? '#4f46e5' : '#e5e7eb'}`,
+                      paddingLeft: '0.7rem',
+                      background:
+                        bulkSelectedQuizIds.includes(quizSet.id)
+                          ? '#f5f3ff'
+                          : selectedQuizSet?.id === quizSet.id
+                            ? '#eef2ff'
+                            : 'white',
+                      border: `2px solid ${
+                        selectedQuizSet?.id === quizSet.id
+                          ? '#4f46e5'
+                          : bulkSelectedQuizIds.includes(quizSet.id)
+                            ? '#a5b4fc'
+                            : '#e5e7eb'
+                      }`,
                       borderRadius: '0.5rem',
                       cursor: 'pointer',
+                      position: 'relative',
+                      display: 'flex',
+                      gap: '0.45rem',
+                      alignItems: 'flex-start',
                     }}
                   >
-                    <div style={{ fontWeight: '600', marginBottom: '0.25rem' }}>{quizSet.title}</div>
+                    <input
+                      type="checkbox"
+                      checked={bulkSelectedQuizIds.includes(quizSet.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => toggleBulkQuizSelection(quizSet.id, e.target.checked)}
+                      title="Select for bulk archive"
+                      style={{ marginTop: '0.2rem', flexShrink: 0 }}
+                    />
+                    <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '0',
+                        right: '0',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.15rem',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        title="Move assignment up in this class"
+                        disabled={savingQuizOrder || sectionIndex <= 0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void moveQuizInSection(quizSet.id, -1);
+                        }}
+                        style={{
+                          padding: '0.05rem 0.3rem',
+                          fontSize: '0.65rem',
+                          lineHeight: 1.2,
+                          border: '1px solid #d1d5db',
+                          borderRadius: '0.2rem',
+                          background: sectionIndex <= 0 ? '#f3f4f6' : 'white',
+                          color: '#000000',
+                          cursor: sectionIndex <= 0 || savingQuizOrder ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        title="Move assignment down in this class"
+                        disabled={savingQuizOrder || sectionIndex >= sectionQuizzes.length - 1}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void moveQuizInSection(quizSet.id, 1);
+                        }}
+                        style={{
+                          padding: '0.05rem 0.3rem',
+                          fontSize: '0.65rem',
+                          lineHeight: 1.2,
+                          border: '1px solid #d1d5db',
+                          borderRadius: '0.2rem',
+                          background:
+                            sectionIndex >= sectionQuizzes.length - 1 ? '#f3f4f6' : 'white',
+                          color: '#000000',
+                          cursor:
+                            sectionIndex >= sectionQuizzes.length - 1 || savingQuizOrder
+                              ? 'not-allowed'
+                              : 'pointer',
+                        }}
+                      >
+                        ↓
+                      </button>
+                    </div>
+                    <div style={{ fontWeight: '600', marginBottom: '0.25rem', paddingRight: '1.5rem' }}>
+                      {quizSet.title}
+                    </div>
                     <div style={{ fontSize: '0.72rem', color: '#4f46e6', marginBottom: '0.25rem' }}>
                       {classLabelsForQuiz(quizSet)}
                     </div>
                     <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
                       {quizSet.questionCount} questions
-                      {quizSet.isPublished ? ' • Published' : ' • Draft'}
-                      {quizSet.playerCompletionsEnabled === false ? ' • Completions off' : ''}
+                      {isTrainingQuizArchived(quizSet)
+                        ? ' • Archived'
+                        : quizSet.isPublished
+                          ? ' • Published'
+                          : ' • Draft'}
+                      {!isTrainingQuizArchived(quizSet) &&
+                      quizSet.playerCompletionsEnabled === false
+                        ? ' • Completions off'
+                        : ''}
+                    </div>
                     </div>
                   </div>
                 );
@@ -1191,6 +1768,44 @@ const TrainingGroundsAdmin: React.FC = () => {
                     }}
                   >
                     {savingClassIds ? 'Saving…' : 'Save class assignment'}
+                  </button>
+                </div>
+
+                <div
+                  style={{
+                    marginTop: '0.75rem',
+                    padding: '0.75rem',
+                    background: '#0e1420',
+                    borderRadius: '0.5rem',
+                    border: '1px solid rgba(212,168,79,0.4)',
+                    color: '#f4f0e6',
+                  }}
+                >
+                  <SkillPicker
+                    selectedIds={editSkillIds}
+                    onChange={setEditSkillIds}
+                    label="Skills Assessed (CFU topics)"
+                  />
+                  <p style={{ margin: '0.35rem 0 0.65rem', fontSize: '0.75rem', color: '#9ca3af' }}>
+                    CFU-level tags organize topics and suggest skills for questions. Mastery scoring uses question tags.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveQuizSetSkills()}
+                    disabled={savingSkillIds}
+                    style={{
+                      padding: '0.35rem 0.75rem',
+                      background: '#6d3ef2',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.35rem',
+                      cursor: savingSkillIds ? 'not-allowed' : 'pointer',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      opacity: savingSkillIds ? 0.7 : 1,
+                    }}
+                  >
+                    {savingSkillIds ? 'Saving…' : 'Save CFU skills'}
                   </button>
                 </div>
 
@@ -1266,17 +1881,45 @@ const TrainingGroundsAdmin: React.FC = () => {
                 </button>
                 <button
                   onClick={() => handleTogglePublish(selectedQuizSet)}
+                  disabled={isTrainingQuizArchived(selectedQuizSet)}
                   style={{
                     padding: '0.5rem 1rem',
-                    background: selectedQuizSet.isPublished ? '#ef4444' : '#10b981',
+                    background: isTrainingQuizArchived(selectedQuizSet)
+                      ? '#9ca3af'
+                      : selectedQuizSet.isPublished
+                        ? '#ef4444'
+                        : '#10b981',
                     color: 'white',
                     border: 'none',
                     borderRadius: '0.5rem',
-                    cursor: 'pointer',
+                    cursor: isTrainingQuizArchived(selectedQuizSet) ? 'not-allowed' : 'pointer',
                     fontSize: '0.875rem',
                   }}
                 >
                   {selectedQuizSet.isPublished ? 'Unpublish' : 'Publish'}
+                </button>
+                <button
+                  onClick={() => void handleToggleArchive(selectedQuizSet)}
+                  disabled={savingArchive}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    background: savingArchive
+                      ? '#9ca3af'
+                      : isTrainingQuizArchived(selectedQuizSet)
+                        ? '#10b981'
+                        : '#6b7280',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    cursor: savingArchive ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem',
+                  }}
+                >
+                  {savingArchive
+                    ? 'Saving…'
+                    : isTrainingQuizArchived(selectedQuizSet)
+                      ? 'Restore to Active'
+                      : 'Move to Archived'}
                 </button>
                 <button
                   onClick={() => handleDeleteQuizSet(selectedQuizSet.id)}
@@ -1295,20 +1938,7 @@ const TrainingGroundsAdmin: React.FC = () => {
                 <button
                   onClick={() => {
                     setEditingQuestion(null);
-    setQuestionForm({
-      prompt: '',
-      options: ['', '', '', ''],
-      correctIndex: 0,
-      correctIndices: [],
-      explanation: '',
-      difficulty: 'medium',
-      category: '',
-      imageFile: null,
-      imageUrl: null,
-      pointsPP: 10,
-      pointsXP: 10,
-      artifactRewards: [],
-    });
+                    setQuestionForm(emptyQuestionForm());
                     setShowQuestionForm(true);
                   }}
                   style={{
@@ -1462,6 +2092,20 @@ const TrainingGroundsAdmin: React.FC = () => {
                           })()
                         }
                       </div>
+                      {Array.isArray(question.skillIds) && question.skillIds.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginBottom: '0.5rem' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#6b7280', marginRight: '0.25rem' }}>Skills:</span>
+                          {question.skillIds.map((sid) => {
+                            const skill = skillCatalog.find((s) => s.id === sid);
+                            return (
+                              <SkillChip
+                                key={sid}
+                                skill={skill || { name: sid }}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
                       {question.imageUrl && (
                         <div style={{ marginBottom: '0.5rem', position: 'relative' }}>
                           <img
@@ -1760,6 +2404,15 @@ const TrainingGroundsAdmin: React.FC = () => {
             </div>
 
             <div style={{ marginBottom: '1rem' }}>
+              <SkillPicker
+                selectedIds={questionForm.skillIds}
+                onChange={(ids) => setQuestionForm({ ...questionForm, skillIds: ids })}
+                suggestedIds={editSkillIds}
+                label="Skills Assessed"
+              />
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
               <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Difficulty</label>
               <select
                 value={questionForm.difficulty}
@@ -1860,20 +2513,7 @@ const TrainingGroundsAdmin: React.FC = () => {
                 onClick={() => {
                   setShowQuestionForm(false);
                   setEditingQuestion(null);
-    setQuestionForm({
-      prompt: '',
-      options: ['', '', '', ''],
-      correctIndex: 0,
-      correctIndices: [],
-      explanation: '',
-      difficulty: 'medium',
-      category: '',
-      imageFile: null,
-      imageUrl: null,
-      pointsPP: 10,
-      pointsXP: 10,
-      artifactRewards: [],
-    });
+                  setQuestionForm(emptyQuestionForm());
                 }}
                 style={{
                   padding: '0.5rem 1rem',
@@ -1932,7 +2572,7 @@ const TrainingGroundsAdmin: React.FC = () => {
               Import Questions into "{selectedQuizSet.title}"
             </h3>
             <p style={{ marginTop: 0, color: '#6b7280', marginBottom: '1rem' }}>
-              Select another quiz set, then choose which questions to copy.
+              Select another quiz set (including archived), then choose which questions to copy.
             </p>
 
             <div style={{ marginBottom: '1rem' }}>
@@ -1944,9 +2584,17 @@ const TrainingGroundsAdmin: React.FC = () => {
               >
                 <option value="">Select source quiz...</option>
                 {quizSets
-                  .filter(q => q.id !== selectedQuizSet.id)
-                  .map(q => (
+                  .filter((q) => q.id !== selectedQuizSet.id)
+                  .slice()
+                  .sort((a, b) => {
+                    const aa = isTrainingQuizArchived(a) ? 1 : 0;
+                    const ba = isTrainingQuizArchived(b) ? 1 : 0;
+                    if (aa !== ba) return aa - ba;
+                    return (a.title || '').localeCompare(b.title || '');
+                  })
+                  .map((q) => (
                     <option key={q.id} value={q.id}>
+                      {isTrainingQuizArchived(q) ? '[Archived] ' : ''}
                       {q.title} ({q.questionCount} questions)
                     </option>
                   ))}

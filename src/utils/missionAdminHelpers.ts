@@ -11,12 +11,41 @@ export type MissionAdminFilter =
   | 'all'
   | 'journey'
   | 'side'
+  | 'skill'
   | 'demo'
   | 'drafts'
   | 'published';
 
 /** Prefix for synthetic Mission Admin rows built from hardcoded CHAPTERS challenges. */
 export const JOURNEY_CHALLENGE_MISSION_PREFIX = 'journey-challenge:';
+
+/** Non-empty classroom IDs assigned to a mission (Skill Missions visibility). */
+export function assignedClassIdsForMission(mission: Pick<MissionTemplate, 'classIds'>): string[] {
+  if (!mission.classIds || !Array.isArray(mission.classIds)) return [];
+  const seen = new Set<string>();
+  for (const id of mission.classIds) {
+    if (typeof id === 'string' && id.trim()) seen.add(id.trim());
+  }
+  return Array.from(seen);
+}
+
+/**
+ * Skill Missions: visible only if assigned to ≥1 class the student is enrolled in.
+ * Admins bypass class gating so they can preview/test any Skill Mission.
+ * Other categories: always visible at this layer (other filters apply separately).
+ */
+export function isSkillMissionVisibleToStudentClasses(
+  mission: Pick<MissionTemplate, 'missionCategory' | 'classIds'>,
+  studentClassIds: string[],
+  options?: { isAdmin?: boolean }
+): boolean {
+  if (mission.missionCategory !== 'SKILL') return true;
+  if (options?.isAdmin) return true;
+  const assigned = assignedClassIdsForMission(mission);
+  if (assigned.length === 0) return false;
+  if (!studentClassIds.length) return false;
+  return assigned.some((id) => studentClassIds.includes(id));
+}
 
 export function isHardcodedJourneyMissionId(id: string): boolean {
   return id.startsWith(JOURNEY_CHALLENGE_MISSION_PREFIX);
@@ -136,6 +165,8 @@ export function filterMissionsForAdmin(
       return missions.filter(isPlayerJourneyMission);
     case 'side':
       return missions.filter((m) => m.missionCategory === 'SIDE' && !m.deliveryChannels?.includes('PLAYER_JOURNEY'));
+    case 'skill':
+      return missions.filter((m) => m.missionCategory === 'SKILL');
     case 'demo':
       return missions.filter((m) => m.missionCategory === 'DEMO');
     case 'drafts':
@@ -191,5 +222,6 @@ export function categoryBadgeForFilter(category: MissionCategory): string {
   if (category === 'STORY') return "Player's Journey";
   if (category === 'SOVEREIGN') return 'Sovereign';
   if (category === 'DEMO') return 'Demo';
+  if (category === 'SKILL') return 'Skill Mission';
   return category;
 }

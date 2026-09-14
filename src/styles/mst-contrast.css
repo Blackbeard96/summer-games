@@ -1,0 +1,226 @@
+/**
+ * MST contrast safety net
+ * Remaps legacy light-theme slate/gray inline colors (and common Tailwind
+ * text-gray utilities) to readable cream on the dark shell, then restores
+ * dark text inside known light surfaces (white cards, soft panels, gradients).
+ */
+
+/* --- Remap low-contrast dark text on the navy shell --- */
+.mst-app-shell [style*="color: #1f2937"],
+.mst-app-shell [style*="color:#1f2937"],
+.mst-app-shell [style*="color: #111827"],
+.mst-app-shell [style*="color:#111827"],
+.mst-app-shell [style*="color: #0f172a"],
+.mst-app-shell [style*="color:#0f172a"] {
+  color: var(--mst-text-primary) !important;
+}
+
+.mst-app-shell [style*="color: #374151"],
+.mst-app-shell [style*="color:#374151"],
+.mst-app-shell [style*="color: #4b5563"],
+.mst-app-shell [style*="color:#4b5563"],
+.mst-app-shell [style*="color: #334155"],
+.mst-app-shell [style*="color:#334155"],
+.mst-app-shell [style*="color: #475569"],
+.mst-app-shell [style*="color:#475569"] {
+  color: var(--mst-text-secondary) !important;
+}
+
+.mst-app-shell [style*="color: #6b7280"],
+.mst-app-shell [style*="color:#6b7280"],
+.mst-app-shell [style*="color: #64748b"],
+.mst-app-shell [style*="color:#64748b"],
+.mst-app-shell [style*="color: #9ca3af"],
+.mst-app-shell [style*="color:#9ca3af"],
+.mst-app-shell [style*="color: #94a3b8"],
+.mst-app-shell [style*="color:#94a3b8"] {
+  color: var(--mst-text-secondary) !important;
+}
+
+/* Tailwind gray utilities used on Journey / admin islands */
+.mst-app-shell .text-gray-900,
+.mst-app-shell .text-gray-800,
+.mst-app-shell .text-slate-900,
+.mst-app-shell .text-slate-800 {
+  color: var(--mst-text-primary) !important;
+}
+
+.mst-app-shell .text-gray-700,
+.mst-app-shell .text-gray-600,
+.mst-app-shell .text-gray-500,
+.mst-app-shell .text-slate-700,
+.mst-app-shell .text-slate-600,
+.mst-app-shell .text-slate-500 {
+  color: var(--mst-text-secondary) !important;
+}
+
+/* Site banner — keep message bright */
+.mst-site-banner,
+.mst-site-banner span {
+  color: #fef9e7 !important;
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ */
+/* Restore dark text inside light surfaces (cards, forms, soft panels) */
+/* ------------------------------------------------------------------ */
+
+.mst-app-shell [style*="background-color: white"],
+.mst-app-shell [style*="background-color: #fff"],
+.mst-app-shell [style*="background-color: #ffffff"],
+.mst-app-shell [style*="background-color: #f8fafc"],
+.mst-app-shell [style*="background-color: #f9fafb"],
+.mst-app-shell [style*="background-color: #f3f4f6"],
+.mst-app-shell [style*="background-color: #e5e7eb"],
+.mst-app-shell [style*="background-color: #f0f9ff"],
+.mst-app-shell [style*="background-color: #e0f2fe"],
+.mst-app-shell [style*="background-color: #eff6ff"],
+.mst-app-shell [style*="background-color: #dbeafe"],
+.mst-app-shell [style*="background-color: #f0fdf4"],
+.mst-app-shell [style*="background-color: #dcfce7"],
+.mst-app-shell [style*="background-color: #ecfdf5"],
+.mst-app-shell [style*="background-color: #fef3c7"],
+.mst-app-shell [style*="background-color: #fffbeb"],
+.mst-app-shell [style*="background-color: #fef2f2"],
+.mst-app-shell [style*="background-color: #f5f3ff"],
+.mst-app-shell [style*="background-color: #ede9fe"],
+.mst-app-shell [style*="background-color: #faf5ff"],
+.mst-app-shell [style*="background-color: #fff7ed"],
+.mst-app-shell [style*="background-color: #ffedd5"],
+.mst-app-shell [style*="background: white"],
+.mst-app-shell [style*="background:#fff"],
+.mst-app-shell [style*="background: #fff"],
+.mst-app-shell [style*="background: #ffffff"],
+.mst-app-shell [style*="background: #f8fafc"],
+.mst-app-shell [style*="background: #f9fafb"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #ffffff"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #f8fafc"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #f0fdf4"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #dcfce7"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #eff6ff"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #dbeafe"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #fef3c7"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #f5f3ff"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #ecfdf5"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #fff7ed"],
+.mst-app-shell .bg-white,
+.mst-app-shell .bg-gray-50,
+.mst-app-shell .bg-gray-100,
+.mst-app-shell .bg-slate-50,
+.mst-app-shell .bg-slate-100,
+.mst-light-surface {
+  color: #1f2937;
+}
+
+/* Mission runner is a dark cinematic surface — do not force LMS black text */
+.mst-app-shell .mst-mission-panel,
+.mst-app-shell .mst-mission-panel [style*="background"],
+.mst-app-shell .mst-mission-loading,
+.mst-app-shell .mst-mission-error,
+.mst-app-shell .mst-mission-modal {
+  color: var(--mst-text-primary) !important;
+}
+
+.mst-app-shell .mst-mission-panel [style*="color: #1f2937"],
+.mst-app-shell .mst-mission-panel [style*="color:#1f2937"],
+.mst-app-shell .mst-mission-panel [style*="color: #111827"],
+.mst-app-shell .mst-mission-panel [style*="color:#111827"],
+.mst-app-shell .mst-mission-panel [style*="color: #374151"],
+.mst-app-shell .mst-mission-panel [style*="color:#374151"],
+.mst-app-shell .mst-mission-panel [style*="color: #4b5563"],
+.mst-app-shell .mst-mission-panel [style*="color:#4b5563"] {
+  color: var(--mst-text-secondary) !important;
+}
+
+/* Restore explicit slate colors inside light surfaces (beat remap !important) */
+.mst-app-shell [style*="background-color: white"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: white"] [style*="color:#1f2937"],
+.mst-app-shell [style*="background-color: #fff"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #ffffff"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #f8fafc"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #f9fafb"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #f3f4f6"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #f0f9ff"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #e0f2fe"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #eff6ff"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #f0fdf4"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #dcfce7"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #ecfdf5"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #fef3c7"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #f5f3ff"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background: white"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #ffffff"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #f8fafc"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #f0fdf4"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #dcfce7"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #eff6ff"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #dbeafe"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #fef3c7"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #f5f3ff"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #ecfdf5"] [style*="color: #1f2937"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #fff7ed"] [style*="color: #1f2937"],
+.mst-app-shell .bg-white [style*="color: #1f2937"],
+.mst-app-shell .bg-white .text-gray-900,
+.mst-app-shell .bg-gray-50 .text-gray-900,
+.mst-app-shell .mst-light-surface [style*="color: #1f2937"],
+.mst-light-surface [style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: white"][style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #f8fafc"][style*="color: #1f2937"],
+.mst-app-shell [style*="background-color: #e5e7eb"][style*="color: #1f2937"] {
+  color: #1f2937 !important;
+}
+
+.mst-app-shell [style*="background-color: white"] [style*="color: #111827"],
+.mst-app-shell [style*="background-color: #f8fafc"] [style*="color: #111827"],
+.mst-app-shell [style*="background-color: #f9fafb"] [style*="color: #111827"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #ffffff"] [style*="color: #111827"],
+.mst-app-shell .bg-white .text-gray-800,
+.mst-app-shell .bg-white .text-slate-900 {
+  color: #111827 !important;
+}
+
+.mst-app-shell [style*="background-color: white"] [style*="color: #374151"],
+.mst-app-shell [style*="background-color: white"] [style*="color: #4b5563"],
+.mst-app-shell [style*="background-color: #f8fafc"] [style*="color: #374151"],
+.mst-app-shell [style*="background-color: #f8fafc"] [style*="color: #4b5563"],
+.mst-app-shell [style*="background-color: #f9fafb"] [style*="color: #374151"],
+.mst-app-shell [style*="background-color: #f9fafb"] [style*="color: #4b5563"],
+.mst-app-shell [style*="background-color: #f0f9ff"] [style*="color: #374151"],
+.mst-app-shell [style*="background-color: #e5e7eb"][style*="color: #374151"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #ffffff"] [style*="color: #374151"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #f0fdf4"] [style*="color: #374151"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #dcfce7"] [style*="color: #374151"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #eff6ff"] [style*="color: #374151"],
+.mst-app-shell .bg-white .text-gray-700,
+.mst-app-shell .bg-white .text-gray-600 {
+  color: #374151 !important;
+}
+
+.mst-app-shell [style*="background-color: white"] [style*="color: #6b7280"],
+.mst-app-shell [style*="background-color: white"] [style*="color: #9ca3af"],
+.mst-app-shell [style*="background-color: white"] [style*="color: #64748b"],
+.mst-app-shell [style*="background-color: #f8fafc"] [style*="color: #6b7280"],
+.mst-app-shell [style*="background-color: #f8fafc"] [style*="color: #9ca3af"],
+.mst-app-shell [style*="background-color: #f9fafb"] [style*="color: #6b7280"],
+.mst-app-shell [style*="background-color: #f0f9ff"] [style*="color: #6b7280"],
+.mst-app-shell [style*="background-color: #e0f2fe"] [style*="color: #0c4a6e"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #ffffff"] [style*="color: #6b7280"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #f8fafc"] [style*="color: #6b7280"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #f0fdf4"] [style*="color: #6b7280"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #dcfce7"] [style*="color: #6b7280"],
+.mst-app-shell [style*="background: linear-gradient(135deg, #eff6ff"] [style*="color: #6b7280"],
+.mst-app-shell .bg-white .text-gray-500,
+.mst-app-shell .bg-white .text-gray-400 {
+  color: #6b7280 !important;
+}
+
+.mst-app-shell [style*="color: #4c1d95"],
+.mst-app-shell [style*="color:#4c1d95"] {
+  color: var(--mst-purple-bright) !important;
+}
+
+/* Soft blue tip boxes keep their intended ink */
+.mst-app-shell [style*="background-color: #e0f2fe"] [style*="color: #0c4a6e"],
+.mst-app-shell [style*="background-color: #e0f2fe"][style*="color: #0c4a6e"] {
+  color: #0c4a6e !important;
+}

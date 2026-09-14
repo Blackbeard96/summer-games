@@ -1,8 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { db, storage, auth } from '../firebase';
+import { db, storage } from '../firebase';
 import { collection, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc, query, where, writeBatch, addDoc, serverTimestamp, onSnapshot, deleteField } from 'firebase/firestore';
 import { ref, deleteObject, getDownloadURL } from 'firebase/storage';
-import { sendPasswordResetEmail } from 'firebase/auth';
+import {
+  adminGeneratePasswordResetLink,
+  adminSendPasswordResetEmail,
+  adminSetUserPassword,
+} from '../utils/adminAuthActions';
 import BadgeManager from '../components/BadgeManager';
 import BadgeSetup from '../components/BadgeSetup';
 import PlayerCard from '../components/PlayerCard';
@@ -38,6 +42,8 @@ import DailyChallengesAdmin from '../components/DailyChallengesAdmin';
 import AssessmentGoalsAdmin from '../components/AssessmentGoalsAdmin';
 import WeeklyGoalsAdminReview from '../components/admin/WeeklyGoalsAdminReview';
 import TrainingGroundsAdmin from '../components/TrainingGroundsAdmin';
+import SkillLibraryAdmin from './admin/SkillLibraryAdmin';
+import SkillAnalyticsAdmin from './admin/SkillAnalyticsAdmin';
 import SearchBar from '../components/SearchBar';
 import { searchStudents } from '../utils/searchUtils';
 import MissionAdmin from '../components/MissionAdmin';
@@ -249,6 +255,7 @@ const AdminPanel: React.FC = () => {
     | 'manifests' | 'level2-manifest' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup'
     | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts'
     | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'weekly-goals-review' | 'training-grounds'
+    | 'skill-library' | 'skill-analytics'
     | 'season1' | 'rr-candies' | 'progression-repair' | 'vault-recovery' | 'uxp-approval' | 'missions'
     | 'island-raid-levels' | 'productivity-dashboard' | 'civic-economy';
   const ADMIN_TAB_STORAGE_KEY = 'adminPanel.activeTab.v1';
@@ -281,6 +288,20 @@ const AdminPanel: React.FC = () => {
   const [viewingFile, setViewingFile] = useState<{ url: string; name: string; type: string } | null>(null);
   const [passwordResetEmail, setPasswordResetEmail] = useState('');
   const [passwordResetLoading, setPasswordResetLoading] = useState(false);
+  const [passwordActionLoading, setPasswordActionLoading] = useState<{ [id: string]: string }>({});
+  const [setPasswordModal, setSetPasswordModal] = useState<{
+    uid: string;
+    email: string;
+    name: string;
+  } | null>(null);
+  const [setPasswordValue, setSetPasswordValue] = useState('');
+  const [setPasswordConfirm, setSetPasswordConfirm] = useState('');
+  const [setPasswordError, setSetPasswordError] = useState('');
+  const [setPasswordBusy, setSetPasswordBusy] = useState(false);
+  const [resetLinkModal, setResetLinkModal] = useState<{
+    email: string;
+    link: string;
+  } | null>(null);
   
   // Story Progress Management
   const [storyProgressData, setStoryProgressData] = useState<{ [studentId: string]: any }>({});
@@ -2426,75 +2447,157 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  // Password reset handler
+  // Password reset handler — Firebase Auth email (normalized + continue URL)
   const resetUserPassword = async (email: string, studentId?: string) => {
     if (!email || !email.includes('@')) {
       alert('Please enter a valid email address');
       return;
     }
 
-    if (!window.confirm(`Send password reset email to ${email}?`)) {
+    if (!window.confirm(`Send password reset email to ${email.trim().toLowerCase()}?\n\nTip: if school inboxes block Firebase mail, use “Set Password” or “Copy Reset Link” instead.`)) {
       return;
     }
 
     if (studentId) {
-      setRowLoading(prev => ({ ...prev, [studentId]: true }));
-      setRowError(prev => ({ ...prev, [studentId]: '' }));
+      setPasswordActionLoading((prev) => ({ ...prev, [studentId]: 'reset' }));
+      setRowLoading((prev) => ({ ...prev, [studentId]: true }));
+      setRowError((prev) => ({ ...prev, [studentId]: '' }));
     } else {
       setPasswordResetLoading(true);
     }
 
     try {
-      await sendPasswordResetEmail(auth, email);
-      alert(`✅ Password reset email sent successfully to ${email}`);
-      
-      // Clear the email input if it was from the general form
+      const result = await adminSendPasswordResetEmail(email);
+      alert(`✅ ${result.message}`);
+
       if (!studentId) {
         setPasswordResetEmail('');
       }
-      
-      // Log the password reset action
+
       if (currentUser) {
         try {
           await addDoc(collection(db, 'adminLogs'), {
             adminId: currentUser.uid,
             adminEmail: currentUser.email,
             action: 'password_reset',
-            targetEmail: email,
-            timestamp: serverTimestamp()
+            targetEmail: result.email,
+            timestamp: serverTimestamp(),
           });
         } catch (logError) {
           console.error('Error logging password reset:', logError);
         }
       }
-    } catch (error: any) {
-      const errorMessage = error.message || 'Failed to send password reset email';
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Failed to send password reset email';
       console.error('Password reset error:', error);
-      
-      if (error.code === 'auth/user-not-found') {
-        alert(`❌ No account found with email: ${email}`);
-      } else if (error.code === 'auth/invalid-email') {
-        alert(`❌ Invalid email address: ${email}`);
-      } else {
-        alert(`❌ Error: ${errorMessage}`);
-      }
-      
+      alert(`❌ ${errorMessage}`);
       if (studentId) {
-        setRowError(prev => ({ ...prev, [studentId]: errorMessage }));
+        setRowError((prev) => ({ ...prev, [studentId]: errorMessage }));
       }
     } finally {
       if (studentId) {
-        setRowLoading(prev => ({ ...prev, [studentId]: false }));
+        setPasswordActionLoading((prev) => {
+          const next = { ...prev };
+          delete next[studentId];
+          return next;
+        });
+        setRowLoading((prev) => ({ ...prev, [studentId]: false }));
       } else {
         setPasswordResetLoading(false);
       }
     }
   };
 
+  const copyResetLinkForUser = async (email: string, studentId?: string) => {
+    if (!email || !email.includes('@')) {
+      alert('Please enter a valid email address');
+      return;
+    }
+    if (studentId) {
+      setPasswordActionLoading((prev) => ({ ...prev, [studentId]: 'link' }));
+    } else {
+      setPasswordResetLoading(true);
+    }
+    try {
+      const result = await adminGeneratePasswordResetLink(email);
+      setResetLinkModal({ email: result.email, link: result.resetLink });
+      try {
+        await navigator.clipboard.writeText(result.resetLink);
+      } catch {
+        /* ignore — modal still shows the link */
+      }
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Failed to generate reset link';
+      alert(
+        `❌ ${errorMessage}\n\nIf Cloud Functions are not deployed yet, run:\nfirebase deploy --only functions`
+      );
+    } finally {
+      if (studentId) {
+        setPasswordActionLoading((prev) => {
+          const next = { ...prev };
+          delete next[studentId];
+          return next;
+        });
+      } else {
+        setPasswordResetLoading(false);
+      }
+    }
+  };
+
+  const openSetPasswordModal = (student: { id: string; email?: string; displayName?: string; name?: string }) => {
+    if (!student.email) {
+      alert('This student has no email on file.');
+      return;
+    }
+    setSetPasswordModal({
+      uid: student.id,
+      email: student.email,
+      name: student.displayName || student.name || student.email,
+    });
+    setSetPasswordValue('');
+    setSetPasswordConfirm('');
+    setSetPasswordError('');
+  };
+
+  const submitSetPassword = async () => {
+    if (!setPasswordModal) return;
+    setSetPasswordError('');
+    if (setPasswordValue.length < 6) {
+      setSetPasswordError('Password must be at least 6 characters.');
+      return;
+    }
+    if (setPasswordValue !== setPasswordConfirm) {
+      setSetPasswordError('Passwords do not match.');
+      return;
+    }
+    setSetPasswordBusy(true);
+    try {
+      const result = await adminSetUserPassword({
+        ...(setPasswordModal.uid ? { uid: setPasswordModal.uid } : {}),
+        email: setPasswordModal.email,
+        password: setPasswordValue,
+      });
+      alert(`✅ ${result.message}\n\nShare the new password with ${setPasswordModal.name} securely.`);
+      setSetPasswordModal(null);
+      setSetPasswordValue('');
+      setSetPasswordConfirm('');
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Failed to set password';
+      setSetPasswordError(
+        `${errorMessage}${/functions|not-found|unavailable/i.test(errorMessage) ? ' — deploy Cloud Functions if needed: firebase deploy --only functions' : ''}`
+      );
+    } finally {
+      setSetPasswordBusy(false);
+    }
+  };
+
   return (
     <div style={{ padding: '1.5rem', maxWidth: '1200px', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <h1 style={{ fontSize: '2rem', fontWeight: 'bold', color: '#1f2937' }}>
+        <h1 className="mst-display" style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--mst-gold-bright)', margin: 0 }}>
           Admin Panel
         </h1>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -3176,6 +3279,36 @@ const AdminPanel: React.FC = () => {
           🎯 Training Grounds (CFUs)
         </button>
         <button
+          onClick={() => setActiveTab('skill-library')}
+          style={{
+            backgroundColor: activeTab === 'skill-library' ? '#6d3ef2' : '#e5e7eb',
+            color: activeTab === 'skill-library' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          ✦ Skill Library
+        </button>
+        <button
+          onClick={() => setActiveTab('skill-analytics')}
+          style={{
+            backgroundColor: activeTab === 'skill-analytics' ? '#0f766e' : '#e5e7eb',
+            color: activeTab === 'skill-analytics' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          📈 Skill Analytics
+        </button>
+        <button
           onClick={() => setActiveTab('rr-candies')}
           style={{
             backgroundColor: activeTab === 'rr-candies' ? '#0891b2' : '#e5e7eb',
@@ -3371,6 +3504,10 @@ const AdminPanel: React.FC = () => {
         />
       ) : activeTab === 'training-grounds' ? (
         <TrainingGroundsAdmin />
+      ) : activeTab === 'skill-library' ? (
+        <SkillLibraryAdmin />
+      ) : activeTab === 'skill-analytics' ? (
+        <SkillAnalyticsAdmin />
       ) : activeTab === 'rr-candies' ? (
         <RRCandyAdminPage />
       ) : activeTab === 'season1' ? (
@@ -4013,10 +4150,10 @@ const AdminPanel: React.FC = () => {
               marginBottom: '2rem'
             }}>
               <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#92400e' }}>
-                🔐 Password Reset
+                🔐 Password Help
               </h3>
               <p style={{ fontSize: '0.875rem', color: '#78350f', marginBottom: '1rem' }}>
-                Send a password reset email to any user by entering their email address below.
+                Send a Firebase reset email, copy a one-time reset link (if school inboxes block Firebase mail), or set a temporary password directly.
               </p>
               <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
                 <input
@@ -4055,7 +4192,46 @@ const AdminPanel: React.FC = () => {
                     gap: '0.5rem'
                   }}
                 >
-                  {passwordResetLoading ? '🔄' : '🔐'} Send Reset Email
+                  {passwordResetLoading ? '🔄' : '📧'} Send Reset Email
+                </button>
+                <button
+                  onClick={() => copyResetLinkForUser(passwordResetEmail)}
+                  disabled={!passwordResetEmail || passwordResetLoading}
+                  style={{
+                    backgroundColor: passwordResetLoading || !passwordResetEmail ? '#9ca3af' : '#0f766e',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1rem',
+                    cursor: passwordResetLoading || !passwordResetEmail ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem',
+                    fontWeight: 'bold',
+                  }}
+                >
+                  🔗 Copy Reset Link
+                </button>
+                <button
+                  onClick={() => {
+                    if (!passwordResetEmail) return;
+                    openSetPasswordModal({
+                      id: '',
+                      email: passwordResetEmail,
+                      displayName: passwordResetEmail,
+                    });
+                  }}
+                  disabled={!passwordResetEmail || passwordResetLoading}
+                  style={{
+                    backgroundColor: passwordResetLoading || !passwordResetEmail ? '#9ca3af' : '#b45309',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1rem',
+                    cursor: passwordResetLoading || !passwordResetEmail ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem',
+                    fontWeight: 'bold',
+                  }}
+                >
+                  🔑 Set Password
                 </button>
               </div>
             </div>
@@ -4490,26 +4666,62 @@ const AdminPanel: React.FC = () => {
                             View Profile
                           </button>
                           {student.email && (
-                            <button
-                              onClick={() => resetUserPassword(student.email!, student.id)}
-                              disabled={rowLoading[student.id]}
-                              style={{
-                                backgroundColor: rowLoading[student.id] ? '#9ca3af' : '#8b5cf6',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '0.375rem',
-                                padding: '0.5rem 0.75rem',
-                                cursor: rowLoading[student.id] ? 'not-allowed' : 'pointer',
-                                fontSize: '0.875rem',
-                                fontWeight: '500',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.25rem'
-                              }}
-                              title={`Send password reset email to ${student.email}`}
-                            >
-                              {rowLoading[student.id] ? '🔄' : '🔐'} Reset Password
-                            </button>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                              <button
+                                onClick={() => resetUserPassword(student.email!, student.id)}
+                                disabled={!!passwordActionLoading[student.id] || rowLoading[student.id]}
+                                style={{
+                                  backgroundColor: passwordActionLoading[student.id] ? '#9ca3af' : '#8b5cf6',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '0.375rem',
+                                  padding: '0.5rem 0.75rem',
+                                  cursor: passwordActionLoading[student.id] ? 'not-allowed' : 'pointer',
+                                  fontSize: '0.8rem',
+                                  fontWeight: '500',
+                                  whiteSpace: 'nowrap',
+                                }}
+                                title={`Send password reset email to ${student.email}`}
+                              >
+                                {passwordActionLoading[student.id] === 'reset' ? '🔄' : '📧'} Reset Email
+                              </button>
+                              <button
+                                onClick={() => copyResetLinkForUser(student.email!, student.id)}
+                                disabled={!!passwordActionLoading[student.id]}
+                                style={{
+                                  backgroundColor: passwordActionLoading[student.id] ? '#9ca3af' : '#0f766e',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '0.375rem',
+                                  padding: '0.5rem 0.75rem',
+                                  cursor: passwordActionLoading[student.id] ? 'not-allowed' : 'pointer',
+                                  fontSize: '0.8rem',
+                                  fontWeight: '500',
+                                  whiteSpace: 'nowrap',
+                                }}
+                                title={`Copy a one-time reset link for ${student.email}`}
+                              >
+                                {passwordActionLoading[student.id] === 'link' ? '🔄' : '🔗'} Copy Link
+                              </button>
+                              <button
+                                onClick={() => openSetPasswordModal(student)}
+                                disabled={!!passwordActionLoading[student.id]}
+                                style={{
+                                  backgroundColor: passwordActionLoading[student.id] ? '#9ca3af' : '#b45309',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '0.375rem',
+                                  padding: '0.5rem 0.75rem',
+                                  cursor: passwordActionLoading[student.id] ? 'not-allowed' : 'pointer',
+                                  fontSize: '0.8rem',
+                                  fontWeight: '500',
+                                  whiteSpace: 'nowrap',
+                                }}
+                                title={`Set a temporary password for ${student.email}`}
+                              >
+                                🔑 Set Password
+                              </button>
+                            </div>
                           )}
                         </div>
                       </td>
@@ -5115,6 +5327,203 @@ const AdminPanel: React.FC = () => {
         isOpen={showFirebaseRulesChecker}
         onClose={() => setShowFirebaseRulesChecker(false)}
       />
+
+      {/* Set Password Modal */}
+      {setPasswordModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '1rem',
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !setPasswordBusy) setSetPasswordModal(null);
+          }}
+        >
+          <div
+            style={{
+              background: '#0e1420',
+              border: '1px solid rgba(212,168,79,0.45)',
+              borderRadius: '0.75rem',
+              padding: '1.5rem',
+              width: '100%',
+              maxWidth: '420px',
+              color: '#f4f0e6',
+            }}
+          >
+            <h3 style={{ margin: '0 0 0.5rem', color: '#f0c96a' }}>Set Password</h3>
+            <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: '#d1d5db' }}>
+              Set a temporary password for <strong>{setPasswordModal.name}</strong>
+              <br />
+              <span style={{ color: '#9ca3af' }}>{setPasswordModal.email}</span>
+            </p>
+            <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.35rem' }}>New password</label>
+            <input
+              type="text"
+              autoComplete="new-password"
+              value={setPasswordValue}
+              onChange={(e) => setSetPasswordValue(e.target.value)}
+              style={{
+                width: '100%',
+                marginBottom: '0.75rem',
+                padding: '0.65rem 0.75rem',
+                borderRadius: '0.4rem',
+                border: '1px solid rgba(212,168,79,0.35)',
+                background: '#05070d',
+                color: '#f4f0e6',
+              }}
+            />
+            <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.35rem' }}>Confirm password</label>
+            <input
+              type="text"
+              autoComplete="new-password"
+              value={setPasswordConfirm}
+              onChange={(e) => setSetPasswordConfirm(e.target.value)}
+              style={{
+                width: '100%',
+                marginBottom: '0.75rem',
+                padding: '0.65rem 0.75rem',
+                borderRadius: '0.4rem',
+                border: '1px solid rgba(212,168,79,0.35)',
+                background: '#05070d',
+                color: '#f4f0e6',
+              }}
+            />
+            {setPasswordError && (
+              <div style={{ color: '#fca5a5', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                {setPasswordError}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                disabled={setPasswordBusy}
+                onClick={() => setSetPasswordModal(null)}
+                style={{
+                  padding: '0.55rem 0.9rem',
+                  borderRadius: '0.4rem',
+                  border: '1px solid #4b5563',
+                  background: 'transparent',
+                  color: '#e5e7eb',
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={setPasswordBusy}
+                onClick={submitSetPassword}
+                style={{
+                  padding: '0.55rem 0.9rem',
+                  borderRadius: '0.4rem',
+                  border: 'none',
+                  background: setPasswordBusy ? '#9ca3af' : '#b45309',
+                  color: 'white',
+                  fontWeight: 700,
+                  cursor: setPasswordBusy ? 'wait' : 'pointer',
+                }}
+              >
+                {setPasswordBusy ? 'Saving…' : 'Save Password'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Link Modal */}
+      {resetLinkModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '1rem',
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setResetLinkModal(null);
+          }}
+        >
+          <div
+            style={{
+              background: '#0e1420',
+              border: '1px solid rgba(212,168,79,0.45)',
+              borderRadius: '0.75rem',
+              padding: '1.5rem',
+              width: '100%',
+              maxWidth: '560px',
+              color: '#f4f0e6',
+            }}
+          >
+            <h3 style={{ margin: '0 0 0.5rem', color: '#f0c96a' }}>Password Reset Link</h3>
+            <p style={{ margin: '0 0 0.75rem', fontSize: '0.875rem', color: '#d1d5db' }}>
+              Share this one-time link with <strong>{resetLinkModal.email}</strong>. Prefer this when school email blocks Firebase mail.
+            </p>
+            <textarea
+              readOnly
+              value={resetLinkModal.link}
+              style={{
+                width: '100%',
+                minHeight: '6rem',
+                marginBottom: '0.75rem',
+                padding: '0.65rem',
+                borderRadius: '0.4rem',
+                border: '1px solid rgba(212,168,79,0.35)',
+                background: '#05070d',
+                color: '#f4f0e6',
+                fontSize: '0.8rem',
+              }}
+            />
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(resetLinkModal.link);
+                    alert('Reset link copied.');
+                  } catch {
+                    alert('Could not copy — select the link and copy manually.');
+                  }
+                }}
+                style={{
+                  padding: '0.55rem 0.9rem',
+                  borderRadius: '0.4rem',
+                  border: 'none',
+                  background: '#0f766e',
+                  color: 'white',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Copy Link
+              </button>
+              <button
+                type="button"
+                onClick={() => setResetLinkModal(null)}
+                style={{
+                  padding: '0.55rem 0.9rem',
+                  borderRadius: '0.4rem',
+                  border: '1px solid #4b5563',
+                  background: 'transparent',
+                  color: '#e5e7eb',
+                  cursor: 'pointer',
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

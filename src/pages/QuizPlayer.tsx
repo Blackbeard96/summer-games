@@ -8,15 +8,17 @@ import {
   updateTrainingStats,
   isTrainingQuizVisibleToStudentClasses,
   isTrainingQuizAcceptingSoloCompletions,
+  isTrainingQuizArchived,
 } from '../utils/trainingGroundsService';
 import { getClassesByStudent } from '../utils/assessmentGoalsFirestore';
 import { calculateQuizRewards, grantQuizRewards } from '../utils/trainingGroundsRewards';
 import { TrainingQuizSet, TrainingQuestion, TrainingAnswer, TrainingAttempt } from '../types/trainingGrounds';
 import { recordQuizProductivityAttempt } from '../utils/productivityTracking';
+import { enrichAnswersWithSkills, recordSkillEvidenceFromAttempt } from '../utils/masteryService';
 
 const QuizPlayer: React.FC = () => {
   const { quizSetId } = useParams<{ quizSetId: string }>();
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const returnMissionRaw = searchParams.get('returnMission');
@@ -47,22 +49,35 @@ const QuizPlayer: React.FC = () => {
         const quiz = await getQuizSet(quizSetId);
         if (!quiz) {
           alert('Quiz not found');
-          navigate('/training-grounds');
-          return;
-        }
-        const studentClasses = await getClassesByStudent(currentUser.uid);
-        const studentClassIds = studentClasses.map((c) => c.id);
-        if (!isTrainingQuizVisibleToStudentClasses(quiz, studentClassIds)) {
-          alert('This CFU quiz is not assigned to your class.');
-          navigate('/training-grounds');
-          return;
-        }
-        if (!isTrainingQuizAcceptingSoloCompletions(quiz)) {
-          alert(
-            'This CFU is temporarily closed for completions. You can still see it on Training Grounds, but your teacher needs to turn completions back on before you can take it.'
-          );
           navigate(returnMission || '/training-grounds');
           return;
+        }
+        // Admins may test unpublished CFUs; archived stays staff-only via Admin archive folder.
+        if (isTrainingQuizArchived(quiz)) {
+          alert('This CFU is archived and is not available.');
+          navigate(returnMission || '/training-grounds');
+          return;
+        }
+        if (!quiz.isPublished && !isAdmin) {
+          alert('This CFU is unpublished and is not available.');
+          navigate(returnMission || '/training-grounds');
+          return;
+        }
+        if (!isAdmin) {
+          const studentClasses = await getClassesByStudent(currentUser.uid);
+          const studentClassIds = studentClasses.map((c) => c.id);
+          if (!isTrainingQuizVisibleToStudentClasses(quiz, studentClassIds)) {
+            alert('This CFU quiz is not assigned to your class.');
+            navigate(returnMission || '/training-grounds');
+            return;
+          }
+          if (!isTrainingQuizAcceptingSoloCompletions(quiz)) {
+            alert(
+              'This CFU is temporarily closed for completions. You can still see it on Training Grounds, but your teacher needs to turn completions back on before you can take it.'
+            );
+            navigate(returnMission || '/training-grounds');
+            return;
+          }
         }
 
         setQuizSet(quiz);
@@ -70,21 +85,21 @@ const QuizPlayer: React.FC = () => {
         const quizQuestions = await getQuestions(quizSetId);
         if (quizQuestions.length === 0) {
           alert('Quiz has no questions');
-          navigate('/training-grounds');
+          navigate(returnMission || '/training-grounds');
           return;
         }
         setQuestions(quizQuestions);
       } catch (error) {
         console.error('Error loading quiz:', error);
         alert('Failed to load quiz');
-        navigate('/training-grounds');
+        navigate(returnMission || '/training-grounds');
       } finally {
         setLoading(false);
       }
     };
     
     loadQuiz();
-  }, [quizSetId, currentUser, navigate, returnMission]);
+  }, [quizSetId, currentUser, navigate, returnMission, isAdmin]);
 
   const handleAnswerSelect = (index: number) => {
     if (showFeedback) return; // Prevent changing answer after feedback
@@ -204,14 +219,17 @@ const QuizPlayer: React.FC = () => {
       const correctCount = answers.filter(a => a.isCorrect).length;
       
       // Clean answers to remove undefined values (Firestore doesn't allow undefined)
-      const cleanedAnswers = answers.map(answer => {
+      const enriched = enrichAnswersWithSkills(answers, questions);
+      const cleanedAnswers = enriched.map(answer => {
         const cleaned: any = {
           questionId: answer.questionId,
           selectedIndices: answer.selectedIndices,
           isCorrect: answer.isCorrect,
           partialCredit: answer.partialCredit,
           timeSpentMs: answer.timeSpentMs,
+          skillIds: Array.isArray(answer.skillIds) ? answer.skillIds : [],
         };
+        if (answer.difficulty) cleaned.difficulty = answer.difficulty;
         // Only include selectedIndex if it exists (for backwards compatibility)
         if (answer.selectedIndex !== undefined) {
           cleaned.selectedIndex = answer.selectedIndex;
@@ -236,6 +254,19 @@ const QuizPlayer: React.FC = () => {
         },
         mode: 'solo',
       });
+
+      // Skill Mastery evidence (non-blocking for quiz completion)
+      try {
+        await recordSkillEvidenceFromAttempt({
+          userId: currentUser.uid,
+          quizSetId,
+          attemptId,
+          answers: cleanedAnswers,
+          mode: 'training-grounds',
+        });
+      } catch (skillErr) {
+        console.warn('Skill mastery update failed (quiz still saved):', skillErr);
+      }
       
       // Grant rewards
       await grantQuizRewards(currentUser.uid, rewardResult);
@@ -294,8 +325,12 @@ const QuizPlayer: React.FC = () => {
 
   if (loading || !quizSet || questions.length === 0) {
     return (
-      <div style={{ padding: '2rem', textAlign: 'center' }}>
-        <div>Loading quiz...</div>
+      <div className="mst-mission-shell">
+        <div className="mst-mission-loading" role="status" aria-live="polite">
+          <div className="mst-mission-loading-mark" aria-hidden="true" />
+          <p className="mst-mission-loading-title">Loading CFU...</p>
+          <p className="mst-mission-loading-copy">Preparing your Training Grounds quiz...</p>
+        </div>
       </div>
     );
   }
@@ -322,271 +357,136 @@ const QuizPlayer: React.FC = () => {
     isCorrect = allCorrect && noIncorrect && correctIndices.length === selectedIndices.size;
   }
 
-  return (
-    <div style={{ 
-      minHeight: '100vh', 
-      background: 'linear-gradient(to bottom, #f3f4f6, #e5e7eb)',
-      padding: '2rem'
-    }}>
-      <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-        {/* Progress bar */}
-        <div style={{
-          background: 'white',
-          borderRadius: '1rem',
-          padding: '1.5rem',
-          marginBottom: '1.5rem',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-        }}>
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'space-between', 
-            marginBottom: '0.5rem',
-            fontSize: '0.875rem',
-            color: '#6b7280'
-          }}>
-            <span>Question {currentQuestionIndex + 1} of {questions.length}</span>
-            <span>{Math.round(progress)}%</span>
-          </div>
-          <div style={{
-            width: '100%',
-            height: '8px',
-            background: '#e5e7eb',
-            borderRadius: '4px',
-            overflow: 'hidden'
-          }}>
-            <div style={{
-              width: `${progress}%`,
-              height: '100%',
-              background: '#4f46e5',
-              transition: 'width 0.3s ease'
-            }} />
-          </div>
-        </div>
+  const canSubmit = selectedIndices.size > 0 || selectedAnswer !== null;
 
-        {/* Question card */}
-        <div style={{
-          background: 'white',
-          borderRadius: '1rem',
-          padding: '2rem',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-          marginBottom: '1.5rem'
-        }}>
-          <h2 style={{ 
-            fontSize: '1.5rem', 
-            fontWeight: 'bold',
-            marginBottom: '1.5rem',
-            color: '#1f2937'
-          }}>
-            {currentQuestion.prompt}
-          </h2>
+  return (
+    <div className="mst-mission-shell">
+      <div className="mst-quiz-layout">
+        {returnMission && (
+          <button
+            type="button"
+            className="mst-mission-btn mst-mission-btn--ghost"
+            onClick={() => navigate(returnMission)}
+          >
+            ← Back to mission
+          </button>
+        )}
+
+        <div className="mst-mission-panel mst-quiz-panel">
+          <header className="mst-mission-header">
+            <p className="mst-mission-kicker">Training Grounds · CFU</p>
+            <h1 className="mst-mission-title">{quizSet.title}</h1>
+            <p className="mst-mission-step-meta">
+              Question {currentQuestionIndex + 1} of {questions.length}
+              {' · '}
+              {Math.round(progress)}%
+            </p>
+            <div className="mst-mission-progress" aria-hidden="true">
+              <div className="mst-mission-progress-fill" style={{ width: `${progress}%` }} />
+            </div>
+          </header>
+
+          <h2 className="mst-mission-step-heading">{currentQuestion.prompt}</h2>
 
           {currentQuestion.imageUrl && (
-            <div style={{ 
-              marginBottom: '1.5rem',
-              textAlign: 'center',
-              position: 'relative'
-            }}>
-              <img 
-                src={currentQuestion.imageUrl} 
+            <div style={{ position: 'relative', marginBottom: '1.15rem' }}>
+              <img
+                className="mst-mission-media"
+                src={currentQuestion.imageUrl}
                 alt="Question illustration"
                 onError={(e) => {
                   console.error('Failed to load image:', currentQuestion.imageUrl);
                   const target = e.currentTarget;
                   target.style.display = 'none';
-                  // Show error message
                   const errorDiv = target.parentElement?.querySelector('.image-error') as HTMLElement;
-                  if (errorDiv) {
-                    errorDiv.style.display = 'block';
-                  }
+                  if (errorDiv) errorDiv.style.display = 'flex';
                 }}
                 onLoad={(e) => {
                   const target = e.currentTarget;
                   target.style.display = 'block';
-                  // Hide error message if visible
                   const errorDiv = target.parentElement?.querySelector('.image-error') as HTMLElement;
-                  if (errorDiv) {
-                    errorDiv.style.display = 'none';
-                  }
-                }}
-                style={{
-                  maxWidth: '100%',
-                  maxHeight: '400px',
-                  borderRadius: '0.5rem',
-                  objectFit: 'contain',
-                  display: 'block',
-                  margin: '0 auto',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+                  if (errorDiv) errorDiv.style.display = 'none';
                 }}
               />
-              <div className="image-error" style={{
-                display: 'none',
-                padding: '1rem',
-                background: '#fee2e2',
-                border: '1px solid #fca5a5',
-                borderRadius: '0.5rem',
-                color: '#991b1b',
-                fontSize: '0.875rem'
-              }}>
-                ⚠️ Image could not be loaded. Please contact an administrator.
+              <div className="image-error mst-mission-media-fallback" style={{ display: 'none' }}>
+                Image could not be loaded. Please contact an administrator.
               </div>
             </div>
           )}
 
-          {/* Answer selection hint — make it clear when one vs multiple answers */}
           {!showFeedback && (
-            <div style={{
-              marginBottom: '1rem',
-              padding: '0.75rem',
-              background: isMultiSelect ? '#eff6ff' : '#f0fdf4',
-              borderRadius: '0.5rem',
-              border: isMultiSelect ? '1px solid #bfdbfe' : '1px solid #bbf7d0',
-              fontSize: '0.875rem',
-              color: isMultiSelect ? '#1e40af' : '#166534'
-            }}>
+            <p className={`mst-quiz-hint${isMultiSelect ? ' mst-quiz-hint--multi' : ''}`}>
               {isMultiSelect ? (
-                <strong>Multiple correct answers:</strong>
-              ) : null}{' '}
-              {isMultiSelect ? 'Select all that apply' : 'Select one answer'}
-            </div>
+                <>
+                  <strong>Multiple correct answers.</strong> Select all that apply.
+                </>
+              ) : (
+                'Select one answer'
+              )}
+            </p>
           )}
 
-          {/* Answer options */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+          <div className="mst-quiz-options">
             {currentQuestion.options.map((option, index) => {
               const isSelected = isMultiSelect ? selectedIndices.has(index) : selectedAnswer === index;
               const isCorrectAnswer = correctIndices.includes(index);
-              
-              let buttonStyle: React.CSSProperties = {
-                padding: '1rem',
-                borderRadius: '0.5rem',
-                border: '2px solid #e5e7eb',
-                background: 'white',
-                cursor: showFeedback ? 'default' : 'pointer',
-                fontSize: '1rem',
-                textAlign: 'left',
-                transition: 'all 0.2s',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.75rem'
-              };
 
+              let stateClass = '';
               if (showFeedback) {
-                // Show correct answers in green
-                if (isCorrectAnswer) {
-                  buttonStyle.background = '#10b981';
-                  buttonStyle.color = 'white';
-                  buttonStyle.borderColor = '#10b981';
-                } 
-                // Show selected but incorrect answers in red
-                else if (isSelected && !isCorrectAnswer) {
-                  buttonStyle.background = '#ef4444';
-                  buttonStyle.color = 'white';
-                  buttonStyle.borderColor = '#ef4444';
-                } 
-                // Show correct but not selected in muted green
-                else if (isCorrectAnswer && !isSelected) {
-                  buttonStyle.background = '#d1fae5';
-                  buttonStyle.color = '#065f46';
-                  buttonStyle.borderColor = '#10b981';
-                  buttonStyle.opacity = 0.8;
-                }
-                else {
-                  buttonStyle.opacity = 0.6;
-                }
+                if (isCorrectAnswer && isSelected) stateClass = 'is-correct';
+                else if (isSelected && !isCorrectAnswer) stateClass = 'is-wrong';
+                else if (isCorrectAnswer && !isSelected) stateClass = 'is-missed';
+                else stateClass = 'is-dimmed';
               } else if (isSelected) {
-                buttonStyle.borderColor = '#4f46e5';
-                buttonStyle.background = '#eef2ff';
+                stateClass = 'is-selected';
               }
 
               return (
                 <button
                   key={index}
+                  type="button"
+                  className={`mst-quiz-option ${stateClass}`.trim()}
                   onClick={() => handleAnswerSelect(index)}
-                  style={buttonStyle}
                   disabled={showFeedback}
                 >
-                  {/* Checkbox for multi-select, radio button indicator for single-select */}
-                  <div style={{
-                    width: '20px',
-                    height: '20px',
-                    border: '2px solid',
-                    borderColor: isSelected ? '#4f46e5' : '#9ca3af',
-                    borderRadius: isMultiSelect ? '4px' : '50%',
-                    background: isSelected ? '#4f46e5' : 'transparent',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0
-                  }}>
-                    {isSelected && (
-                      <span style={{ color: 'white', fontSize: '0.75rem', fontWeight: 'bold' }}>
-                        {isMultiSelect ? '✓' : '●'}
-                      </span>
-                    )}
-                  </div>
-                  <span style={{ flex: 1 }}>{option}</span>
+                  <span
+                    className={`mst-quiz-option-mark${isMultiSelect ? ' mst-quiz-option-mark--check' : ''}`}
+                    aria-hidden="true"
+                  >
+                    {isSelected ? (isMultiSelect ? '✓' : '●') : ''}
+                  </span>
+                  <span className="mst-quiz-option-text">{option}</span>
                 </button>
               );
             })}
           </div>
 
-          {/* Feedback */}
           {showFeedback && (
-            <div style={{
-              padding: '1rem',
-              borderRadius: '0.5rem',
-              marginBottom: '1rem',
-              background: isCorrect ? '#ecfdf5' : '#fef2f2',
-              border: `2px solid ${isCorrect ? '#10b981' : '#ef4444'}`
-            }}>
-              <div style={{ 
-                fontSize: '1.125rem', 
-                fontWeight: 'bold',
-                marginBottom: '0.5rem',
-                color: isCorrect ? '#10b981' : '#ef4444'
-              }}>
-                {isCorrect ? '✓ Correct!' : '✗ Incorrect'}
-              </div>
+            <div className={`mst-quiz-feedback ${isCorrect ? 'mst-quiz-feedback--ok' : 'mst-quiz-feedback--bad'}`}>
+              <p className="mst-quiz-feedback-title">
+                {isCorrect ? '✓ Correct' : '✗ Incorrect'}
+              </p>
               {currentQuestion.explanation && (
-                <div style={{ color: '#6b7280' }}>
-                  {currentQuestion.explanation}
-                </div>
+                <p className="mst-quiz-feedback-copy">{currentQuestion.explanation}</p>
               )}
             </div>
           )}
 
-          {/* Action buttons */}
-          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+          <div className="mst-quiz-actions">
             {!showFeedback ? (
               <button
+                type="button"
+                className="mst-mission-btn mst-mission-btn--primary"
                 onClick={handleSubmitAnswer}
-                disabled={(selectedIndices.size === 0 && selectedAnswer === null)}
-                style={{
-                  padding: '0.75rem 2rem',
-                  background: (selectedIndices.size === 0 && selectedAnswer === null) ? '#9ca3af' : '#4f46e5',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '0.5rem',
-                  fontSize: '1rem',
-                  fontWeight: '600',
-                  cursor: (selectedIndices.size === 0 && selectedAnswer === null) ? 'not-allowed' : 'pointer',
-                }}
+                disabled={!canSubmit}
               >
                 Submit Answer
               </button>
             ) : (
               <button
+                type="button"
+                className="mst-mission-btn mst-mission-btn--primary"
                 onClick={handleNext}
-                style={{
-                  padding: '0.75rem 2rem',
-                  background: '#4f46e5',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '0.5rem',
-                  fontSize: '1rem',
-                  fontWeight: '600',
-                  cursor: 'pointer',
-                }}
               >
                 {currentQuestionIndex < questions.length - 1 ? 'Next Question' : 'View Results'}
               </button>

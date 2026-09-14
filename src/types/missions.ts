@@ -8,18 +8,19 @@ import type { MissionBattleCoopConfig } from './coopBattle';
  * Sovereign Missions are optional hub lore for Home Page heroes in The Sovereign (background, not main story).
  * Profile Missions add information directly into the Player's Journey on their Power Card.
  * Demo Missions showcase what the MST Game can do — for demos, onboarding tours, and feature previews.
+ * Skill Missions are class-assigned lessons where players learn class skills (may unlock Skill Moves, Trees, abilities).
  * 
  * Extended for universal Challenge/Feat system (Ghost of Tsushima-style):
  * Event-driven missions can trigger from practice battles, skills, Mindforge, etc.
  */
 
-export type MissionCategory = 'SIDE' | 'STORY' | 'PROFILE' | 'SOVEREIGN' | 'DEMO';
+export type MissionCategory = 'SIDE' | 'STORY' | 'PROFILE' | 'SOVEREIGN' | 'DEMO' | 'SKILL';
 
 /**
- * UI / filter alias for Player's Journey vs Side vs Demo missions.
- * Maps onto existing MissionCategory: journey → STORY (+ PLAYER_JOURNEY), side → SIDE, demo → DEMO.
+ * UI / filter alias for Player's Journey vs Side vs Demo vs Skill missions.
+ * Maps onto existing MissionCategory: journey → STORY (+ PLAYER_JOURNEY), side → SIDE, demo → DEMO, skill → SKILL.
  */
-export type MissionCategoryAlias = 'journey' | 'side' | 'demo';
+export type MissionCategoryAlias = 'journey' | 'side' | 'demo' | 'skill';
 
 /** Journey-specific interactive type (STORY missions in Mission Admin). */
 export type JourneyMissionType =
@@ -51,7 +52,8 @@ export function normalizeMissionCategory(raw: unknown): MissionCategory {
     raw === 'STORY' ||
     raw === 'PROFILE' ||
     raw === 'SOVEREIGN' ||
-    raw === 'DEMO'
+    raw === 'DEMO' ||
+    raw === 'SKILL'
   ) {
     return raw;
   }
@@ -59,6 +61,7 @@ export function normalizeMissionCategory(raw: unknown): MissionCategory {
   if (raw === 'journey') return 'STORY';
   if (raw === 'side') return 'SIDE';
   if (raw === 'demo') return 'DEMO';
+  if (raw === 'skill') return 'SKILL';
   return 'SIDE';
 }
 
@@ -70,10 +73,15 @@ export function isDemoMissionCategory(category: MissionCategory): boolean {
   return category === 'DEMO';
 }
 
+export function isSkillMissionCategory(category: MissionCategory): boolean {
+  return category === 'SKILL';
+}
+
 export function missionCategoryToAlias(category: MissionCategory): MissionCategoryAlias | null {
   if (category === 'STORY') return 'journey';
   if (category === 'SIDE') return 'side';
   if (category === 'DEMO') return 'demo';
+  if (category === 'SKILL') return 'skill';
   return null;
 }
 
@@ -177,8 +185,19 @@ export interface MissionTemplate {
   lesson?: string;
   storyText?: string;
   npc?: string;               // "sonido" | "zeke" | "luz" | "kon" | undefined
-  missionCategory: MissionCategory;  // "SIDE" | "STORY" | "PROFILE" | "SOVEREIGN" | "DEMO"
+  missionCategory: MissionCategory;  // "SIDE" | "STORY" | "PROFILE" | "SOVEREIGN" | "DEMO" | "SKILL"
   deliveryChannels: DeliveryChannel[]; // ["HUB_NPC"] | ["PLAYER_JOURNEY"] | both
+  /**
+   * Classroom IDs this mission is for (primarily Skill Missions).
+   * Skill Missions: students only see the mission if enrolled in at least one of these classes.
+   * Empty/missing on SKILL = not visible to students (must assign classes before publishing).
+   */
+  classIds?: string[];
+  /**
+   * Optional academic skill IDs this Skill Mission teaches (Skill Library).
+   * Informational / analytics; battle unlocks still use rewards.moves / rewards.abilities.
+   */
+  skillIds?: string[];
   story?: StoryMetadata;      // only for STORY missions
   profile?: ProfileMetadata;  // only for PROFILE missions — which journey stage to add content to
   playerJourneyLink?: PlayerJourneyLink; // Link to Player Journey step
@@ -222,7 +241,7 @@ export interface MissionTemplate {
   }[];
   sequence?: MissionSequenceStep[];  // Optional sequence of steps
   sequenceVersion?: number;           // Version counter for sequence edits
-  /** Lower numbers appear first in NPC hub Side / Sovereign lists; omit for automatic order (oldest created first). */
+  /** Lower numbers appear first in NPC hub Side / Sovereign / Skill lists; omit for automatic order (oldest created first). */
   hubDisplayOrder?: number;
   createdAt?: any;
   updatedAt?: any;

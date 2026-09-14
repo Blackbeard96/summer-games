@@ -2,7 +2,7 @@ import { db } from '../firebase';
 import { doc, getDoc, updateDoc, serverTimestamp, runTransaction, increment } from 'firebase/firestore';
 import { getTodayDateStringEastern } from './dailyChallengeDateUtils';
 import {
-  dailyChallengeStoredTypeMatchesEvent,
+  dailyChallengeMatchesGameplayEvent,
   getEffectiveDailyChallengeTarget,
 } from './dailyChallengeShared';
 
@@ -282,12 +282,22 @@ export const updateChallengeProgressByType = async (
         }
         
         const details = challengeDetails[challenge.challengeId];
-        const typeMatches = dailyChallengeStoredTypeMatchesEvent(String(storedType), String(challengeType));
+        const typeMatches = dailyChallengeMatchesGameplayEvent(
+          {
+            storedType: storedType != null ? String(storedType) : undefined,
+            detailsType: details?.type != null ? String(details.type) : undefined,
+            title: details?.title != null ? String(details.title) : undefined,
+            description: details?.description != null ? String(details.description) : undefined,
+          },
+          String(challengeType)
+        );
 
         // ALWAYS log challenge matching (critical for debugging)
         console.log('[Daily Challenge] 🔍 Checking challenge:', {
           challengeId: challenge.challengeId,
           storedType,
+          detailsType: details?.type,
+          title: details?.title,
           challengeType,
           typeMatches,
           completed: challenge.completed,
@@ -376,7 +386,19 @@ export const updateChallengeProgressByType = async (
           challengeIds: currentChallenges.map(c => c.challengeId),
           matchAttempts: availableTypes.map(a => ({
             challengeId: a.challengeId,
-            matches: dailyChallengeStoredTypeMatchesEvent(String(a.finalType), String(challengeType)),
+            matches: dailyChallengeMatchesGameplayEvent(
+              {
+                storedType: a.storedType != null ? String(a.storedType) : undefined,
+                detailsType: a.detailsType != null ? String(a.detailsType) : undefined,
+                title: challengeDetails[a.challengeId]?.title != null
+                  ? String(challengeDetails[a.challengeId].title)
+                  : undefined,
+                description: challengeDetails[a.challengeId]?.description != null
+                  ? String(challengeDetails[a.challengeId].description)
+                  : undefined,
+              },
+              String(challengeType)
+            ),
             reason: a.completed ? 'already completed' : 'type mismatch',
           })),
         });

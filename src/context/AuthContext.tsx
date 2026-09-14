@@ -9,7 +9,6 @@ import {
   updateProfile,
   GoogleAuthProvider,
   signInWithPopup,
-  sendPasswordResetEmail,
   updatePassword,
   updateEmail,
   deleteUser,
@@ -510,7 +509,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const resetPassword = useCallback(async (email: string) => {
-    await sendPasswordResetEmail(auth, email.trim().toLowerCase());
+    const { sendAppPasswordResetEmail } = await import('../utils/adminAuthActions');
+    await sendAppPasswordResetEmail(email);
   }, []);
 
   const logout = useCallback(async () => {

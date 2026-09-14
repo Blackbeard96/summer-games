@@ -581,7 +581,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               updatedVault.shieldStrength !== existingVault.shieldStrength) {
             console.log('BattleContext: Syncing vault PP from', vaultCurrentPP, 'to', finalPP);
             console.log(`BattleContext: Updating vault health to ${correctVaultHealth}/${updatedVault.maxVaultHealth}`);
-            const updatePayload: any = { 
+            const updatePayload: { [key: string]: any } = { 
               currentPP: finalPP,
               vaultHealth: correctVaultHealth,
               movesRemaining: updatedVault.movesRemaining,
@@ -589,8 +589,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               generatorPendingPP: updatedVault.generatorPendingPP,
               generatorLastReset: updatedVault.generatorLastReset,
               shieldStrength: updatedVault.shieldStrength,
-              vaultHealthCooldown: updatedVault.vaultHealthCooldown // Persist cooldown if active
             };
+            // Persist cooldown only when set; clear with deleteField (Firestore rejects undefined)
+            if (updatedVault.vaultHealthCooldown) {
+              updatePayload.vaultHealthCooldown = updatedVault.vaultHealthCooldown;
+            } else if (existingVault.vaultHealthCooldown) {
+              updatePayload.vaultHealthCooldown = deleteField();
+            }
             
             // Remove healthRestoredAt timestamp after 5 seconds (cleanup)
             if (wasRecentlyRestored) {
@@ -4353,11 +4358,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Check and reset vault health cooldown if expired
       targetVaultData = checkAndResetVaultHealthCooldown(targetVaultData);
       
-      // If vault health was reset, update Firestore
+      // If vault health was reset, clear expired cooldown in Firestore (deleteField — never undefined)
       if (targetVaultData.vaultHealthCooldown === undefined && targetVaultDoc.data().vaultHealthCooldown) {
         await updateDoc(targetVaultRef, {
           vaultHealth: targetVaultData.vaultHealth,
-          vaultHealthCooldown: undefined
+          vaultHealthCooldown: deleteField()
         });
       }
       

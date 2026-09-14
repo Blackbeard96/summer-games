@@ -72,6 +72,21 @@ export const isUserAdmin = async (userId: string, userEmail?: string | null): Pr
     if (hasAdminRole) {
       return true;
     }
+
+    // Also check users/{uid}.role (AuthContext source of truth for many accounts)
+    try {
+      const userSnap = await getDoc(doc(db, 'users', userId));
+      if (userSnap.exists()) {
+        const data = userSnap.data() as { role?: string; roles?: string[]; email?: string };
+        if (data.role === 'admin') return true;
+        if (Array.isArray(data.roles) && data.roles.includes('admin')) return true;
+        if (!userEmail && typeof data.email === 'string') {
+          userEmail = data.email;
+        }
+      }
+    } catch {
+      /* ignore users doc lookup failures */
+    }
     
     // Fallback: Check specific admin email - Only Yondaime has access
     if (userEmail) {

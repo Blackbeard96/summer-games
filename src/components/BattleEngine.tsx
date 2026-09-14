@@ -987,6 +987,21 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   const cpuStatsAppliedRef = useRef<Set<string>>(new Set());
   // Ref to track when we're syncing from props (to prevent notifying parent)
   const isSyncingFromPropsRef = useRef(false);
+  // Deduped daily-challenge skill credit (animation path + turn-order must not double-count).
+  const skillUseDailyDedupeRef = useRef<{ key: string; at: number }>({ key: '', at: 0 });
+  const creditDailyChallengeForLocalSkillUse = (move: Move) => {
+    if (!currentUser?.uid || isInSession) return;
+    const resolvedName = getMoveNameSync(move.name) || move.name;
+    const key = `${currentUser.uid}:${String(move.id || '')}:${resolvedName}`;
+    const now = Date.now();
+    if (skillUseDailyDedupeRef.current.key === key && now - skillUseDailyDedupeRef.current.at < 8000) {
+      return;
+    }
+    skillUseDailyDedupeRef.current = { key, at: now };
+    trackDailyChallengeForSkillUse(currentUser.uid, { ...move, name: resolvedName }).catch((err) =>
+      console.error('Error updating daily challenge progress for skill use:', err)
+    );
+  };
   // Refs for latest allies/opponents so timeouts can read current state (e.g. summon execution)
   const alliesRef = useRef<Opponent[]>(allies);
   const opponentsRef = useRef<Opponent[]>(opponents);
@@ -4242,12 +4257,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         console.log(`🎮 Executing player move for ${playerName} (${participant.id}): ${playerMove.name} on target ${targetId}`);
 
         // Daily challenges: credit Manifest / Elemental once when this client's skill resolves in turn order
-        // (mission / Island Raid skip animation-path tracking to avoid double-counting).
+        // (deduped with animation-path tracking).
         if (isCurrentPlayer && currentUser?.uid) {
-          const resolvedName = getMoveNameSync(playerMove.name) || playerMove.name;
-          trackDailyChallengeForSkillUse(currentUser.uid, { ...playerMove, name: resolvedName }).catch((err) =>
-            console.error('Error updating daily challenge progress for turn-order skill use:', err)
-          );
+          creditDailyChallengeForLocalSkillUse(playerMove);
         }
         
         // Calculate damage using proper damage calculation system
@@ -5573,18 +5585,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const moveName = getMoveNameSync(move.name) || move.name;
     console.log(`[BattleEngine] Tracking move usage - Original: "${originalMoveName}", Resolved: "${moveName}"`);
     
-    // Live Events: credited in applyInSessionMove after Firestore accepts the move.
-    // When turn-order execution will resolve this client's skill (mission / Island Raid / true MP),
-    // credit there instead so animation + turn-order do not double-count the same use.
-    const humanPlayersForDaily = countHumanAlliesForTurnRules(allies, currentUser?.uid);
-    const isSinglePlayerWithAIForDaily =
-      isMultiplayer && humanPlayersForDaily === 1 && allies.length > 1;
-    const turnOrderWillResolvePlayerMove =
-      isMultiplayer && !isInSession && !isSinglePlayerWithAIForDaily;
-    if (currentUser && !isInSession && !turnOrderWillResolvePlayerMove) {
-      trackDailyChallengeForSkillUse(currentUser.uid, { ...move, name: moveName }).catch((err) =>
-        console.error('Error updating daily challenge progress for skill use:', err)
-      );
+    // Always attempt daily credit on the local execute path; turn-order uses the same dedupe key.
+    if (currentUser && !isInSession) {
+      creditDailyChallengeForLocalSkillUse(move);
     }
     
     if (currentUser?.uid && !isConstructSkill) {

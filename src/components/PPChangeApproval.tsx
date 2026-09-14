@@ -369,15 +369,16 @@ const PPChangeApproval: React.FC = () => {
         <h1 style={{ 
           fontSize: '2rem', 
           fontWeight: 'bold', 
-          color: '#1f2937',
+          color: 'var(--mst-gold-bright)',
           margin: 0,
-          marginBottom: '0.5rem'
+          marginBottom: '0.5rem',
+          fontFamily: 'var(--mst-font-display)',
         }}>
           📋 PP Change Approval
         </h1>
         <p style={{ 
           fontSize: '1rem', 
-          color: '#6b7280',
+          color: 'var(--mst-text-secondary)',
           margin: 0
         }}>
           Review and approve Power Point changes submitted by scorekeepers.

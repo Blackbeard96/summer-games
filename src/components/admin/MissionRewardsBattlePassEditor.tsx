@@ -166,8 +166,8 @@ const MissionRewardsBattlePassEditor: React.FC<MissionRewardsBattlePassEditorPro
         border: '1px solid #e5e7eb',
       }}
     >
-      <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem', fontWeight: 'bold' }}>Completion rewards</h3>
-      <p style={{ margin: '0 0 1rem 0', fontSize: '0.8rem', color: '#6b7280', lineHeight: 1.45 }}>
+      <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem', fontWeight: 'bold', color: '#111827' }}>Completion rewards</h3>
+      <p style={{ margin: '0 0 1rem 0', fontSize: '0.8rem', color: '#111827', lineHeight: 1.45 }}>
         Same model as the Battle Pass admin: add fixed rewards or a <strong>choice group</strong> so the player picks
         one or more options after finishing the mission. Types include XP, PP, Truth Metal, artifacts, items, skill/move
         IDs, and ability unlock keys.
@@ -181,6 +181,7 @@ const MissionRewardsBattlePassEditor: React.FC<MissionRewardsBattlePassEditorPro
             borderRadius: 6,
             border: '1px solid #6366f1',
             background: '#eef2ff',
+            color: '#000000',
             cursor: 'pointer',
             fontWeight: 600,
             fontSize: '0.875rem',
@@ -196,6 +197,7 @@ const MissionRewardsBattlePassEditor: React.FC<MissionRewardsBattlePassEditorPro
             borderRadius: 6,
             border: '1px solid #7c3aed',
             background: '#f5f3ff',
+            color: '#000000',
             cursor: 'pointer',
             fontWeight: 600,
             fontSize: '0.875rem',
@@ -206,7 +208,7 @@ const MissionRewardsBattlePassEditor: React.FC<MissionRewardsBattlePassEditorPro
       </div>
 
       {entries.length === 0 ? (
-        <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
+        <div style={{ fontSize: '0.85rem', color: '#111827' }}>
           No rewards yet — add fixed rewards and/or a choice group (player picks N of your options).
         </div>
       ) : (

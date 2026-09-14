@@ -5,6 +5,7 @@ import {
   grantMissionSkillsMasteryPp,
   markSkillsMasteryStepVisited,
 } from '../../utils/missionSkillsMasteryGrant';
+import { MissionRichText } from '../../utils/missionRichText';
 
 interface Props {
   step: Extract<MissionSequenceStep, { type: 'SKILLS_MASTERY' }>;
@@ -97,80 +98,54 @@ const MissionSkillsMasteryStepPanel: React.FC<Props> = ({
 
   return (
     <div>
-      {step.title ? <h2 style={{ marginBottom: '1rem' }}>{step.title}</h2> : null}
+      {step.title ? <h2 className="mst-mission-step-heading">{step.title}</h2> : null}
 
       {captions.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', marginBottom: '1.25rem' }}>
           {captions.map((text, i) => (
-            <p
-              key={`${i}-${text.slice(0, 24)}`}
-              style={{
-                margin: 0,
-                fontSize: '1.05rem',
-                lineHeight: 1.6,
-                whiteSpace: 'pre-wrap',
-                color: '#374151',
-                padding: '0.85rem 1rem',
-                background: i % 2 === 0 ? '#eff6ff' : '#f8fafc',
-                border: '1px solid #bfdbfe',
-                borderRadius: '0.65rem',
-              }}
-            >
-              {text}
-            </p>
+            <div key={`${i}-${text.slice(0, 24)}`} className="mst-mission-block mst-mission-block--info">
+              <MissionRichText
+                text={text}
+                as="p"
+                className="mst-mission-body-text"
+                style={{ margin: 0 }}
+                linkColor="#f0e6c8"
+              />
+            </div>
           ))}
         </div>
       ) : null}
 
       {grantPP > 0 ? (
-        <div
-          style={{
-            marginBottom: '1.25rem',
-            padding: '0.85rem 1rem',
-            borderRadius: '0.65rem',
-            background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)',
-            border: '1px solid #6ee7b7',
-            color: '#065f46',
-            fontWeight: 700,
-          }}
-        >
+        <div className="mst-mission-block mst-mission-block--success" style={{ fontWeight: 700 }}>
           This stop grants {grantPP.toLocaleString()} PP when you open Skills &amp; Mastery
           {stepAlreadyComplete ? ' (already claimed if you visited before).' : '.'}
         </div>
       ) : null}
 
       {stepAlreadyComplete ? (
-        <p style={{ color: '#059669', fontWeight: 600, marginBottom: '1rem' }}>
+        <p className="mst-mission-body-text" style={{ fontWeight: 600, marginBottom: '1rem', color: '#6ee7a8' }}>
           You already visited Skills &amp; Mastery for this step. You can open it again anytime.
         </p>
       ) : null}
 
       {statusMsg ? (
-        <p style={{ color: '#1e40af', fontWeight: 600, marginBottom: '0.75rem' }}>{statusMsg}</p>
+        <p className="mst-mission-body-text" style={{ fontWeight: 600, marginBottom: '0.75rem', color: '#93c5fd' }}>
+          {statusMsg}
+        </p>
       ) : null}
 
       <button
         type="button"
+        className="mst-mission-btn mst-mission-btn--primary"
         onClick={() => void openSkillsMastery()}
         disabled={busy}
-        style={{
-          padding: '0.9rem 1.4rem',
-          background: busy
-            ? '#9ca3af'
-            : 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 55%, #0f766e 100%)',
-          color: 'white',
-          border: 'none',
-          borderRadius: '0.5rem',
-          fontWeight: 800,
-          fontSize: '1rem',
-          cursor: busy ? 'not-allowed' : 'pointer',
-        }}
       >
         {busy ? 'Opening…' : 'Open Skills & Mastery'}
       </button>
 
       {step.requireVisit !== false && !stepAlreadyComplete ? (
-        <p style={{ margin: '0.75rem 0 0', fontSize: '0.875rem', color: '#92400e' }}>
+        <p style={{ margin: '0.75rem 0 0', fontSize: '0.875rem', color: 'var(--mst-gold-bright)' }}>
           Open Skills &amp; Mastery to continue the mission.
         </p>
       ) : null}

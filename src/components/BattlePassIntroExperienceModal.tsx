@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { BattlePassIntroStep } from '../types/missions';
+import { MissionRichText } from '../utils/missionRichText';
 
 interface Props {
   open: boolean;
@@ -139,7 +140,12 @@ const BattlePassIntroExperienceModal: React.FC<Props> = ({
                 }}
               />
             ) : null}
-            <p style={{ fontSize: '1rem', lineHeight: 1.6, whiteSpace: 'pre-wrap', margin: 0 }}>{currentStep.bodyText}</p>
+            <MissionRichText
+              text={currentStep.bodyText}
+              as="p"
+              style={{ fontSize: '1rem', lineHeight: 1.6, margin: 0 }}
+              linkColor="#2563eb"
+            />
           </div>
         ) : null}
 
@@ -164,7 +170,12 @@ const BattlePassIntroExperienceModal: React.FC<Props> = ({
               />
             ) : null}
             {currentStep.bodyText ? (
-              <p style={{ fontSize: '1rem', lineHeight: 1.6, whiteSpace: 'pre-wrap', margin: 0 }}>{currentStep.bodyText}</p>
+              <MissionRichText
+                text={currentStep.bodyText}
+                as="p"
+                style={{ fontSize: '1rem', lineHeight: 1.6, margin: 0 }}
+                linkColor="#2563eb"
+              />
             ) : null}
           </div>
         ) : null}

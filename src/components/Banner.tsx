@@ -152,9 +152,10 @@ const Banner: React.FC = () => {
 
   return (
     <div
+      className="mst-site-banner"
       style={{
         backgroundColor: 'var(--mst-bg-secondary)',
-        color: 'var(--mst-text-primary)',
+        color: '#fef9e7',
         padding: '0.75rem 0',
         overflow: 'hidden',
         position: 'relative',
@@ -179,7 +180,8 @@ const Banner: React.FC = () => {
             display: 'inline-block',
             paddingRight: '4rem',
             fontSize: '0.875rem',
-            fontWeight: '500',
+            fontWeight: 600,
+            color: '#fef9e7',
             paddingLeft: '100%'
           }}
         >
