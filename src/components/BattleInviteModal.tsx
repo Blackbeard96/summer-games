@@ -3,7 +3,12 @@ import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { collection, doc, addDoc, updateDoc, query, where, getDocs, getDoc, Timestamp, serverTimestamp } from 'firebase/firestore';
 import { getLevelFromXP } from '../utils/leveling';
-import { isUidInSquad, squadMemberUid } from '../utils/squadMemberUtils';
+import {
+  buildPlayersFromStudents,
+  isUidInSquad,
+  loadUsersDataMapSafe,
+  squadMemberUid,
+} from '../utils/squadMemberUtils';
 
 interface Player {
   uid: string;
@@ -100,63 +105,25 @@ const BattleInviteModal: React.FC<BattleInviteModalProps> = ({
     const fetchData = async () => {
       setLoading(true);
       try {
-        // Fetch all users
-        const usersSnapshot = await getDocs(collection(db, 'users'));
-        const studentsSnapshot = await getDocs(collection(db, 'students'));
-        
-        // Create a map of student data by UID
-        const studentDataMap = new Map();
-        studentsSnapshot.docs.forEach(doc => {
-          studentDataMap.set(doc.id, doc.data());
-        });
-        
-        const allUsers: Player[] = usersSnapshot.docs.map(doc => {
-          const data = doc.data();
-          const studentData = studentDataMap.get(doc.id);
-          
-          // Get manifest from multiple sources
-          let manifest = 'Unknown';
-          if (data.manifest) {
-            if (typeof data.manifest === 'string') {
-              manifest = data.manifest;
-            } else if (typeof data.manifest === 'object' && data.manifest.manifestId) {
-              manifest = data.manifest.manifestId;
-            } else if (typeof data.manifest === 'object' && data.manifest.manifestationType) {
-              manifest = data.manifest.manifestationType;
-            }
-          } else if (data.manifestationType) {
-            manifest = data.manifestationType;
-          } else if (studentData?.manifest) {
-            if (typeof studentData.manifest === 'string') {
-              manifest = studentData.manifest;
-            } else if (typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
-              manifest = studentData.manifest.manifestId;
-            }
-          } else if (studentData?.manifestationType) {
-            manifest = studentData.manifestationType;
+        // List students (readable by all authenticated users). Listing `users` fails for non-admins.
+        const [studentsSnapshot, userDataMap, squadsSnapshot] = await Promise.all([
+          getDocs(collection(db, 'students')),
+          loadUsersDataMapSafe(currentUser.uid),
+          getDocs(collection(db, 'squads')),
+        ]);
+
+        const allUsers: Player[] = buildPlayersFromStudents(studentsSnapshot.docs, userDataMap).map(
+          (p) => {
+            const xp = p.xp || 0;
+            return {
+              ...p,
+              xp,
+              level: getLevelFromXP(xp),
+            };
           }
-          
-          // Get XP from both sources and use the higher value
-          const userXP = data.xp || 0;
-          const studentXP = studentData?.xp || 0;
-          const xp = Math.max(userXP, studentXP);
-          
-          // Calculate level from XP to ensure accuracy
-          const level = getLevelFromXP(xp);
-          
-          return {
-            uid: doc.id,
-            displayName: data.displayName || studentData?.displayName || data.email?.split('@')[0] || 'Unknown',
-            email: data.email || '',
-            photoURL: data.photoURL || studentData?.photoURL,
-            level: level,
-            xp: xp,
-            manifest: manifest
-          };
-        });
+        );
 
         // Find current user's squad members
-        const squadsSnapshot = await getDocs(collection(db, 'squads'));
         let userSquadMembers: Player[] = [];
         
         squadsSnapshot.docs.forEach((d) => {

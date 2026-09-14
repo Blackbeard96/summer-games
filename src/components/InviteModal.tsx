@@ -2,6 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { collection, doc, addDoc, updateDoc, query, where, getDocs, Timestamp, serverTimestamp } from 'firebase/firestore';
+import {
+  buildPlayersFromStudents,
+  collectUidsInAnySquad,
+  isUidInSquad,
+  loadUsersDataMapSafe,
+} from '../utils/squadMemberUtils';
 
 interface SquadMember {
   uid: string;
@@ -47,6 +53,7 @@ const InviteModal: React.FC<InviteModalProps> = ({
   const [availablePlayers, setAvailablePlayers] = useState<SquadMember[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [sendingInvites, setSendingInvites] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -56,75 +63,26 @@ const InviteModal: React.FC<InviteModalProps> = ({
 
     const fetchData = async () => {
       setLoading(true);
+      setLoadError(null);
       try {
-        // Fetch all users
-        const usersSnapshot = await getDocs(collection(db, 'users'));
-        const studentsSnapshot = await getDocs(collection(db, 'students'));
-        
-        // Create a map of student data by UID
-        const studentDataMap = new Map();
-        studentsSnapshot.docs.forEach(doc => {
-          studentDataMap.set(doc.id, doc.data());
-        });
-        
-        const allUsers: SquadMember[] = usersSnapshot.docs.map(doc => {
-          const data = doc.data();
-          const studentData = studentDataMap.get(doc.id);
-          
-          // Get manifest from multiple sources
-          let manifest = 'Unknown';
-          if (data.manifest) {
-            if (typeof data.manifest === 'string') {
-              manifest = data.manifest;
-            } else if (typeof data.manifest === 'object' && data.manifest.manifestId) {
-              manifest = data.manifest.manifestId;
-            } else if (typeof data.manifest === 'object' && data.manifest.manifestationType) {
-              manifest = data.manifest.manifestationType;
-            }
-          } else if (data.manifestationType) {
-            manifest = data.manifestationType;
-          } else if (studentData?.manifest) {
-            if (typeof studentData.manifest === 'string') {
-              manifest = studentData.manifest;
-            } else if (typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
-              manifest = studentData.manifest.manifestId;
-            }
-          } else if (studentData?.manifestationType) {
-            manifest = studentData.manifestationType;
-          }
-          
-          return {
-            uid: doc.id,
-            displayName: data.displayName || studentData?.displayName || data.email?.split('@')[0] || 'Unknown',
-            email: data.email || '',
-            photoURL: data.photoURL || studentData?.photoURL,
-            level: data.level || studentData?.level || 1,
-            xp: data.xp || studentData?.xp || 0,
-            manifest: manifest,
-            role: data.role || 'Member'
-          };
-        });
+        // List students (readable by all authenticated users). Listing `users` fails for non-admins.
+        const [studentsSnapshot, userDataMap, squadsSnapshot] = await Promise.all([
+          getDocs(collection(db, 'students')),
+          loadUsersDataMapSafe(currentUser.uid),
+          getDocs(collection(db, 'squads')),
+        ]);
 
-        // Fetch all squads to find players who are already in squads
-        const squadsSnapshot = await getDocs(collection(db, 'squads'));
-        const playersInSquads = new Set<string>();
-        squadsSnapshot.docs.forEach(doc => {
-          const squadData = doc.data();
-          if (squadData.members && Array.isArray(squadData.members)) {
-            squadData.members.forEach((member: any) => {
-              if (member.uid) {
-                playersInSquads.add(member.uid);
-              }
-            });
-          }
-        });
+        const allUsers = buildPlayersFromStudents(studentsSnapshot.docs, userDataMap);
+        const playersInSquads = collectUidsInAnySquad(squadsSnapshot.docs);
 
-        // Filter out current squad members, the current user, and players already in other squads
-        const currentMemberIds = currentMembers.map(member => member.uid);
-        const available = allUsers.filter(user => 
-          !currentMemberIds.includes(user.uid) && 
-          user.uid !== currentUser.uid &&
-          !playersInSquads.has(user.uid)
+        const currentMemberIds = currentMembers
+          .map((member) => member.uid)
+          .filter((uid): uid is string => Boolean(uid));
+        const available = allUsers.filter(
+          (user) =>
+            !currentMemberIds.includes(user.uid) &&
+            user.uid !== currentUser.uid &&
+            !playersInSquads.has(user.uid)
         );
 
         setAvailablePlayers(available);
@@ -135,10 +93,10 @@ const InviteModal: React.FC<InviteModalProps> = ({
           where('squadId', '==', squadId)
         );
         const invitesSnapshot = await getDocs(invitesQuery);
-        const invitesData: Invitation[] = invitesSnapshot.docs.map(doc => {
-          const data = doc.data();
+        const invitesData: Invitation[] = invitesSnapshot.docs.map(docSnap => {
+          const data = docSnap.data();
           return {
-            id: doc.id,
+            id: docSnap.id,
             ...data,
             createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : data.createdAt
           } as Invitation;
@@ -147,6 +105,8 @@ const InviteModal: React.FC<InviteModalProps> = ({
 
       } catch (error) {
         console.error('Error fetching data:', error);
+        setAvailablePlayers([]);
+        setLoadError('Could not load players. Please close and try again.');
       } finally {
         setLoading(false);
       }
@@ -164,10 +124,9 @@ const InviteModal: React.FC<InviteModalProps> = ({
     // Check if player is already in a squad
     try {
       const squadsSnapshot = await getDocs(collection(db, 'squads'));
-      const playerInSquad = squadsSnapshot.docs.some(doc => {
-        const squadData = doc.data();
-        return squadData.members?.some((member: any) => member.uid === player.uid);
-      });
+      const playerInSquad = squadsSnapshot.docs.some((docSnap) =>
+        isUidInSquad(docSnap.data(), player.uid)
+      );
 
       if (playerInSquad) {
         alert(`${player.displayName} is already in a squad.`);
@@ -462,9 +421,11 @@ const InviteModal: React.FC<InviteModalProps> = ({
                     padding: '2rem',
                     color: '#6b7280'
                   }}>
-                    {searchQuery.trim() 
-                      ? `No players found matching "${searchQuery}"`
-                      : 'No available players found'}
+                    {loadError
+                      ? loadError
+                      : searchQuery.trim()
+                        ? `No players found matching "${searchQuery}"`
+                        : 'No available players found'}
                   </div>
                 )}
                     </>

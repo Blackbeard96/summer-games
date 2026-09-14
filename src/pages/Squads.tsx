@@ -10,7 +10,7 @@ import InvitationManager from '../components/InvitationManager';
 import { MANIFESTS } from '../types/manifest';
 import { normalizePlayerData, fetchAndNormalizePlayerData, NormalizedPlayerData } from '../utils/playerData';
 import { getUserSquadAbbreviation } from '../utils/squadUtils';
-import { isUidInSquad, squadMemberUid } from '../utils/squadMemberUtils';
+import { isUidInSquad, squadMemberUid, loadUsersDataMapSafe } from '../utils/squadMemberUtils';
 import { clearPrimarySquadIdOnUser, syncPrimarySquadIdOnUser } from '../utils/squadPrimarySquadProfile';
 import AlliesManager from '../components/AlliesManager';
 import '../styles/squadStream.css';
@@ -77,29 +77,7 @@ function memberUidsFromMemberList(members: SquadMember[]): string[] {
  * `getDocs(collection('users'))` fails for normal players: rules only allow reading your own `users/{uid}`.
  * Firestore rejects the whole query if it could return unreadable docs. Load a map safely + own doc fallback.
  */
-async function loadUsersDataMapForSquads(
-  currentUserUid: string | undefined
-): Promise<Map<string, Record<string, unknown>>> {
-  const map = new Map<string, Record<string, unknown>>();
-  try {
-    const snap = await getDocs(collection(db, 'users'));
-    snap.forEach((d) => map.set(d.id, d.data() as Record<string, unknown>));
-  } catch (e) {
-    console.warn(
-      'Squads: cannot list users collection (expected for non-admin). Enrichment uses students + your users doc only.',
-      e
-    );
-  }
-  if (currentUserUid && !map.has(currentUserUid)) {
-    try {
-      const mine = await getDoc(doc(db, 'users', currentUserUid));
-      if (mine.exists()) map.set(currentUserUid, mine.data() as Record<string, unknown>);
-    } catch {
-      /* ignore */
-    }
-  }
-  return map;
-}
+const loadUsersDataMapForSquads = loadUsersDataMapSafe;
 
 const Squads: React.FC = () => {
   const { currentUser } = useAuth();

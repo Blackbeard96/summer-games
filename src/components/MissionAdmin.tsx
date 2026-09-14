@@ -46,6 +46,7 @@ import {
   isHardcodedJourneyMissionId,
   challengeIdFromJourneyMissionId,
   assignedClassIdsForMission,
+  buildDuplicatedMissionDoc,
   type MissionAdminFilter,
 } from '../utils/missionAdminHelpers';
 import SkillPicker from './skills/SkillPicker';
@@ -365,6 +366,45 @@ const MissionAdmin: React.FC = () => {
       alert('Failed to delete mission');
     } finally {
       setIsDeletingMission(false);
+    }
+  };
+
+  const handleDuplicateMission = async (mission: MissionTemplate, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isHardcodedJourneyMissionId(mission.id)) {
+      alert('Core Journey missions are defined in chapter code and cannot be duplicated here.');
+      return;
+    }
+    if (
+      !window.confirm(
+        `Duplicate "${mission.title}" as an unpublished draft?\n\nSequence, rewards, and images are copied. Player progress is not.`
+      )
+    ) {
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const sourceSnap = await getDocFn(doc(db, 'missions', mission.id));
+      if (!sourceSnap.exists()) {
+        alert('Mission not found.');
+        return;
+      }
+
+      const { title, data } = buildDuplicatedMissionDoc(sourceSnap.data() as Record<string, unknown>, {
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      const newRef = doc(collection(db, 'missions'));
+      const sanitized = stripUndefinedDeep(data) as Record<string, unknown>;
+      await setDoc(newRef, sanitized);
+      await loadMissions();
+      alert(`Duplicated as "${title}". It is unpublished — edit and publish when ready.`);
+    } catch (error) {
+      console.error('Error duplicating mission:', error);
+      alert('Failed to duplicate mission');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -703,6 +743,16 @@ const MissionAdmin: React.FC = () => {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
                 {!isCoreJourney && (
                   <button type="button" onClick={() => setSelectedMission(mission)} style={adminChipBtn}>Edit</button>
+                )}
+                {!isCoreJourney && (
+                  <button
+                    type="button"
+                    onClick={(e) => handleDuplicateMission(mission, e)}
+                    disabled={saving}
+                    style={adminChipBtn}
+                  >
+                    Duplicate
+                  </button>
                 )}
                 <button type="button" onClick={() => setImageEditMission(mission)} style={adminChipBtn}>
                   {mission.previewImageUrl ? 'Edit Image' : 'Add Image'}

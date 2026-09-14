@@ -225,3 +225,36 @@ export function categoryBadgeForFilter(category: MissionCategory): string {
   if (category === 'SKILL') return 'Skill Mission';
   return category;
 }
+
+/**
+ * Build a Firestore payload for duplicating a mission template.
+ * Caller supplies fresh `createdAt` / `updatedAt` (usually serverTimestamp()).
+ * Does not copy player progress (that lives in `playerMissions` by mission id).
+ */
+export function buildDuplicatedMissionDoc(
+  source: Record<string, unknown>,
+  timestamps: { createdAt: unknown; updatedAt: unknown }
+): { title: string; data: Record<string, unknown> } {
+  const baseTitle =
+    typeof source.title === 'string' && source.title.trim()
+      ? source.title.trim()
+      : 'Untitled Mission';
+  const title = `${baseTitle} (Copy)`;
+
+  const data: Record<string, unknown> = { ...source };
+  delete data.id;
+  // Avoid hub order / journey-link collisions with the original
+  delete data.hubDisplayOrder;
+  delete data.playerJourneyLink;
+  delete data.isDraft;
+
+  data.title = title;
+  data.isPublished = false;
+  data.createdAt = timestamps.createdAt;
+  data.updatedAt = timestamps.updatedAt;
+  if (data.sequenceVersion != null) {
+    data.sequenceVersion = 1;
+  }
+
+  return { title, data };
+}
