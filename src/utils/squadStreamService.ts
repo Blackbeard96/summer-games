@@ -7,9 +7,11 @@ import {
   runTransaction,
   serverTimestamp,
   updateDoc,
-  arrayUnion
+  increment,
+  type Transaction
 } from 'firebase/firestore';
 import { syncPrimarySquadIdOnUser } from './squadPrimarySquadProfile';
+import { squadMemberUid } from './squadMemberUtils';
 
 /** User-facing message for Firestore failures (check-in, squad stream, etc.). */
 export function formatSquadFirestoreError(
@@ -49,7 +51,7 @@ export function getDateKey(): string {
 export function memberUidsFromSquadMembers(members: unknown): string[] {
   if (!Array.isArray(members)) return [];
   return members
-    .map((m: { uid?: string } | string) => (typeof m === 'string' ? m : m?.uid))
+    .map((m) => (typeof m === 'string' ? m : squadMemberUid(m)))
     .filter((u: unknown): u is string => typeof u === 'string' && u.length > 0);
 }
 
@@ -87,7 +89,7 @@ export async function sendChatMessage(
 ): Promise<void> {
   await ensureSquadHasMemberUids(squadId);
   const messagesRef = collection(db, 'squads', squadId, 'streamMessages');
-  
+
   await addDoc(messagesRef, {
     type: 'chat',
     text: text.trim(),
@@ -108,7 +110,7 @@ export async function createSystemMessage(
 ): Promise<void> {
   await ensureSquadHasMemberUids(squadId);
   const messagesRef = collection(db, 'squads', squadId, 'streamMessages');
-  
+
   await addDoc(messagesRef, {
     type: 'system',
     text,
@@ -117,30 +119,62 @@ export async function createSystemMessage(
   });
 }
 
+/** Apply PP to the caller's own users + students docs (wallet uses powerPoints). */
+function applySelfPpIncrements(
+  transaction: Transaction,
+  userId: string,
+  ppDelta: number,
+  userExists: boolean,
+  studentExists: boolean
+): void {
+  if (ppDelta <= 0) return;
+  if (userExists) {
+    transaction.update(doc(db, 'users', userId), {
+      powerPoints: increment(ppDelta),
+      // Legacy field some older clients read
+      pp: increment(ppDelta),
+    });
+  }
+  if (studentExists) {
+    transaction.update(doc(db, 'students', userId), {
+      powerPoints: increment(ppDelta),
+    });
+  }
+}
+
 /**
- * Check in to squad and award PP rewards
- * This uses a Firestore transaction to ensure atomicity and prevent double-check-ins
+ * Check in to squad and award PP to the checking-in player only.
+ *
+ * Previously this transaction also read/updated every teammate's `users/{uid}` doc.
+ * Non-admins cannot read other users docs, so check-in failed with permission-denied
+ * once the transaction touched teammates (and often failed more broadly in practice).
+ *
+ * Teammates already checked in receive catch-up PP via `claimSquadCheckInPpCatchUp`
+ * when their client sees the count increase.
  */
 export async function checkInToSquad(
   squadId: string,
   userId: string,
-  userName: string
+  _userName: string
 ): Promise<{ success: boolean; error?: string; count?: number; checkedInUserIds?: string[] }> {
   try {
     await ensureSquadHasMemberUids(squadId);
-    // Rules use `users/{auth}.primarySquadId` + squad `memberUids` to allow PP updates on teammates.
     await syncPrimarySquadIdOnUser(userId, squadId);
     const dateKey = getDateKey();
     const checkInRef = doc(db, 'squads', squadId, 'dailyCheckins', dateKey);
+    const userRef = doc(db, 'users', userId);
+    const studentRef = doc(db, 'students', userId);
 
     return await runTransaction(db, async (transaction) => {
-      // PHASE 1: ALL READS FIRST (Firestore requirement)
-      // Read check-in document
       const checkInDoc = await transaction.get(checkInRef);
-      const checkInData = checkInDoc.exists() ? checkInDoc.data() : null;
+      const userDoc = await transaction.get(userRef);
+      const studentDoc = await transaction.get(studentRef);
 
-      // Check if user already checked in
-      const checkedInUserIds = checkInData?.checkedInUserIds || [];
+      const checkInData = checkInDoc.exists() ? checkInDoc.data() : null;
+      const checkedInUserIds: string[] = Array.isArray(checkInData?.checkedInUserIds)
+        ? [...checkInData!.checkedInUserIds]
+        : [];
+
       if (checkedInUserIds.includes(userId)) {
         return {
           success: false,
@@ -148,74 +182,39 @@ export async function checkInToSquad(
         };
       }
 
-      // Add user to checked-in list
       const newCheckedInUserIds = [...checkedInUserIds, userId];
       const newCount = newCheckedInUserIds.length;
+      const awardedMilestones: { [key: string]: number } = {
+        ...(checkInData?.awardedMilestones || {})
+      };
+      const myMilestone = Number(awardedMilestones[userId]) || 0;
+      const ppDelta = Math.max(0, (newCount - myMilestone) * 50);
+      awardedMilestones[userId] = newCount;
 
-      // Award PP to all checked-in members (including the new one)
-      const awardedMilestones = checkInData?.awardedMilestones || {};
-      const updatedMilestones: { [key: string]: number } = { ...awardedMilestones };
-
-      // Read ALL user documents first (before any writes)
-      const userDocs: { [memberId: string]: { exists: boolean; data: any } } = {};
-      for (const memberId of newCheckedInUserIds) {
-        const memberUserRef = doc(db, 'users', memberId);
-        const memberUserDoc = await transaction.get(memberUserRef);
-        userDocs[memberId] = {
-          exists: memberUserDoc.exists(),
-          data: memberUserDoc.exists() ? memberUserDoc.data() : null
-        };
-      }
-
-      // PHASE 2: ALL WRITES AFTER READS
-      // Calculate PP deltas and prepare updates
-      const userUpdates: { [memberId: string]: number } = {};
-      for (const memberId of newCheckedInUserIds) {
-        const memberMilestone = awardedMilestones[memberId] || 0;
-        
-        // Calculate how much PP this member should have earned
-        // They should have: newCount * 50 PP total
-        // They already have: memberMilestone * 50 PP
-        // So award: (newCount - memberMilestone) * 50 PP
-        const ppDelta = (newCount - memberMilestone) * 50;
-
-        if (ppDelta > 0 && userDocs[memberId].exists) {
-          const currentPP = Number(userDocs[memberId].data?.pp) || 0;
-          userUpdates[memberId] = Math.floor(currentPP + ppDelta);
-        }
-
-        // Update milestone for this member
-        updatedMilestones[memberId] = newCount;
-      }
-
-      // Write all user PP updates
-      for (const [memberId, newPP] of Object.entries(userUpdates)) {
-        const memberUserRef = doc(db, 'users', memberId);
-        transaction.update(memberUserRef, {
-          pp: newPP
-        });
-      }
-
-      // Update or create check-in document
       if (checkInDoc.exists()) {
         transaction.update(checkInRef, {
-          checkedInUserIds: arrayUnion(userId),
-          awardedMilestones: updatedMilestones,
+          checkedInUserIds: newCheckedInUserIds,
+          awardedMilestones,
           updatedAt: serverTimestamp()
         });
       } else {
         transaction.set(checkInRef, {
           dateKey,
-          checkedInUserIds: [userId],
+          checkedInUserIds: newCheckedInUserIds,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
-          awardedMilestones: updatedMilestones
+          awardedMilestones
         });
       }
 
-      // Note: System message is created by the caller (DailyCheckInCard) after transaction completes
-      // This is because we can't write to a different collection in the same transaction
-      
+      applySelfPpIncrements(
+        transaction,
+        userId,
+        ppDelta,
+        userDoc.exists(),
+        studentDoc.exists()
+      );
+
       return {
         success: true,
         count: newCount,
@@ -232,6 +231,69 @@ export async function checkInToSquad(
 }
 
 /**
+ * When another member checks in, each already-checked-in player claims their own +50 catch-up.
+ * Only touches the caller's users/students docs + their milestone on the check-in doc.
+ */
+export async function claimSquadCheckInPpCatchUp(
+  squadId: string,
+  userId: string
+): Promise<{ claimed: boolean; ppDelta?: number; error?: string }> {
+  try {
+    const dateKey = getDateKey();
+    const checkInRef = doc(db, 'squads', squadId, 'dailyCheckins', dateKey);
+    const userRef = doc(db, 'users', userId);
+    const studentRef = doc(db, 'students', userId);
+
+    return await runTransaction(db, async (transaction) => {
+      const checkInDoc = await transaction.get(checkInRef);
+      if (!checkInDoc.exists()) {
+        return { claimed: false };
+      }
+      const checkInData = checkInDoc.data();
+      const checkedInUserIds: string[] = Array.isArray(checkInData?.checkedInUserIds)
+        ? checkInData.checkedInUserIds
+        : [];
+      if (!checkedInUserIds.includes(userId)) {
+        return { claimed: false };
+      }
+
+      const count = checkedInUserIds.length;
+      const awardedMilestones: { [key: string]: number } = {
+        ...(checkInData?.awardedMilestones || {})
+      };
+      const myMilestone = Number(awardedMilestones[userId]) || 0;
+      if (myMilestone >= count) {
+        return { claimed: false };
+      }
+
+      const ppDelta = (count - myMilestone) * 50;
+      awardedMilestones[userId] = count;
+
+      const userDoc = await transaction.get(userRef);
+      const studentDoc = await transaction.get(studentRef);
+
+      transaction.update(checkInRef, {
+        awardedMilestones,
+        updatedAt: serverTimestamp()
+      });
+
+      applySelfPpIncrements(
+        transaction,
+        userId,
+        ppDelta,
+        userDoc.exists(),
+        studentDoc.exists()
+      );
+
+      return { claimed: true, ppDelta };
+    });
+  } catch (error: unknown) {
+    console.error('Error claiming squad check-in PP catch-up:', error);
+    return { claimed: false, error: formatSquadFirestoreError(error, 'checkin') };
+  }
+}
+
+/**
  * Award PP to a user (helper function)
  * Note: This should ideally be done in a Cloud Function for security,
  * but for now we'll use transactions to ensure atomicity
@@ -241,15 +303,21 @@ export async function awardPPToUser(
   amount: number
 ): Promise<void> {
   const userRef = doc(db, 'users', userId);
-  
+  const studentRef = doc(db, 'students', userId);
+
   await runTransaction(db, async (transaction) => {
     const userDoc = await transaction.get(userRef);
+    const studentDoc = await transaction.get(studentRef);
     if (userDoc.exists()) {
-      const currentPP = userDoc.data().pp || 0;
       transaction.update(userRef, {
-        pp: currentPP + amount
+        powerPoints: increment(amount),
+        pp: increment(amount),
+      });
+    }
+    if (studentDoc.exists()) {
+      transaction.update(studentRef, {
+        powerPoints: increment(amount),
       });
     }
   });
 }
-

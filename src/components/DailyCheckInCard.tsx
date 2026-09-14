@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { doc, getDoc, onSnapshot, serverTimestamp, runTransaction } from 'firebase/firestore';
-import { checkInToSquad, formatSquadFirestoreError } from '../utils/squadStreamService';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { checkInToSquad, formatSquadFirestoreError, claimSquadCheckInPpCatchUp } from '../utils/squadStreamService';
 
 interface DailyCheckInCardProps {
   squadId: string;
@@ -38,6 +38,7 @@ const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({ squadId, currentUse
 
   const dateKey = getDateKey();
   const checkInRef = doc(db, 'squads', squadId, 'dailyCheckins', dateKey);
+  const claimingCatchUpRef = React.useRef(false);
 
   // Subscribe to today's check-in data
   useEffect(() => {
@@ -58,12 +59,27 @@ const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({ squadId, currentUse
       );
     };
 
+    const applySnapshot = (data: CheckInData | null) => {
+      if (data) {
+        setCheckInData(data);
+      } else {
+        setCheckInData({
+          dateKey,
+          checkedInUserIds: [],
+          updatedAt: null,
+          createdAt: null,
+          awardedMilestones: {}
+        });
+      }
+      setLoading(false);
+    };
+
     const unsubscribe = onSnapshot(
       checkInRef,
       (snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data() as CheckInData;
-          setCheckInData({
+          applySnapshot({
             dateKey: data.dateKey || dateKey,
             checkedInUserIds: data.checkedInUserIds || [],
             updatedAt: data.updatedAt,
@@ -71,25 +87,18 @@ const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({ squadId, currentUse
             awardedMilestones: data.awardedMilestones || {}
           });
         } else {
-          setCheckInData({
-            dateKey,
-            checkedInUserIds: [],
-            updatedAt: null,
-            createdAt: null,
-            awardedMilestones: {}
-          });
+          applySnapshot(null);
         }
-        setLoading(false);
       },
       (error) => {
         // Suppress Firestore internal assertion errors (non-fatal)
         if (isFirestoreInternalError(error)) {
           console.warn('Firestore internal error (non-fatal, suppressing):', error);
           // Try to fetch data once instead of using real-time listener
-          getDoc(checkInRef).then((doc) => {
-            if (doc.exists()) {
-              const data = doc.data() as CheckInData;
-              setCheckInData({
+          getDoc(checkInRef).then((docSnap) => {
+            if (docSnap.exists()) {
+              const data = docSnap.data() as CheckInData;
+              applySnapshot({
                 dateKey: data.dateKey || dateKey,
                 checkedInUserIds: data.checkedInUserIds || [],
                 updatedAt: data.updatedAt,
@@ -97,15 +106,8 @@ const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({ squadId, currentUse
                 awardedMilestones: data.awardedMilestones || {}
               });
             } else {
-              setCheckInData({
-                dateKey,
-                checkedInUserIds: [],
-                updatedAt: null,
-                createdAt: null,
-                awardedMilestones: {}
-              });
+              applySnapshot(null);
             }
-            setLoading(false);
           }).catch((fetchError) => {
             console.error('Error fetching check-in data:', fetchError);
             setError('Failed to load check-in data');
@@ -124,6 +126,31 @@ const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({ squadId, currentUse
       unsubscribe();
     };
   }, [squadId, dateKey]);
+
+  // When teammates check in, claim your own catch-up PP (self-only writes — no teammate users reads).
+  useEffect(() => {
+    if (!currentUserId || !checkInData) return;
+    const ids = checkInData.checkedInUserIds || [];
+    if (!ids.includes(currentUserId)) return;
+    const count = ids.length;
+    const myMilestone = Number(checkInData.awardedMilestones?.[currentUserId]) || 0;
+    if (myMilestone >= count) return;
+    if (claimingCatchUpRef.current) return;
+
+    claimingCatchUpRef.current = true;
+    claimSquadCheckInPpCatchUp(squadId, currentUserId)
+      .then((result) => {
+        if (result.claimed && result.ppDelta) {
+          console.log(`[DailyCheckInCard] Claimed +${result.ppDelta} PP check-in catch-up`);
+        }
+      })
+      .catch((err) => {
+        console.warn('[DailyCheckInCard] Catch-up claim failed:', err);
+      })
+      .finally(() => {
+        claimingCatchUpRef.current = false;
+      });
+  }, [squadId, currentUserId, checkInData]);
 
   const handleCheckIn = async () => {
     if (!currentUser) {
