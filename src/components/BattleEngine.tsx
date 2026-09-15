@@ -487,6 +487,25 @@ function countHumanAlliesForTurnRules(allies: Opponent[], currentUserId: string 
   }).length;
 }
 
+/**
+ * Only defer skill execution for peer turn-order when a synced Firestore battle room exists.
+ * Practice multiplayer sets isMultiplayer but has no gameId/sessionId/battleRoom — waiting forever
+ * makes skills appear to "not go through" (select → nothing happens).
+ */
+function shouldWaitForPeerTurnOrder(opts: {
+  isMultiplayer: boolean;
+  isSinglePlayerWithAI: boolean;
+  isInSession?: boolean;
+  gameId?: string | null;
+  sessionId?: string | null;
+  battleRoom?: unknown;
+}): boolean {
+  if (!opts.isMultiplayer || opts.isSinglePlayerWithAI || opts.isInSession) return false;
+  const isIslandRaid = !!opts.gameId && !opts.isInSession;
+  if (isIslandRaid) return false;
+  return Boolean(opts.gameId || opts.sessionId || opts.battleRoom);
+}
+
 /** Self-targeted / defensive / summon skills do not require an enemy target id. */
 function moveNeedsSelfTargetFallback(move: Move | null | undefined): boolean {
   return isSelfDirectedBattleMove(move);
@@ -2792,7 +2811,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const humanPlayers = countHumanAlliesForTurnRules(allies, currentUser?.uid);
     const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
     if (isPvP && battleRoom) return false;
-    if (isMultiplayer && !isInSession && !isIslandRaid && !isSinglePlayerWithAI) return false;
+    if (
+      shouldWaitForPeerTurnOrder({
+        isMultiplayer,
+        isSinglePlayerWithAI,
+        isInSession,
+        gameId,
+        sessionId,
+        battleRoom,
+      })
+    ) {
+      return false;
+    }
     return true;
   }, [
     showSpacesBattleLayout,
@@ -5138,13 +5168,21 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       // If we're in execution phase but turn order hasn't been calculated yet, reset to selection
       // This can happen when a player joins mid-battle
-      // EXCEPT: For single-player with AI allies, In-Session mode, and Island Raid mode - they execute immediately
+      // EXCEPT: Practice (no sync room), single-player with AI, In-Session, Island Raid — execute immediately
       const humanPlayers = countHumanAlliesForTurnRules(allies, currentUser?.uid);
       const isSinglePlayerWithAI = humanPlayers === 1 && allies.length > 1;
-      const isIslandRaid = !!gameId && !isInSession; // Use consistent detection logic
+      const isIslandRaid = !!gameId && !isInSession;
+      const waitForPeers = shouldWaitForPeerTurnOrder({
+        isMultiplayer,
+        isSinglePlayerWithAI: isMultiplayer && isSinglePlayerWithAI,
+        isInSession,
+        gameId,
+        sessionId,
+        battleRoom,
+      });
       
-      // CRITICAL: Don't reset phase in In-Session mode or Island Raid mode - they execute immediately
-      if (battleState.phase === 'execution' && !battleState.turnOrder && allies.length > 0 && !isSinglePlayerWithAI && !isInSession && !isIslandRaid) {
+      // CRITICAL: Don't reset phase when moves execute immediately
+      if (battleState.phase === 'execution' && !battleState.turnOrder && allies.length > 0 && waitForPeers) {
         console.log('BattleEngine: In execution phase without turn order, resetting to selection phase', {
           phase: battleState.phase,
           hasTurnOrder: !!battleState.turnOrder,
@@ -5160,13 +5198,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           selectedMove: null, // Clear selected move
           selectedTarget: null // Clear selected target
         }));
-      } else if (battleState.phase === 'execution' && !battleState.turnOrder && isSinglePlayerWithAI) {
-        console.log('✅ BattleEngine: Single-player with AI - allowing execution without turn order', {
+      } else if (battleState.phase === 'execution' && !battleState.turnOrder && (isSinglePlayerWithAI || !waitForPeers)) {
+        console.log('✅ BattleEngine: Allowing execution without turn order', {
           phase: battleState.phase,
           hasTurnOrder: !!battleState.turnOrder,
           alliesCount: allies.length,
           humanPlayers,
-          isSinglePlayerWithAI
+          isSinglePlayerWithAI,
+          waitForPeers
         });
         // Don't reset - allow execution to proceed
       }
@@ -5230,9 +5269,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const humanPlayers = countHumanAlliesForTurnRules(allies, currentUser?.uid);
     const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
     
-    // In true multiplayer, wait for all participants to select moves before executing
-    // EXCEPT in In Session mode, Island Raid mode, or single-player with AI, where moves execute immediately
-    if (isMultiplayer && !isInSession && !isIslandRaid && !isSinglePlayerWithAI) {
+    // In true synced multiplayer, wait for all participants to select moves before executing.
+    // Practice multiplayer has no sync channel — execute immediately or skills never fire.
+    if (
+      shouldWaitForPeerTurnOrder({
+        isMultiplayer,
+        isSinglePlayerWithAI,
+        isInSession,
+        gameId,
+        sessionId,
+        battleRoom,
+      })
+    ) {
       // Just store the move - execution will happen when turn order is calculated
       battleDebug('mode-gating', {
         mode: detectBattleMode({ isInSession, sessionId, gameId, battleId: undefined, isIslandRaid, isVaultSiege: false }),
@@ -8476,7 +8524,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       window.alert('Passing your turn while stunned is not supported in this PvP mode yet.');
       return;
     }
-    if (isMultiplayer && !isInSession && !isIslandRaid && !isSinglePlayerWithAI) {
+    if (
+      shouldWaitForPeerTurnOrder({
+        isMultiplayer,
+        isSinglePlayerWithAI,
+        isInSession,
+        gameId,
+        sessionId,
+        battleRoom,
+      })
+    ) {
       window.alert('Passing your turn while stunned is not supported in this battle mode yet.');
       return;
     }
@@ -8734,13 +8791,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const humanPlayers = countHumanAlliesForTurnRules(allies, currentUser?.uid);
       const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
       
-      // CRITICAL: In-Session mode and Island Raid mode always go directly to execution (no turn order needed)
-      // In true multiplayer mode, keep phase as 'selection' until turn order is calculated
-      // For single-player with AI, go directly to execution
+      // CRITICAL: In-Session / Island Raid / Practice (no sync room) go directly to execution
       const isIslandRaidForTarget = !!gameId && !isInSession;
-      const newPhase = (isInSession || isIslandRaidForTarget)
-        ? 'execution' // In-Session/Island Raid: always execute immediately
-        : (isMultiplayer && !isSinglePlayerWithAI && !prev.turnOrder) ? 'selection' : 'execution';
+      const waitForPeers = shouldWaitForPeerTurnOrder({
+        isMultiplayer,
+        isSinglePlayerWithAI,
+        isInSession,
+        gameId,
+        sessionId,
+        battleRoom,
+      });
+      const newPhase =
+        waitForPeers && !prev.turnOrder ? 'selection' : 'execution';
       
       const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
                                  process.env.REACT_APP_DEBUG === 'true';
@@ -8754,7 +8816,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           isSinglePlayerWithAI,
           hasTurnOrder: !!prev.turnOrder,
           humanPlayers,
-          totalAllies: allies.length
+          totalAllies: allies.length,
+          waitForPeers
         });
       }
       return {
@@ -8799,14 +8862,25 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const humanPlayers = countHumanAlliesForTurnRules(allies, currentUser?.uid);
       const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
       
-      if (isMultiplayer && !isSinglePlayerWithAI) {
+      if (
+        shouldWaitForPeerTurnOrder({
+          isMultiplayer,
+          isSinglePlayerWithAI,
+          isInSession,
+          gameId,
+          sessionId,
+          battleRoom,
+        })
+      ) {
         console.log('⏸️ [Move Execution] Multiplayer mode - move will be executed via turn order, not immediately');
         return;
       }
       
-      // For single-player with AI or true single-player, execute immediately
+      // For single-player with AI, practice multiplayer (local), or true single-player, execute immediately
       if (isSinglePlayerWithAI) {
         console.log('✅ [Move Execution] Single-player with AI allies - executing immediately');
+      } else if (isMultiplayer) {
+        console.log('✅ [Move Execution] Local/practice multiplayer (no sync room) - executing immediately');
       }
       executePlayerMove();
     }
