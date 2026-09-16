@@ -23,6 +23,7 @@ import {
 } from 'firebase/firestore';
 import { notifyStudentsOfLiveEvent } from './liveEventStudentAlerts';
 import { debug, debugError } from './inSessionDebug';
+import { mstLiveLog, mstLiveError } from './mstLiveDebug';
 import { isUserAdmin } from './roleManagement';
 import { ensurePlayerStatsIfMissing, finalizeSessionStats, LIVE_EVENT_PP_BASE_PER_ELIMINATION, LIVE_EVENT_PP_PER_PARTICIPATION_POINT } from './inSessionStatsService';
 import { recordLiveEventParticipationForPlayer } from './weeklyGoalsService';
@@ -356,8 +357,14 @@ export async function joinSession(
           debug('inSessionService', `✅ NEW PLAYER: Adding ${player.displayName} to session`);
         }
       } else {
-        // Update existing player with latest data (idempotent rejoin)
-        updatedPlayers[existingPlayerIndex] = { ...updatedPlayers[existingPlayerIndex], ...player };
+        // Idempotent rejoin: refresh identity only — never wipe combat/economy progress
+        const existing = updatedPlayers[existingPlayerIndex] as Record<string, unknown>;
+        updatedPlayers[existingPlayerIndex] = {
+          ...existing,
+          displayName: player.displayName || existing.displayName,
+          photoURL: player.photoURL !== undefined ? player.photoURL : existing.photoURL,
+          userId: existing.userId || player.userId,
+        } as (typeof updatedPlayers)[number];
         if (DEBUG_JOIN) {
           debug('inSessionService', `🔄 REJOIN: Updating existing player ${player.displayName}`);
         }
@@ -423,6 +430,12 @@ export async function joinSession(
         playerCount: result.playerCount
       });
     }
+    mstLiveLog(result.isNewPlayer ? 'JOIN' : 'RECONNECT', result.isNewPlayer ? 'Player joined' : 'Player rejoined', {
+      eventId: sessionId,
+      userId: player.userId,
+      playerCount: result.playerCount,
+      isNewPlayer: result.isNewPlayer,
+    });
 
     if (result.isNewPlayer) {
       try {
@@ -507,6 +520,12 @@ export async function joinSession(
       }
     }
     
+    mstLiveError('JOIN', 'Join failed', error, {
+      eventId: sessionId,
+      userId: player.userId,
+      errorCode,
+    });
+
     // Return detailed error information
     return { 
       success: false, 
@@ -529,9 +548,20 @@ export async function endSession(sessionId: string, hostUid: string, userEmail?:
     }
     
     const sessionData = sessionDoc.data() as InSessionRoom;
+
+    // Soft-gate: double End must not re-finalize rewards / placements
+    if (sessionData.status === 'ended') {
+      mstLiveLog('PLACEMENT', 'endSession no-op — already ended', {
+        eventId: sessionId,
+        userId: hostUid,
+      });
+      return true;
+    }
     
-    // Check if user is the host
-    const isHost = sessionData.hostUid === hostUid;
+    // Host = hostUid or legacy teacherId (InSessionCreate historically omitted hostUid)
+    const isHost =
+      sessionData.hostUid === hostUid ||
+      sessionData.teacherId === hostUid;
     
     // Check if user is an admin (allow admins to end any session)
     const isAdmin = await isUserAdmin(hostUid, userEmail);
@@ -558,6 +588,13 @@ export async function endSession(sessionId: string, hostUid: string, userEmail?:
       endedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
       battleLog: updatedBattleLog
+    });
+
+    mstLiveLog('PLACEMENT', 'Session ended', {
+      eventId: sessionId,
+      userId: hostUid,
+      playerCount: playerIds.length,
+      summaryGenerated: !!summary,
     });
     
     debug('inSessionService', `Session ${sessionId} ended by ${hostUid} (${isHost ? 'host' : isAdmin ? 'admin' : 'global host'})`, {

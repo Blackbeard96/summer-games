@@ -78,10 +78,34 @@ service cloud.firestore {
         request.auth.uid in get(/databases/$(database)/documents/classrooms/$(sessionData.classId)).data.students;
     }
 
+    /** Enrollment check for a single classroom id (mirrors classroomQueries discovery). */
+    function enrolledInClassroom(classId) {
+      return classId is string &&
+        classId.size() > 0 &&
+        exists(/databases/$(database)/documents/classrooms/$(classId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/classrooms/$(classId)).data.students;
+    }
+
+    /**
+     * Universal / multi-class invites: allow if profile classId is listed OR the student is
+     * enrolled in any of the first invited classrooms (profile classId alone misses many students).
+     */
     function isUserInInvitedSessionClass(sessionData) {
-      return sessionData.classIds is list &&
-        studentClassId() != null &&
-        studentClassId() in sessionData.classIds;
+      return sessionData.classIds is list && (
+        (studentClassId() != null && studentClassId() in sessionData.classIds) ||
+        (sessionData.classIds.size() > 0 && enrolledInClassroom(sessionData.classIds[0])) ||
+        (sessionData.classIds.size() > 1 && enrolledInClassroom(sessionData.classIds[1])) ||
+        (sessionData.classIds.size() > 2 && enrolledInClassroom(sessionData.classIds[2])) ||
+        (sessionData.classIds.size() > 3 && enrolledInClassroom(sessionData.classIds[3])) ||
+        (sessionData.classIds.size() > 4 && enrolledInClassroom(sessionData.classIds[4])) ||
+        (sessionData.classIds.size() > 5 && enrolledInClassroom(sessionData.classIds[5]))
+      );
+    }
+
+    /** After join, presence doc grants continued access even if class metadata is incomplete. */
+    function isSessionPresenceParticipant(sessionId) {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/inSessionRooms/$(sessionId)/players/$(request.auth.uid));
     }
 
     function canAccessInSessionRoomByData(sessionData) {
@@ -93,7 +117,7 @@ service cloud.firestore {
     }
 
     function canReadInSessionRoomSession(sessionId) {
-      return isLiveEventStaff() || isInSessionRoomHost(sessionId) || (
+      return isLiveEventStaff() || isInSessionRoomHost(sessionId) || isSessionPresenceParticipant(sessionId) || (
         request.auth != null &&
         exists(/databases/$(database)/documents/inSessionRooms/$(sessionId)) &&
         canAccessInSessionRoomByData(get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data)
@@ -225,6 +249,15 @@ service cloud.firestore {
     // Per-student daily challenge progress (not covered by students/{userId} alone — subcollections need their own rule).
     // Owners always; admins need access for "switch to test account" (auth.uid stays admin, data is under students/{testAccountId}/...).
     match /students/{userId}/dailyChallenges/{progressDocId} {
+      allow read, write: if request.auth != null && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isAppAdminUser()
+      );
+    }
+
+    // Live Event / skill daily-challenge idempotency markers (liveEventDailyChallengeTracking.ts)
+    match /students/{userId}/dailyChallengeEvents/{eventId} {
       allow read, write: if request.auth != null && (
         request.auth.uid == userId ||
         isAdmin() ||
@@ -790,6 +823,7 @@ service cloud.firestore {
         request.auth.token.email.matches('.*@mstgames\\.net$') ||
         request.auth.token.email.matches('.*@compscihigh\\.org$') ||
         isInSessionRoomHost(sessionId) ||
+        isSessionPresenceParticipant(sessionId) ||
         // Student can read if they're invited via legacy classId, classIds, or inviteAllClasses
         canAccessInSessionRoomByData(resource.data)
       );
@@ -809,7 +843,8 @@ service cloud.firestore {
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
         request.auth.token.email.matches('.*@mstgames\\.net$') ||
         request.auth.token.email.matches('.*@compscihigh\\.org$') ||
-        canAccessInSessionRoomByData(resource.data)
+        canAccessInSessionRoomByData(resource.data) ||
+        isSessionPresenceParticipant(sessionId)
       );
       
       allow delete: if request.auth != null && (

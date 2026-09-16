@@ -202,10 +202,27 @@ export async function applyRevivePotionInLiveEvent(
       targetName,
       hpPercent: hpPct,
     });
+    try {
+      const { mstLiveLog } = await import('./mstLiveDebug');
+      mstLiveLog('REVIVE', 'Revive applied (eliminator credit retained on prior elim stats)', {
+        eventId: sessionId,
+        userId: actorUid,
+        targetUid,
+        hpPercent: hpPct,
+      });
+    } catch {
+      /* ignore */
+    }
     return { ok: true };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     debugError('liveEventRevive', 'applyRevivePotionInLiveEvent', e);
+    try {
+      const { mstLiveError } = await import('./mstLiveDebug');
+      mstLiveError('REVIVE', 'Revive failed', e, { eventId: sessionId, userId: actorUid, targetUid });
+    } catch {
+      /* ignore */
+    }
     return { ok: false, error: msg };
   }
 }

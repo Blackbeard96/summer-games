@@ -713,13 +713,26 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         detectedCategory,
         challengeTypes,
       });
+      const { mstLiveLog } = await import('./mstLiveDebug');
+      mstLiveLog('SKILL', 'Skill resolved', {
+        eventId: sessionId,
+        userId: actorUid,
+        skillId: move.id,
+        targetUid,
+        category: detectedCategory,
+      });
+      mstLiveLog('DAILY', 'Queueing daily challenge for skill', {
+        eventId: sessionId,
+        userId: actorUid,
+        challengeTypes,
+      });
       await trackDailyChallengeProgress({
         userId: actorUid,
         eventType: 'live_event',
         actionType: 'skill_resolved',
         challengeTypes,
         amount: 1,
-        sourceId: `live-event-skill:${sessionId}:${actorUid}:${traceId || `${move.id}:${Date.now()}`}:${targetUid}`,
+        sourceId: `live-event-skill:${sessionId}:${actorUid}:${traceId || `${move.id}:${targetUid}`}:${targetUid}`,
         liveEventId: sessionId,
         skillId: move.id,
         skillName: move.name,

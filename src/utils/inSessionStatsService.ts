@@ -302,6 +302,21 @@ export async function trackElimination(
           ppEarned: (eliminatorStats.ppEarned || 0) + ppFromElimination,
           vaultPpGrantedMidSession: increment(ppFromElimination),
         });
+      } else {
+        // Ensure elim credit is never silently dropped if stats weren't created yet
+        transaction.set(
+          eliminatorStatsRef,
+          {
+            playerId: eliminatorId,
+            eliminations: 1,
+            ppEarned: ppFromElimination,
+            vaultPpGrantedMidSession: ppFromElimination,
+            participationEarned: 0,
+            movesEarned: 0,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
       }
 
       // Mark eliminated player
@@ -311,6 +326,17 @@ export async function trackElimination(
           isEliminated: true,
           eliminatedBy: eliminatorId
         });
+      } else {
+        transaction.set(
+          eliminatedStatsRef,
+          {
+            playerId: eliminatedId,
+            isEliminated: true,
+            eliminatedBy: eliminatorId,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
       }
     });
 
@@ -325,25 +351,36 @@ export async function trackElimination(
         console.error('[inSessionStats] defeat_enemies daily challenge after elimination:', err)
       );
 
-      // Update session players so eliminator's in-session PP display reflects the grant
-      const sessionRef = doc(db, 'inSessionRooms', sessionId);
-      const sessionDoc = await getDoc(sessionRef);
-      if (sessionDoc.exists()) {
-        const sessionData = sessionDoc.data();
-        const players = sessionData?.players || [];
-        const eliminatorIndex = players.findIndex((p: any) => p.userId === eliminatorId);
-        if (eliminatorIndex >= 0) {
-          const updatedPlayers = [...players];
-          const currentPP = updatedPlayers[eliminatorIndex].powerPoints ?? 0;
-          updatedPlayers[eliminatorIndex] = { ...updatedPlayers[eliminatorIndex], powerPoints: currentPP + ppFromElimination };
-          await updateDoc(sessionRef, { players: updatedPlayers, updatedAt: serverTimestamp() });
-        }
-      }
+      // Update session players so eliminator's in-session PP display reflects the grant (transactional)
+      await runTransaction(db, async (tx) => {
+        const sessionSnap = await tx.get(sessionRef);
+        if (!sessionSnap.exists()) return;
+        const players = [...(sessionSnap.data()?.players || [])] as Array<Record<string, unknown>>;
+        const eliminatorIndex = players.findIndex((p) => p?.userId === eliminatorId);
+        if (eliminatorIndex < 0) return;
+        const currentPP = Number(players[eliminatorIndex].powerPoints) || 0;
+        players[eliminatorIndex] = {
+          ...players[eliminatorIndex],
+          powerPoints: currentPP + ppFromElimination,
+        };
+        tx.update(sessionRef, { players, updatedAt: serverTimestamp() });
+      });
     } catch (grantError) {
       debugError('inSessionStats', `Error granting PP to eliminator ${eliminatorId}`, grantError);
     }
 
     debug('inSessionStats', `Tracked elimination: ${eliminatorId} eliminated ${eliminatedId} (+${ppFromElimination} PP = 500 + ${eliminatedVaultPP} vault)`);
+    try {
+      const { mstLiveLog } = await import('./mstLiveDebug');
+      mstLiveLog('ELIMINATION', 'Elimination credited', {
+        eventId: sessionId,
+        userId: eliminatorId,
+        eliminatedUid: eliminatedId,
+        ppFromElimination,
+      });
+    } catch {
+      /* ignore */
+    }
     void awardPowerXpForElimination(eliminatorId, sessionId);
     return true;
   } catch (error) {
@@ -688,6 +725,8 @@ export async function trackParticipation(
           const { flowEntered, ...flowForStore } = flowEval;
           if (flowEntered) flowEnteredThisCall = true;
           row.powerPoints = Math.max(0, (Number(row.powerPoints) || 0) + ppFromParticipation);
+          row.participationCount = Math.max(0, (Number(row.participationCount) || 0) + participationAmount);
+          row.movesEarned = Math.max(0, (Number(row.movesEarned) || 0) + participationAmount);
           row.flowState = flowStateToFirestore(flowParsed);
           players[pIdx] = { ...row, ...flowForStore } as (typeof players)[number];
           sessionPatch.players = players;
@@ -1287,6 +1326,18 @@ export async function finalizeSessionStats(
       leaderboardSize: Object.keys(leaderboard).length,
       totalPlayers: summary.totalPlayers,
     });
+    try {
+      const { mstLiveLog } = await import('./mstLiveDebug');
+      mstLiveLog('PLACEMENT', 'Final placement calculated', {
+        eventId: sessionId,
+        totalPlayers: summary.totalPlayers,
+        top3Count: liveEventQuizRankByPlayer
+          ? Object.values(liveEventQuizRankByPlayer).filter((r) => Number(r) <= 3).length
+          : 0,
+      });
+    } catch {
+      /* ignore */
+    }
 
     // Store summary in session document
     await updateDoc(sessionRef, {

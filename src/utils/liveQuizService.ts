@@ -38,6 +38,7 @@ import { getQuizSet, getQuestions } from './trainingGroundsService';
 import { mirrorProfileXpToProgressionSystems } from './playerProgressionRewards';
 import { calculateLiveQuizPoints, computeBattleRoyaleStreakRewards } from './liveQuizScoring';
 import { applyFlowPpRewardMultiplier, applyFlowQuestionPointMultiplier, parseFlowStateFromPlayerRow } from './liveEventFlowBoons';
+import { mstLiveLog, mstLiveError } from './mstLiveDebug';
 import { trackParticipation, trackElimination, breakParticipationStreak, deductParticipationPowerForBattleQuizIncorrect } from './inSessionStatsService';
 import { awardPowerXpForLiveQuizCorrectAnswer } from './liveEventPowerStatsService';
 import { computeDamageAfterShield } from './liveEventCombatMath';
@@ -353,9 +354,17 @@ export async function startQuizSession(
       rewardConfig: !!rewardConfig,
       gameMode,
     });
+    mstLiveLog('START', 'Quiz session created', {
+      eventId: sessionId,
+      userId: hostUid,
+      quizId,
+      questionCount: questionOrder.length,
+      gameMode,
+    });
     return { ok: true };
   } catch (e) {
     log('startQuizSession error', e);
+    mstLiveError('START', 'Quiz session create failed', e, { eventId: sessionId, userId: hostUid });
     return { ok: false, error: String(e) };
   }
 }
@@ -409,6 +418,10 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
       return { ok: true as const };
     });
     if (!lock.ok) {
+      mstLiveLog('REWARD', 'Reward grant skipped (already granted or missing)', {
+        eventId: sessionId,
+        reason: lock.reason,
+      });
       return { granted: 0 };
     }
 
@@ -442,7 +455,14 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
     let grantedCount = 0;
 
     if (isLegacyConfig(config)) {
-      if (!config.rewardTypes.pp && !config.rewardTypes.xp && !config.rewardTypes.artifacts) return { granted: 0 };
+      if (!config.rewardTypes.pp && !config.rewardTypes.xp && !config.rewardTypes.artifacts) {
+        await updateDoc(sessionRef(sessionId), {
+          rewardsGrantedAt: serverTimestamp(),
+          rewardsGrantedCount: 0,
+          updatedAt: serverTimestamp(),
+        });
+        return { granted: 0 };
+      }
       const rewardRanks = new Set<number>();
       if (config.whoReceives.first) rewardRanks.add(1);
       if (config.whoReceives.second) rewardRanks.add(2);
@@ -517,6 +537,10 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
         updatedAt: serverTimestamp(),
       });
       log('Live quiz rewards granted (legacy)', { sessionId, grantedCount });
+      mstLiveLog('REWARD', 'Legacy quiz rewards granted', {
+        eventId: sessionId,
+        grantedCount,
+      });
       return { granted: grantedCount };
     }
 
@@ -616,9 +640,18 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
       updatedAt: serverTimestamp(),
     });
     log('Live quiz rewards granted', { sessionId, grantedCount, rankByUid });
+    mstLiveLog('REWARD', 'Placement rewards granted', {
+      eventId: sessionId,
+      grantedCount,
+    });
+    mstLiveLog('BATTLE PASS', 'XP mirrored via mirrorProfileXpToProgressionSystems for granted placements', {
+      eventId: sessionId,
+      grantedCount,
+    });
     return { granted: grantedCount };
   } catch (e) {
     log('grantLiveQuizRewards error', e);
+    mstLiveError('REWARD', 'grantLiveQuizRewards failed', e, { eventId: sessionId });
     return { granted: 0, error: String(e) };
   }
 }
@@ -654,6 +687,12 @@ export async function launchFirstQuestion(sessionId: string, hostUid: string): P
       updatedAt: serverTimestamp(),
     });
     log('question served', { sessionId, questionId: liveQuestionId, round: 1 });
+    mstLiveLog('QUESTION', 'First question live', {
+      eventId: sessionId,
+      userId: hostUid,
+      questionId: liveQuestionId,
+      round: 1,
+    });
     return { ok: true };
   });
 }
@@ -920,43 +959,30 @@ async function submitQuizResponseFollowUp(
 
   await trackParticipation(sessionId, uid, ppDelta, { playerDisplayName: displayName });
 
-  const [roomAfter, qSnap] = await Promise.all([getDoc(rref), getDoc(qref)]);
+  const qSnap = await getDoc(qref);
 
   await Promise.all([
     (async () => {
+      // movesEarned / participationCount are updated inside trackParticipation's transaction.
+      // Only sync BR energy onto the player row (transactional) — never rewrite full players[] from a stale getDoc.
       try {
         const energy =
           isBattle && qSnap.exists()
             ? (qSnap.data() as LiveQuizSession).battleRoyaleState?.energy?.[uid]
             : undefined;
-        if (roomAfter.exists()) {
-          const data = roomAfter.data();
-          const players: Array<{
-            userId: string;
-            participationCount?: number;
-            movesEarned?: number;
-            brEnergy?: number;
-            [k: string]: unknown;
-          }> = data?.players ?? [];
-          const idx = players.findIndex((p) => p.userId === uid);
-          if (idx >= 0) {
-            const p = players[idx];
-            const updatedPlayers = [...players];
-            updatedPlayers[idx] = {
-              ...p,
-              participationCount: (p.participationCount ?? 0) + ppDelta,
-              movesEarned: (p.movesEarned ?? 0) + ppDelta,
-              ...(typeof energy === 'number' ? { brEnergy: energy } : {}),
-            };
-            await updateDoc(rref, {
-              players: updatedPlayers,
-              updatedAt: serverTimestamp(),
-            });
-            log('Session player PP from quiz', { sessionId, uid, ppDelta, isBattle });
-          }
-        }
+        if (typeof energy !== 'number') return;
+        await runTransaction(db, async (tx) => {
+          const snap = await tx.get(rref);
+          if (!snap.exists()) return;
+          const players: Array<Record<string, unknown>> = [...(snap.data()?.players ?? [])];
+          const idx = players.findIndex((p) => p?.userId === uid);
+          if (idx < 0) return;
+          players[idx] = { ...players[idx], brEnergy: energy };
+          tx.update(rref, { players, updatedAt: serverTimestamp() });
+        });
+        log('Session player BR energy synced from quiz', { sessionId, uid, energy });
       } catch (err) {
-        log('Failed to update session player participation for quiz correct', err);
+        log('Failed to sync BR energy after quiz correct', err);
       }
     })(),
     (async () => {
@@ -1088,7 +1114,6 @@ export async function submitQuizResponse(
         questionEndsAt: endsAt,
       });
       let boosted = basePoints;
-      let flowBoostApplied = false;
       if (allCorrect && basePoints > 0 && roomSnap.exists()) {
         const playersRoom = (roomSnap.data()?.players || []) as Array<Record<string, unknown>>;
         const row = playersRoom.find((p) => (p as { userId?: string }).userId === uid);
@@ -1097,16 +1122,9 @@ export async function submitQuizResponse(
         flowBoostApplied = boosted > basePoints;
       }
       pointsAwarded = boosted;
-      if (flowBoostApplied) {
-        return {
-          ok: true,
-          pointsAwarded: boosted,
-          basePointsAwarded: basePoints,
-          flowBoostApplied: true,
-          isCorrect: allCorrect,
-          gameMode: mode,
-        } as SubmitQuizTxResult;
-      }
+      basePointsAwarded = basePoints;
+      // Always persist the response (including Flow-boosted points). An early return here
+      // used to skip tx.set and leave answers unlocked under concurrent class load.
     }
 
     const response: LiveQuizResponse = {
@@ -1130,6 +1148,15 @@ export async function submitQuizResponse(
       isCorrect: allCorrect,
       pointsAwarded,
       mode,
+    });
+    mstLiveLog('ANSWER', allCorrect ? 'Correct answer locked' : 'Incorrect answer locked', {
+      eventId: sessionId,
+      userId: uid,
+      questionId,
+      pointsAwarded,
+      isCorrect: allCorrect,
+      gameMode: mode,
+      flowBoostApplied,
     });
     return {
       ok: true,

@@ -114,7 +114,8 @@ const InSessionCreate: React.FC = () => {
               : `Universal Event (${targeting.classIds.length} classes)`
             : className,
         teacherId: currentUser.uid,
-        status: 'open' as const,
+        hostUid: currentUser.uid,
+        status: 'live' as const,
         /** Season 1 — live event taxonomy (defaults safe for older clients). */
         liveEventMode,
         goalLinkingEnabled,
