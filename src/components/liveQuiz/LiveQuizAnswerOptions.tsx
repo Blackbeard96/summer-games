@@ -62,7 +62,16 @@ export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
   }, [shuffle, shuffleKey, question.id, question.options.length]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: rowGap }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: rowGap,
+        flexShrink: 0,
+        width: '100%',
+        minWidth: 0,
+      }}
+    >
       <p style={{ fontSize: hintSize, color: '#64748b', marginBottom: compact ? '0.05rem' : '0.25rem', fontWeight: 600 }}>
         {isMultiple ? 'Select all that apply' : 'Select one answer'}
       </p>

@@ -24,7 +24,8 @@ export const LiveQuizQuestionCard: React.FC<LiveQuizQuestionCardProps> = ({
   const titleSize = compact ? '1.15rem' : '1.35rem';
   const metaSize = compact ? '0.8rem' : '0.875rem';
   const timerSize = compact ? '1.05rem' : '1.25rem';
-  const imgMax = compact ? 'min(38vh, 320px)' : 'min(75vh, 720px)';
+  // Keep images from eating the viewport so answer choices stay reachable by scroll
+  const imgMax = compact ? 'min(22vh, 200px)' : 'min(40vh, 420px)';
 
   return (
     <div
@@ -35,6 +36,7 @@ export const LiveQuizQuestionCard: React.FC<LiveQuizQuestionCardProps> = ({
         boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06)',
         border: '2px solid #e2e8f0',
         marginBottom: compact ? '0.5rem' : '1rem',
+        flexShrink: 0,
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: compact ? '0.45rem' : '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>

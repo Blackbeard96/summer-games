@@ -358,13 +358,13 @@ export async function joinSession(
         }
       } else {
         // Idempotent rejoin: refresh identity only — never wipe combat/economy progress
-        const existing = updatedPlayers[existingPlayerIndex] as Record<string, unknown>;
+        const existing = updatedPlayers[existingPlayerIndex];
         updatedPlayers[existingPlayerIndex] = {
           ...existing,
           displayName: player.displayName || existing.displayName,
           photoURL: player.photoURL !== undefined ? player.photoURL : existing.photoURL,
           userId: existing.userId || player.userId,
-        } as (typeof updatedPlayers)[number];
+        };
         if (DEBUG_JOIN) {
           debug('inSessionService', `🔄 REJOIN: Updating existing player ${player.displayName}`);
         }

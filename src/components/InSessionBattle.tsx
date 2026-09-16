@@ -449,6 +449,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [quizAnswerSubmitted, setQuizAnswerSubmitted] = useState(false);
   /** Prevents double-submit (e.g. rapid taps on auto-submit single-choice). */
   const quizSubmitLockRef = useRef(false);
+  const liveQuizScrollRef = useRef<HTMLDivElement | null>(null);
   const [quizMyResponse, setQuizMyResponse] = useState<{
     selectedIndices: number[];
     isCorrect: boolean;
@@ -1262,6 +1263,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       quizSubmitLockRef.current = false;
       setQuizMyResponse(null);
       setQuizSelectedIndices([]);
+      // New question: scroll quiz body to top so prompt + answers are reachable
+      requestAnimationFrame(() => {
+        const el = liveQuizScrollRef.current;
+        if (el) el.scrollTop = 0;
+      });
       const round = quizSession.quizRoundIndex ?? 1;
       getMyResponse(sessionId, currentUser?.uid ?? '').then((r) => {
         if (
@@ -1275,6 +1281,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       });
     }
   }, [sessionId, currentUser?.uid, quizSession?.status, quizSession?.currentQuestionId, quizSession?.quizRoundIndex]);
+
+  // Completed quiz: scroll to top so standings + question/response breakdown are reachable
+  useEffect(() => {
+    if (quizSession?.status !== 'completed') return;
+    requestAnimationFrame(() => {
+      const el = liveQuizScrollRef.current;
+      if (el) el.scrollTop = 0;
+    });
+  }, [quizSession?.status, quizSession?.quizId]);
 
   // Subscribe to response count (host)
   useEffect(() => {
@@ -3903,6 +3918,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           <div
             style={{
               background: 'white',
+              color: '#0f172a',
               borderRadius: '1rem',
               padding: '1.5rem',
               maxWidth: '560px',
@@ -3913,15 +3929,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem' }}>📋 Live Event</h3>
-            <p style={{ marginBottom: '1rem', color: '#64748b', fontSize: '0.9rem' }}>
+            <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem', color: '#0f172a' }}>📋 Live Event</h3>
+            <p style={{ marginBottom: '1rem', color: '#0f172a', fontSize: '0.9rem' }}>
               Pick a mode for this session. <strong>Class Flow</strong> is for timed sprints and participation (use the Sprint panel in the room).
               <strong> Quiz</strong> and <strong>Battle Royale</strong> use a Training Grounds (CFUs) question bank.
               <strong> Goal setting</strong> lets students set or update goals on a linked assessment;{' '}
               <strong>Reflection</strong> is for evidence that they met those goals (no quiz launch for either).
             </p>
             <div style={{ marginBottom: '1rem' }}>
-              <span style={{ fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>Mode</span>
+              <span style={{ fontWeight: 600, display: 'block', marginBottom: '0.5rem', color: '#0f172a' }}>Mode</span>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                 {([
                   { id: 'class_flow' as const, label: 'Class Flow' },
@@ -3943,6 +3959,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       borderRadius: '0.5rem',
                       border: liveEventLaunchMode === id ? '2px solid #4f46e5' : '1px solid #cbd5e1',
                       background: liveEventLaunchMode === id ? '#eef2ff' : '#fff',
+                      color: '#0f172a',
                       fontWeight: 600,
                       cursor: 'pointer',
                       fontSize: '0.85rem',
@@ -4484,7 +4501,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
               <button
                 onClick={() => setQuizModalOpen(false)}
-                style={{ padding: '0.5rem 1rem', borderRadius: '0.5rem', border: '1px solid #ccc', background: '#f1f5f9' }}
+                style={{
+                  padding: '0.5rem 1rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #ccc',
+                  background: '#f1f5f9',
+                  color: '#0f172a',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
               >
                 Cancel
               </button>
@@ -4810,9 +4835,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               : '1rem',
           minWidth: 0,
           minHeight: 0,
-          /** Tall Reflection / Goal panels + battle chrome must scroll; overflow:hidden clipped the submit controls. */
+          /**
+           * Quiz tab: keep this column height-bounded (overflow hidden) so the quiz body
+           * is the scroll container — nested overflow:auto on a growing parent clips answers.
+           * Battle Log / other views: allow the column itself to scroll.
+           */
           overflowX: 'hidden',
-          overflowY: 'auto',
+          overflowY: quizSession && centerView === 'quiz' ? 'hidden' : 'auto',
           WebkitOverflowScrolling: 'touch',
           position: 'relative'
         }}>
@@ -5103,18 +5132,24 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           )}
           <>
           {quizSession && centerView === 'quiz' && (
-            /* Live Quiz Mode panel — flex:1 + minHeight:0 so question/answers scroll above action buttons when not expanded */
+            /* Live Quiz Mode panel — sole scroll area for questions, answers, and result breakdowns */
             <div
+              ref={liveQuizScrollRef}
+              data-mst-live-quiz-scroll="1"
               style={{
                 flex: 1,
                 minHeight: 0,
-                overflow: 'auto',
+                overflowX: 'hidden',
+                overflowY: 'auto',
+                overscrollBehavior: 'contain',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: !liveQuizExpanded ? '0.45rem' : '1rem',
                 position: 'relative',
                 zIndex: 2,
                 WebkitOverflowScrolling: 'touch',
+                touchAction: 'pan-y',
+                paddingBottom: '1.25rem',
               }}
             >
               {showEliminatedQuizOverlay && (
@@ -5816,15 +5851,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               )}
             </div>
           )}
-          {/* Battle log + Fight/Bag/Vault: hidden while quiz is expanded on Quiz tab; BR quick actions show in the quiz panel instead */}
-          {(!quizSession ||
-            centerView === 'battleLog' ||
-            (!!quizSession &&
-              isBattleQuizMode(quizSession.gameMode) &&
-              centerView === 'quiz' &&
-              !liveQuizExpanded)) && (
-          <>
-          <div style={{ flexShrink: 0, width: '100%' }}>
+          {/*
+            Fight must stay available during regular Quiz Live Events (not only Battle Royale).
+            Only hide the Fight row when BR quiz is expanded (BR quick actions replace it).
+            BattleEngine stays mounted always so inSessionMoveSelect still resolves on the Quiz tab.
+          */}
           {(!quizSession || centerView === 'battleLog') && (
           <div
             id="live-event-battle-log"
@@ -5872,6 +5903,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           </div>
           )}
 
+          {!(
+            quizSession &&
+            centerView === 'quiz' &&
+            liveQuizExpanded &&
+            isBattleQuizMode(quizSession.gameMode)
+          ) && (
+          <div style={{ flexShrink: 0, width: '100%' }}>
           {/* Action Buttons */}
           <div style={{
             display: 'flex',
@@ -5915,11 +5953,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   console.log('✅ [InSessionBattle] Move menu opened');
                 } else {
                   console.warn('⚠️ [InSessionBattle] Cannot open menu - no moves available');
+                  alert(
+                    'No Participation Points available to fight yet. Earn them by answering quiz questions correctly (or ask the host to award participation).'
+                  );
                 }
               }}
               disabled={
                 !currentPlayer ||
-                (currentPlayer.movesEarned || 0) === 0 ||
                 currentPlayerEliminated ||
                 playerLiveEventSkillsLocked
               }
@@ -5930,76 +5970,58 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   (currentPlayer.movesEarned || 0) > 0 &&
                   !currentPlayerEliminated &&
                   !playerLiveEventSkillsLocked
-                  ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)'
-                  : '#9ca3af',
+                    ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)'
+                    : '#9ca3af',
                 color: 'white',
-                border: '3px solid #8B4513',
+                border:
+                  currentPlayer &&
+                  (currentPlayer.movesEarned || 0) > 0 &&
+                  !currentPlayerEliminated &&
+                  !playerLiveEventSkillsLocked
+                    ? '3px solid #b91c1c'
+                    : '3px solid #6b7280',
                 borderRadius: '0.5rem',
                 padding: compactFightBtnPad,
                 fontSize: compactFightBtnFont,
                 fontWeight: 'bold',
                 cursor:
+                  !currentPlayer ||
+                  currentPlayerEliminated ||
+                  playerLiveEventSkillsLocked
+                    ? 'not-allowed'
+                    : 'pointer',
+                opacity:
                   currentPlayer &&
                   (currentPlayer.movesEarned || 0) > 0 &&
                   !currentPlayerEliminated &&
                   !playerLiveEventSkillsLocked
-                    ? 'pointer'
-                    : 'not-allowed',
+                    ? 1
+                    : 0.75,
                 transition: 'all 0.2s',
                 boxShadow:
                   currentPlayer &&
                   (currentPlayer.movesEarned || 0) > 0 &&
                   !currentPlayerEliminated &&
                   !playerLiveEventSkillsLocked
-                  ? '0 4px 12px rgba(239, 68, 68, 0.3)'
-                  : 'none',
-                opacity:
-                  playerLiveEventSkillsLocked
-                    ? 0.5
-                    : currentPlayer &&
-                        (currentPlayer.movesEarned || 0) > 0 &&
-                        !currentPlayerEliminated
-                      ? 1
-                      : 0.6
-              }}
-              onMouseEnter={(e) => {
-                if (
-                  currentPlayer &&
-                  (currentPlayer.movesEarned || 0) > 0 &&
-                  !currentPlayerEliminated &&
-                  !playerLiveEventSkillsLocked
-                ) {
-                  e.currentTarget.style.transform = 'scale(1.02)';
-                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(239, 68, 68, 0.4)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (
-                  currentPlayer &&
-                  (currentPlayer.movesEarned || 0) > 0 &&
-                  !currentPlayerEliminated &&
-                  !playerLiveEventSkillsLocked
-                ) {
-                  e.currentTarget.style.transform = 'scale(1)';
-                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(239, 68, 68, 0.3)';
-                }
+                    ? '0 4px 12px rgba(239, 68, 68, 0.4)'
+                    : 'none',
               }}
               title={
                 playerLiveEventSkillsLocked
                   ? 'Host paused Fight — skills locked'
                   : currentPlayerEliminated
-                    ? 'Eliminated — you cannot use skills'
-                    : currentPlayer && (currentPlayer.movesEarned || 0) === 0
-                      ? 'No moves available. Earn Par. Pt. to make moves!'
-                      : 'Select a move to attack'
+                    ? 'Eliminated — cannot fight'
+                    : (currentPlayer?.movesEarned || 0) <= 0
+                      ? 'Earn Participation Points (correct answers) to fight'
+                      : `Fight — ${currentPlayer?.movesEarned || 0} participation available`
               }
             >
               ⚔️ FIGHT{' '}
               {playerLiveEventSkillsLocked
-                ? '(Paused)'
+                ? '(LOCKED)'
                 : currentPlayerEliminated
-                  ? '(Eliminated)'
-                  : (!currentPlayer || (currentPlayer.movesEarned || 0) === 0) && '(No Moves)'}
+                  ? '(ELIMINATED)'
+                  : `(${currentPlayer?.movesEarned || 0})`}
             </button>
             <button
               onClick={() => {
@@ -6177,8 +6199,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             </button>
           </div>
           </div>
+          )}
 
-          {/* BattleEngine - Hidden UI but functional for battle logic */}
+          {/* BattleEngine - always mounted so Quiz-tab targeting still resolves */}
           <div style={{
             position: 'absolute',
             top: 0,
@@ -6224,8 +6247,6 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               />
             </div>
           </div>
-          </>
-          )}
           </>
         </div>
 

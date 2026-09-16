@@ -629,6 +629,11 @@ export async function trackParticipation(
   options?: { playerDisplayName?: string; eventEnergyType?: string; skipStreakIncrement?: boolean }
 ): Promise<boolean> {
   try {
+    // Ensure stats exist — silent early-return used to drop moves after correct answers
+    await ensurePlayerStatsIfMissing(sessionId, playerId, {
+      playerName: options?.playerDisplayName,
+    });
+
     const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
     const sessionRef = doc(db, 'inSessionRooms', sessionId);
 
@@ -640,11 +645,7 @@ export async function trackParticipation(
       const statsDoc = await transaction.get(statsRef);
       const sessionDoc = await transaction.get(sessionRef);
 
-      if (!statsDoc.exists()) {
-        return;
-      }
-
-      const stats = statsDoc.data() as SessionStats;
+      const stats = (statsDoc.exists() ? statsDoc.data() : {}) as SessionStats;
       const newParticipation = (stats.participationEarned || 0) + participationAmount;
       const newMovesEarned = Math.floor(newParticipation / 1); // 1 participation = 1 move
       let ppFromParticipation = participationAmount * LIVE_EVENT_PP_PER_PARTICIPATION_POINT;
@@ -700,14 +701,22 @@ export async function trackParticipation(
       ppFromParticipation = applyFlowPpRewardMultiplier(ppFromParticipation, flowParsed);
       const newPPEarned = (stats.ppEarned || 0) + ppFromParticipation;
 
-      transaction.update(statsRef, {
+      const statsPayload = {
+        playerId,
+        playerName: name,
         participationEarned: newParticipation,
         movesEarned: newMovesEarned,
         ppEarned: newPPEarned,
         consecutiveParticipationAwards: nextConsecutive,
         lastLoggedStreakCount: nextConsecutive,
         participationEnergyTotals: nextEnergyTotals,
-      });
+        updatedAt: serverTimestamp(),
+      };
+      if (statsDoc.exists()) {
+        transaction.update(statsRef, statsPayload);
+      } else {
+        transaction.set(statsRef, statsPayload, { merge: true });
+      }
 
       // Session row PP is what MST MKT and finalizeSessionStats use; mirror participation awards here
       // so players can spend earned PP during the Live Event (same rate as stats.ppEarned).
