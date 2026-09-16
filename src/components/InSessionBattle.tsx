@@ -1183,6 +1183,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       if (session && !hadQuiz) {
         hadQuizSessionRef.current = true;
         setCenterView('quiz'); // when a quiz first appears, show Quiz tab; don't override user's choice on later updates
+        // Give questions/answers the full center column by default (Chromebook-friendly)
+        setLiveQuizExpanded(true);
+        try {
+          sessionStorage.setItem(`liveEventCenterView:${sessionId}`, 'quiz');
+        } catch {
+          /* ignore */
+        }
       }
       if (!session) hadQuizSessionRef.current = false;
       if (!session || session.status !== 'question_live') {
@@ -2399,14 +2406,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     return { total, alive, teamsAlive };
   }, [quizSession, sessionPlayers]);
 
-  /** BR / Team BR with player columns visible: tighten layout so quiz + answers fit above Fight row */
-  const compactLiveEventFightRow =
-    !!quizSession &&
-    centerView === 'quiz' &&
-    !liveQuizExpanded &&
-    isBattleQuizMode(quizSession.gameMode);
-  const compactFightBtnPad = compactLiveEventFightRow ? '0.65rem' : '1rem';
-  const compactFightBtnFont = compactLiveEventFightRow ? '1rem' : '1.125rem';
+  /** On Quiz tab, fight chrome must stay compact so questions/answers stay visible. */
+  const quizTabActive = Boolean(quizSession && centerView === 'quiz');
+  const compactLiveEventFightRow = quizTabActive;
+  const compactFightBtnPad = quizTabActive ? '0.4rem 0.55rem' : '1rem';
+  const compactFightBtnFont = quizTabActive ? '0.82rem' : '1.125rem';
 
   useEffect(() => {
     const isEliminatedNow = currentPlayerEliminated;
@@ -3528,26 +3532,28 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         }
       `}</style>
       <div style={{ 
-        padding: '1rem',
+        padding: quizTabActive ? '0.5rem 0.75rem' : '1rem',
         maxWidth: '1600px',
         margin: '0 auto',
         display: 'flex',
         flexDirection: 'column',
-        gap: '1rem'
+        gap: quizTabActive ? '0.45rem' : '1rem'
       }}>
       {/* Header */}
       <div style={{
         background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
         color: 'white',
-        padding: '1.5rem',
+        padding: quizTabActive ? '0.65rem 1rem' : '1.5rem',
         borderRadius: '0.75rem',
         display: 'flex',
         justifyContent: 'space-between',
-        alignItems: 'center'
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '0.5rem',
       }}>
         <div>
-          <h1 style={{ fontSize: '2rem', margin: 0, marginBottom: '0.5rem' }}>📚 In Session: {className}</h1>
-          <p style={{ fontSize: '1rem', opacity: 0.9, margin: 0 }}>
+          <h1 style={{ fontSize: quizTabActive ? '1.15rem' : '2rem', margin: 0, marginBottom: quizTabActive ? 0 : '0.5rem' }}>📚 In Session: {className}</h1>
+          <p style={{ fontSize: quizTabActive ? '0.8rem' : '1rem', opacity: 0.9, margin: 0 }}>
             {sessionPlayers.length} players • {currentPlayer ? `${currentPlayer.movesEarned} moves available` : 'Loading...'}
           </p>
         </div>
@@ -4728,11 +4734,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       <>
         <div
           style={{
-            display: 'flex',
+            display: quizTabActive ? 'none' : 'flex',
             alignItems: 'center',
             gap: '0.75rem',
             flexWrap: 'wrap',
-            marginBottom: '0.75rem',
+            marginBottom: quizTabActive ? 0 : '0.75rem',
           }}
         >
           <label
@@ -4762,14 +4768,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         </div>
       {(() => {
         const quizFocusLayout = Boolean(quizSession && centerView === 'quiz' && liveQuizExpanded);
+        const quizViewportReserve = quizTabActive ? 120 : 180;
         return (
       <div
         style={{
           display: 'flex',
           gap: quizFocusLayout ? '0' : '1rem',
-          height: 'calc(100vh - 180px)',
-          maxHeight: 'calc(100vh - 180px)',
-          minHeight: 'min(600px, calc(100vh - 160px))',
+          height: `calc(100vh - ${quizViewportReserve}px)`,
+          maxHeight: `calc(100vh - ${quizViewportReserve}px)`,
+          minHeight: quizTabActive ? 'min(420px, calc(100vh - 100px))' : 'min(600px, calc(100vh - 160px))',
           alignItems: 'stretch',
         }}
       >
@@ -5851,11 +5858,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               )}
             </div>
           )}
-          {/*
-            Fight must stay available during regular Quiz Live Events (not only Battle Royale).
-            Only hide the Fight row when BR quiz is expanded (BR quick actions replace it).
-            BattleEngine stays mounted always so inSessionMoveSelect still resolves on the Quiz tab.
-          */}
+          {/* Battle log — Battle Log tab (or no quiz). Quiz tab keeps the viewport for questions. */}
           {(!quizSession || centerView === 'battleLog') && (
           <div
             id="live-event-battle-log"
@@ -5902,19 +5905,166 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             </div>
           </div>
           )}
-
-          {!(
-            quizSession &&
-            centerView === 'quiz' &&
-            liveQuizExpanded &&
-            isBattleQuizMode(quizSession.gameMode)
-          ) && (
+          {/*
+            Quiz tab: keep a slim horizontal action strip so questions/answers own the viewport.
+            Full stacked Fight/Bag/Vault chrome lives on Battle Log (and when no quiz).
+          */}
+          {quizTabActive ? (
+          <div
+            style={{
+              flexShrink: 0,
+              width: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.35rem',
+              zIndex: 2,
+            }}
+          >
+            {playerLiveEventSkillsLocked ? (
+              <div
+                style={{
+                  padding: '0.35rem 0.55rem',
+                  borderRadius: '0.4rem',
+                  background: 'rgba(127, 29, 29, 0.2)',
+                  border: '1px solid rgba(248, 113, 113, 0.55)',
+                  color: '#fecaca',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  textAlign: 'center',
+                }}
+              >
+                Host paused Fight — switch to Battle Log after answering when Fight is allowed.
+              </div>
+            ) : null}
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                gap: '0.35rem',
+                alignItems: 'stretch',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  if (playerLiveEventSkillsLocked) {
+                    alert('The host has paused Fight. Skills are locked until the host allows Fight again.');
+                    return;
+                  }
+                  if (currentPlayerEliminated) {
+                    alert('You have been eliminated and cannot use skills.');
+                    return;
+                  }
+                  if (currentPlayer && (currentPlayer.movesEarned || 0) > 0) {
+                    setCenterView('battleLog');
+                    setShowMoveMenu(true);
+                  } else {
+                    alert(
+                      'No Participation Points available to fight yet. Earn them by answering quiz questions correctly (or ask the host to award participation).'
+                    );
+                  }
+                }}
+                disabled={!currentPlayer || currentPlayerEliminated || playerLiveEventSkillsLocked}
+                style={{
+                  flex: '1 1 110px',
+                  background:
+                    currentPlayer &&
+                    (currentPlayer.movesEarned || 0) > 0 &&
+                    !currentPlayerEliminated &&
+                    !playerLiveEventSkillsLocked
+                      ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)'
+                      : '#9ca3af',
+                  color: 'white',
+                  border: '2px solid #6b7280',
+                  borderRadius: '0.45rem',
+                  padding: compactFightBtnPad,
+                  fontSize: compactFightBtnFont,
+                  fontWeight: 700,
+                  cursor:
+                    !currentPlayer || currentPlayerEliminated || playerLiveEventSkillsLocked
+                      ? 'not-allowed'
+                      : 'pointer',
+                }}
+                title="Opens Battle Log to pick a skill and target"
+              >
+                ⚔️ Fight ({currentPlayer?.movesEarned || 0})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (playerLiveEventSkillsLocked && !currentPlayerEliminated) {
+                    alert('The host has paused Fight. Items are locked until the host allows Fight again.');
+                    return;
+                  }
+                  setShowBagModal(true);
+                }}
+                disabled={
+                  !currentPlayer ||
+                  (playerLiveEventSkillsLocked && !currentPlayerEliminated) ||
+                  ((currentPlayer.movesEarned || 0) === 0 && !currentPlayerEliminated)
+                }
+                style={{
+                  flex: '1 1 90px',
+                  background: '#d97706',
+                  color: 'white',
+                  border: '2px solid #92400e',
+                  borderRadius: '0.45rem',
+                  padding: compactFightBtnPad,
+                  fontSize: compactFightBtnFont,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                🎒 Bag
+              </button>
+              {mstMktOpen &&
+                !showSessionSummary &&
+                (roomSessionStatus === 'live' || roomSessionStatus === 'active') && (
+                  <button
+                    type="button"
+                    onClick={() => setShowMstMktModal(true)}
+                    style={{
+                      flex: '1 1 90px',
+                      background: 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)',
+                      color: '#1c1917',
+                      border: '2px solid #a16207',
+                      borderRadius: '0.45rem',
+                      padding: compactFightBtnPad,
+                      fontSize: compactFightBtnFont,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    🛒 MKT
+                  </button>
+                )}
+              <button
+                type="button"
+                onClick={() => setShowVaultModal(true)}
+                style={{
+                  flex: '1 1 90px',
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  color: 'white',
+                  border: '2px solid #047857',
+                  borderRadius: '0.45rem',
+                  padding: compactFightBtnPad,
+                  fontSize: compactFightBtnFont,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                🏰 Vault
+              </button>
+            </div>
+          </div>
+          ) : (
           <div style={{ flexShrink: 0, width: '100%' }}>
-          {/* Action Buttons */}
+          {/* Action Buttons — full size on Battle Log / no-quiz */}
           <div style={{
             display: 'flex',
             flexDirection: 'column',
-            gap: compactLiveEventFightRow ? '0.45rem' : '0.75rem',
+            gap: '0.75rem',
             zIndex: 2
           }}>
             {playerLiveEventSkillsLocked ? (

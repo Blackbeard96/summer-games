@@ -25,7 +25,7 @@ export const LiveQuizQuestionCard: React.FC<LiveQuizQuestionCardProps> = ({
   const metaSize = compact ? '0.8rem' : '0.875rem';
   const timerSize = compact ? '1.05rem' : '1.25rem';
   // Keep images from eating the viewport so answer choices stay reachable by scroll
-  const imgMax = compact ? 'min(22vh, 200px)' : 'min(40vh, 420px)';
+  const imgMax = compact ? 'min(16vh, 140px)' : 'min(28vh, 280px)';
 
   return (
     <div
