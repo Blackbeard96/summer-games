@@ -82,9 +82,9 @@ const LiveEvents: React.FC = () => {
     fetchUserClassrooms();
   }, [currentUser]);
 
-  // Subscribe to active live events
+  // Discover live events for enrolled classes AND sessions this user hosts
   useEffect(() => {
-    if (!currentUser || userClassrooms.length === 0) {
+    if (!currentUser) {
       setLoading(false);
       return;
     }
@@ -106,9 +106,30 @@ const LiveEvents: React.FC = () => {
 
     const runFetch = async () => {
       try {
+        const { collection, getDocs, query, where } = await import('firebase/firestore');
         const rows = await getVisibleLiveEventsForUser(userClassrooms, ['open', 'active', 'live']);
+        const byId = new Map(rows.map((r) => [r.id, r]));
+
+        // Hosts may not be enrolled in the class — still show rooms they host / teach
+        try {
+          const hostSnap = await getDocs(
+            query(collection(db, 'inSessionRooms'), where('hostUid', '==', currentUser.uid))
+          );
+          const teacherSnap = await getDocs(
+            query(collection(db, 'inSessionRooms'), where('teacherId', '==', currentUser.uid))
+          );
+          for (const docSnap of [...hostSnap.docs, ...teacherSnap.docs]) {
+            const data = docSnap.data();
+            const status = String(data.status || '');
+            if (status !== 'open' && status !== 'active' && status !== 'live') continue;
+            byId.set(docSnap.id, { id: docSnap.id, data });
+          }
+        } catch (hostQueryErr) {
+          console.warn('[LiveEvents] Hosted-session discovery failed', hostQueryErr);
+        }
+
         if (cancelled) return;
-        const nextEvents: LiveEvent[] = rows.map(({ id, data }) => ({
+        const nextEvents: LiveEvent[] = Array.from(byId.values()).map(({ id, data }) => ({
           id,
           classId: data.classId ?? null,
           classIds: Array.isArray(data.classIds) ? data.classIds : undefined,
@@ -179,6 +200,10 @@ const LiveEvents: React.FC = () => {
         throw new Error('Invalid player name. Please update your profile.');
       }
 
+      const isHostOfEvent =
+        event.hostUid === currentUser.uid ||
+        (event as { teacherId?: string }).teacherId === currentUser.uid;
+
       const newPlayer = {
         userId: currentUser.uid,
         displayName: displayName.trim(),
@@ -187,7 +212,8 @@ const LiveEvents: React.FC = () => {
         level: studentData.level || 1,
         powerPoints: studentData.powerPoints || 0,
         participationCount: 0,
-        movesEarned: 0
+        movesEarned: isHostOfEvent ? 5 : 0,
+        ...(isHostOfEvent ? { isTeacher: true } : {}),
       };
 
       // Validate player data before attempting join
@@ -205,7 +231,7 @@ const LiveEvents: React.FC = () => {
         playerPP: newPlayer.powerPoints
       });
 
-      if (!canUserJoinLiveEvent(userClassrooms, event)) {
+      if (!isHostOfEvent && !canUserJoinLiveEvent(userClassrooms, event)) {
         alert('You are not invited to this live event.');
         return;
       }

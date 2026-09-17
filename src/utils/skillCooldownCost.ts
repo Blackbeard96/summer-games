@@ -78,12 +78,12 @@ export function getSkillCooldownOrCost(move: Move): number {
   return 1;
 }
 
-/** Live Event participation **base** before artifact reductions (RR stays flat 4). */
+/** Live Event participation **base** before artifact reductions.
+ * Classroom rule: 1 correct answer ≈ 1 skill use. RR Candy costs 2.
+ * (Vault battle energy costs stay in `getSkillCooldownOrCost` — do not reuse those here.)
+ */
 export function getLiveEventParticipationBaseFromSkillRules(move: Move): number {
-  if (isRrCandySkillMove(move)) return 4;
-  if (isManifestSkillMove(move) || isElementalSkillMove(move)) {
-    return getSkillCooldownOrCost(move);
-  }
+  if (isRrCandySkillMove(move)) return 2;
   return 1;
 }
 

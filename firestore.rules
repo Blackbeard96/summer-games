@@ -863,8 +863,12 @@ service cloud.firestore {
       match /actions/{actionId} {
         allow read: if request.auth != null; // Anyone in session can read actions
         allow create: if request.auth != null && (
-          // Students in class can create actions
+          // Students enrolled in invited class(es)
           canAccessInSessionRoomByData(get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data) ||
+          // Host / teacher (may not be on the classroom roster)
+          isInSessionRoomHost(sessionId) ||
+          // Already joined (presence doc)
+          isSessionPresenceParticipant(sessionId) ||
           // Admin/Yondaime can create actions
           request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
           request.auth.token.email.matches('.*@mstgames\\.net$') ||

@@ -1320,7 +1320,8 @@ const ClassroomManagement: React.FC = () => {
                       const sessionId = await createSession(
                         classroom.id,
                         classroom.name,
-                        authUid
+                        authUid,
+                        authDisplayName || authEmail || 'Host'
                       );
                       
                       if (sessionId) {

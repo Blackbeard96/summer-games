@@ -1,6 +1,6 @@
 /**
- * Live Events: Participation Power for skills uses **canonical rules** from `getLiveEventParticipationBaseFromSkillRules`
- * (`skillCooldownCost.ts` — manifest & elemental level tables). RR Candy stays a flat **4** base before reductions.
+ * Live Events: Participation Power for skills uses **classroom-friendly bases** from
+ * `getLiveEventParticipationBaseFromSkillRules` (1 per skill, 2 for RR Candy).
  *
  * `computeLiveEventParticipationSkillCost` applies artifact + battle-effect reductions on top of that
  * canonical base, then floors so the player never pays **less** than the category minimum (unless

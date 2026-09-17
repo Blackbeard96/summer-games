@@ -30,6 +30,7 @@ import {
   truncateId,
 } from './liveEventDebugLogging';
 import { isLiveEventPlayerEliminatedForRevive } from './liveEventRevive';
+import { isGlobalHost } from './inSessionService';
 
 const DEBUG_IN_SESSION_MOVES = process.env.REACT_APP_DEBUG_IN_SESSION_MOVES === 'true' || 
                                  process.env.REACT_APP_DEBUG === 'true';
@@ -242,9 +243,16 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
 
       const sessionData = sessionDoc.data();
       if (sessionData.liveEventFightNegated === true) {
-        throw new Error(
-          'The host has paused the Fight phase. Skills are locked until the host turns Fight back on.'
-        );
+        // Host/staff can still act while Fight is paused for students
+        const isHostActor =
+          sessionData.hostUid === actorUid ||
+          sessionData.teacherId === actorUid ||
+          isGlobalHost(actorUid, actorEmail);
+        if (!isHostActor) {
+          throw new Error(
+            'The host has paused the Fight phase. Skills are locked until the host turns Fight back on.'
+          );
+        }
       }
 
       const players: any[] = sessionData.players || [];

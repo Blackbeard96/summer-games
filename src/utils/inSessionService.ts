@@ -56,6 +56,9 @@ export interface SessionPlayer {
   flowState?: import('../types/liveEventFlowBoons').LiveEventFlowStateBoons;
   /** Wall-clock ms anchor for passive +1 movesEarned every 2 minutes (liveEventPassiveParticipation). */
   participationPassiveStartedAtMs?: number;
+  /** Host / teacher participant row */
+  isTeacher?: boolean;
+  isReady?: boolean;
 }
 
 export interface InSessionRoom {
@@ -126,7 +129,8 @@ export async function canHostSession(
 export async function createSession(
   classId: string,
   className: string,
-  hostUid: string
+  hostUid: string,
+  hostDisplayName?: string
 ): Promise<string | null> {
   try {
     // Check for existing active session
@@ -136,6 +140,27 @@ export async function createSession(
       return existingSession.id;
     }
     
+    const hostName =
+      typeof hostDisplayName === 'string' && hostDisplayName.trim()
+        ? hostDisplayName.trim()
+        : 'Host';
+
+    // Seed host as a participant so they can fight even if not on the class roster
+    const hostPlayer: SessionPlayer = {
+      userId: hostUid || '',
+      displayName: hostName,
+      level: 1,
+      isTeacher: true,
+      isReady: true,
+      movesEarned: 5,
+      participationCount: 0,
+      powerPoints: 0,
+      hp: 100,
+      maxHp: 100,
+      shield: 100,
+      maxShield: 100,
+    };
+
     // CRITICAL: Ensure all required fields are defined (no undefined values)
     const sessionData = {
       classId: classId || '',
@@ -144,9 +169,10 @@ export async function createSession(
       hostUid: hostUid || '',
       status: 'live' as const, // Use 'live' consistently
       mode: 'in_session' as const,
-      players: [] as SessionPlayer[],
+      players: [hostPlayer] as SessionPlayer[],
       battleLog: [
         `🎉 Live Event is now active for ${className || 'this class'}! Join the battle in the arena.`,
+        `👑 ${hostName} joined as host (can participate in battle).`,
         '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
         '📋 How to earn PP this event:',
         `  • +${LIVE_EVENT_PP_BASE_PER_ELIMINATION} PP for every player you eliminate (plus their vault PP)`,

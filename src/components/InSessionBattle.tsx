@@ -799,12 +799,23 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           powerLevel,
           powerPoints,
           participationCount: 0,
-          movesEarned: 0,
+          // Hosts get starter moves so they can participate without answering quiz first
+          movesEarned:
+            sessionDoc.exists() &&
+            (sessionDoc.data()?.hostUid === currentUser.uid ||
+              sessionDoc.data()?.teacherId === currentUser.uid)
+              ? 5
+              : 0,
           hp,
           maxHp,
           shield,
           maxShield,
           participationPassiveStartedAtMs: Date.now(),
+          ...(sessionDoc.exists() &&
+          (sessionDoc.data()?.hostUid === currentUser.uid ||
+            sessionDoc.data()?.teacherId === currentUser.uid)
+            ? { isTeacher: true }
+            : {}),
         };
         
         // Join session (idempotent - safe to call multiple times)
@@ -2624,10 +2635,23 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     [sessionPpStatsByPlayer]
   );
 
-  /** When host pauses Fight, everyone (including host) sees skills / FIGHT locked until Fight is allowed again. */
+  /** When host pauses Fight, students see skills / FIGHT locked; host/staff can still act. */
   const playerLiveEventSkillsLocked = useMemo(
-    () => liveEventFightNegated && permissionsChecked,
-    [liveEventFightNegated, permissionsChecked]
+    () =>
+      liveEventFightNegated &&
+      permissionsChecked &&
+      !isSessionHost &&
+      !isAdminUser &&
+      !isGlobalHost(currentUser?.uid || '', currentUser?.email || undefined, currentUser?.displayName || undefined),
+    [
+      liveEventFightNegated,
+      permissionsChecked,
+      isSessionHost,
+      isAdminUser,
+      currentUser?.uid,
+      currentUser?.email,
+      currentUser?.displayName,
+    ]
   );
 
   useEffect(() => {
