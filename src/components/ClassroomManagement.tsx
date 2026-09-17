@@ -517,8 +517,12 @@ const ClassroomManagement: React.FC = () => {
             level: 1,
             powerPoints: 0,
             participationCount: 0,
-            movesEarned: 0,
+            movesEarned: 5,
             isTeacher: true,
+            hp: 100,
+            maxHp: 100,
+            shield: 100,
+            maxShield: 100,
           },
         ],
         battleLog: [
