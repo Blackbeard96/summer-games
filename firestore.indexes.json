@@ -1,13 +1,6 @@
 {
   "indexes": [
     {
-      "collectionGroup": "liveEventSessions",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "endedAt", "order": "DESCENDING" }
-      ]
-    },
-    {
       "collectionGroup": "liveEventPendingClaims",
       "queryScope": "COLLECTION",
       "fields": [
