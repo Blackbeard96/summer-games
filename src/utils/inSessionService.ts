@@ -198,6 +198,13 @@ export async function createSession(
     await setDoc(sessionRef, sessionData);
 
     try {
+      const { upsertLiveEventSessionStub } = await import('./liveEventHistoryService');
+      await upsertLiveEventSessionStub(sessionRef.id, sessionData as unknown as Record<string, unknown>);
+    } catch (stubErr) {
+      debugError('inSessionService', 'Live Event history stub failed (non-fatal)', stubErr);
+    }
+
+    try {
       const classroomSnap = await getDoc(doc(db, 'classrooms', classId));
       const enrolled = classroomSnap.exists()
         ? ((classroomSnap.data().students as string[]) || []).filter(Boolean)

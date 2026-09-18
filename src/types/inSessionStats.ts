@@ -32,6 +32,9 @@ export interface SessionStats {
   /** Host writes final Top 3 placement here; player self-claims daily win challenge credit. */
   sessionEndWinChallengePlacementPending?: number;
   sessionEndWinChallengeClaimedAt?: unknown;
+  /** Host queues participate_live_event daily challenge; player self-claims (host cannot write other students' challenges). */
+  sessionEndParticipateChallengePending?: boolean;
+  sessionEndParticipateChallengeClaimedAt?: unknown;
 
   // Participation tracking
   participationEarned: number; // Total participation points earned

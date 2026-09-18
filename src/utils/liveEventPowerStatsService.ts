@@ -419,6 +419,27 @@ export async function applySessionEndBattlePassAndPowerToStudent(
         ...s1,
         battlePass: nextBattlePass,
       };
+    } else if (delta > 0 && !activeSeasonId) {
+      // Still credit Battle Pass XP even if no season is currently deployed —
+      // otherwise session-end claim would clear pending BP and the XP is lost.
+      const s1 = mergeSeason1FromStudentData(data.season1 as Record<string, unknown> | undefined);
+      const bp = s1.battlePass;
+      const seasonKey =
+        (typeof bp.currentSeasonId === 'string' && bp.currentSeasonId.trim()) || 'unassigned';
+      const nextXp = Math.max(0, Math.floor(Number(bp.battlePassXP) || 0) + delta);
+      updates.season1 = {
+        ...s1,
+        battlePass: {
+          ...bp,
+          currentSeasonId: seasonKey,
+          battlePassXP: nextXp,
+          currentTier: Math.max(0, Number(bp.currentTier) || 0),
+          claimedRewardIds: Array.isArray(bp.claimedRewardIds) ? bp.claimedRewardIds : [],
+          ...(typeof bp.introSeenSeasonId === 'string' && bp.introSeenSeasonId.trim()
+            ? { introSeenSeasonId: bp.introSeenSeasonId.trim() }
+            : {}),
+        },
+      };
     }
 
     tx.update(studentRef, updates as UpdateData<DocumentData>);

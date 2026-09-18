@@ -30,6 +30,7 @@ import {
   TrainingAnswer,
 } from '../types/trainingGrounds';
 import type { LiveQuizSession } from '../types/liveQuiz';
+import { enrichAnswersWithSkills } from './masteryService';
 
 // ============================================================================
 // Quiz Sets
@@ -551,6 +552,24 @@ export async function syncLiveEventQuizToTrainingAttempt(
     const attemptId = await createAttempt(attemptPayload);
     const createdAttempt: TrainingAttempt = { id: attemptId, ...attemptPayload };
     await updateTrainingStats(userId, createdAttempt);
+
+    // Skill Mastery from Live Event answers (student self-write; centralized mastery path)
+    try {
+      const bank = await getQuestions(quizSetId);
+      const enriched = enrichAnswersWithSkills(answers, bank);
+      if (enriched.some((a) => a.skillIds?.length)) {
+        const { recordSkillEvidenceFromAttempt } = await import('./masteryService');
+        await recordSkillEvidenceFromAttempt({
+          userId,
+          quizSetId,
+          attemptId: `live_${liveEventSessionId}_${userId}`,
+          answers: enriched,
+          mode: 'live-event',
+        });
+      }
+    } catch (masteryErr) {
+      console.warn('syncLiveEventQuizToTrainingAttempt mastery', masteryErr);
+    }
 
     try {
       const { recordQuizProductivityAttempt } = await import('./productivityTracking');

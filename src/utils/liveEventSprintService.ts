@@ -7,6 +7,7 @@ import {
   doc,
   getDoc,
   updateDoc,
+  setDoc,
   runTransaction,
   serverTimestamp,
   Timestamp,
@@ -391,10 +392,51 @@ async function deductVaultPPFromPlayerClamped(playerUid: string, penalty: number
 
 type SessionPlayerRow = {
   userId: string;
+  displayName?: string;
   powerPoints?: number;
   participationCount?: number;
   movesEarned?: number;
+  level?: number;
+  hp?: number;
+  maxHp?: number;
+  shield?: number;
+  maxShield?: number;
+  isTeacher?: boolean;
+  isReady?: boolean;
 };
+
+/**
+ * Ensure a class-roster student exists on `players[]` before sprint grants.
+ * Paper / offline formative: host marks complete without the student joining the Live Event.
+ */
+async function ensureSessionPlayerRowForOfflineGrant(
+  sessionId: string,
+  uid: string,
+  displayName: string
+): Promise<void> {
+  const ref = roomRef(sessionId);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists()) return;
+    const players = [...((snap.data()?.players as SessionPlayerRow[]) || [])];
+    if (players.some((p) => p?.userId === uid)) return;
+    players.push({
+      userId: uid,
+      displayName: displayName || 'Student',
+      level: 1,
+      powerPoints: 0,
+      participationCount: 0,
+      movesEarned: 0,
+      hp: 100,
+      maxHp: 100,
+      shield: 100,
+      maxShield: 100,
+      isReady: false,
+      isTeacher: false,
+    });
+    tx.update(ref, { players, updatedAt: serverTimestamp() });
+  });
+}
 
 /** Keeps session `players[]` participation / moves in sync with sprint stats (FIGHT / BAG buttons). */
 async function bumpSessionPlayerParticipationMoves(sessionId: string, uid: string, delta: number): Promise<void> {
@@ -450,48 +492,96 @@ export async function grantSprintRewardForSinglePlayer(
     const vaultPP = sprint.rewardVaultPP;
     const xpAmt = sprint.rewardXP;
 
+    // Offline / paper formative: student may never have joined the Live Event room.
+    await ensureSessionPlayerRowForOfflineGrant(sessionId, playerUid, playerDisplayName);
+
     const statsOk = await trackParticipation(sessionId, playerUid, ppAmt, { playerDisplayName });
     if (!statsOk) return { ok: false, error: 'Could not update participation stats for this player' };
 
-    await bumpSessionPlayerParticipationMoves(sessionId, playerUid, ppAmt);
+    // Do NOT call bumpSessionPlayerParticipationMoves here — trackParticipation already
+    // updates session players[].participationCount / movesEarned / powerPoints.
 
     if (vaultPP > 0 || xpAmt > 0) {
       const studentRef = doc(db, 'students', playerUid);
       const userRef = doc(db, 'users', playerUid);
       const vaultRef = doc(db, 'vaults', playerUid);
-      const studentUpdates: UpdateData<DocumentData> = {};
-      const userUpdates: UpdateData<DocumentData> = {};
-      if (vaultPP > 0) {
-        studentUpdates.powerPoints = increment(vaultPP);
-        userUpdates.powerPoints = increment(vaultPP);
-      }
-      if (xpAmt > 0) {
-        studentUpdates.xp = increment(xpAmt);
-        userUpdates.xp = increment(xpAmt);
-      }
-      if (Object.keys(studentUpdates).length > 0) {
-        const studentDoc = await getDoc(studentRef);
-        if (studentDoc.exists()) {
-          await updateDoc(studentRef, studentUpdates);
-          if (xpAmt > 0) {
-            await mirrorProfileXpToProgressionSystems(playerUid, xpAmt, 'live_event_sprint');
+      let accountCreditOk = false;
+      try {
+        const studentUpdates: UpdateData<DocumentData> = {};
+        const userUpdates: UpdateData<DocumentData> = {};
+        if (vaultPP > 0) {
+          studentUpdates.powerPoints = increment(vaultPP);
+          userUpdates.powerPoints = increment(vaultPP);
+        }
+        if (xpAmt > 0) {
+          studentUpdates.xp = increment(xpAmt);
+          userUpdates.xp = increment(xpAmt);
+        }
+        if (Object.keys(studentUpdates).length > 0) {
+          const studentDoc = await getDoc(studentRef);
+          if (studentDoc.exists()) {
+            await updateDoc(studentRef, studentUpdates);
+            accountCreditOk = true;
+            if (xpAmt > 0) {
+              await mirrorProfileXpToProgressionSystems(playerUid, xpAmt, 'live_event_sprint');
+            }
+          } else {
+            accountCreditOk = true;
+          }
+        } else {
+          accountCreditOk = true;
+        }
+        if (Object.keys(userUpdates).length > 0) {
+          try {
+            const userDoc = await getDoc(userRef);
+            if (userDoc.exists()) await updateDoc(userRef, userUpdates);
+          } catch (userErr) {
+            console.warn('[liveEventSprint] users credit failed (students ok)', userErr);
           }
         }
-      }
-      if (Object.keys(userUpdates).length > 0) {
-        const userDoc = await getDoc(userRef);
-        if (userDoc.exists()) await updateDoc(userRef, userUpdates);
-      }
-      if (vaultPP > 0) {
-        const vaultDoc = await getDoc(vaultRef);
-        if (vaultDoc.exists()) {
-          const v = vaultDoc.data();
-          const cur = v?.currentPP ?? 0;
-          const cap = v?.capacity ?? 1000;
-          await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + vaultPP) });
+        if (vaultPP > 0 && accountCreditOk) {
+          try {
+            const vaultDoc = await getDoc(vaultRef);
+            if (vaultDoc.exists()) {
+              const v = vaultDoc.data();
+              const cur = v?.currentPP ?? 0;
+              const cap = v?.capacity ?? 1000;
+              await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + vaultPP) });
+            }
+          } catch (vaultErr) {
+            console.warn('[liveEventSprint] vault credit failed (students ok)', vaultErr);
+          }
+          await bumpSessionPlayerVaultPP(sessionId, playerUid, vaultPP);
+          await addVaultPpGrantedMidSessionStat(sessionId, playerUid, vaultPP);
         }
-        await bumpSessionPlayerVaultPP(sessionId, playerUid, vaultPP);
-        await addVaultPpGrantedMidSessionStat(sessionId, playerUid, vaultPP);
+      } catch (accountErr) {
+        // Host cannot write other students' docs — queue vault PP for session-end self-claim.
+        console.warn(
+          '[liveEventSprint] mid-session account credit failed; queuing session-end PP claim',
+          accountErr
+        );
+        if (vaultPP > 0) {
+          try {
+            const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerUid);
+            await setDoc(
+              statsRef,
+              {
+                playerId: playerUid,
+                sessionEndAccountPpPending: increment(vaultPP),
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+          } catch (queueErr) {
+            console.error('[liveEventSprint] failed to queue sessionEndAccountPpPending', queueErr);
+          }
+          try {
+            const { registerLiveEventPendingClaim } = await import('./liveEventPendingClaimsService');
+            await registerLiveEventPendingClaim(sessionId, playerUid);
+          } catch {
+            /* non-fatal */
+          }
+        }
       }
     }
 

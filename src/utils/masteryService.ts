@@ -3,6 +3,7 @@ import {
   collection,
   doc,
   getDocs,
+  limit,
   query,
   serverTimestamp,
   setDoc,
@@ -74,6 +75,16 @@ export async function recordSkillEvidenceFromAttempt(params: {
   const { userId, quizSetId, attemptId, answers, mode } = params;
   const tagged = answers.filter((a) => Array.isArray(a.skillIds) && a.skillIds!.length > 0);
   if (tagged.length === 0) return;
+
+  // Idempotent: same attemptId already recorded
+  try {
+    const priorAttempt = await getDocs(
+      query(evidenceCol(), where('userId', '==', userId), where('attemptId', '==', attemptId), limit(1))
+    );
+    if (!priorAttempt.empty) return;
+  } catch {
+    /* proceed — index may be missing; duplicate risk is acceptable vs blocking */
+  }
 
   const now = Date.now();
   const skillSampleMap = new Map<

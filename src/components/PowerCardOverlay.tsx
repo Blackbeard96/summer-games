@@ -47,6 +47,8 @@ interface PowerCardOverlayProps {
   battlePassIntroAlreadySeen?: boolean;
   /** When true, delay auto-opening the season intro (e.g. Season 0 welcome modal is open) */
   deferBattlePassIntroAuto?: boolean;
+  /** Admin kill-switch: when false, never auto-open BP intro (manual replay still works). */
+  enableBattlePassIntroAuto?: boolean;
   /** Called whenever the season intro modal closes (Done, Close, backdrop, Escape) so we can mark seen */
   onBattlePassIntroDismissed?: () => void | Promise<void>;
   /** When false, do not auto-open intro (wait until Home has loaded `students` + active season) */
@@ -74,6 +76,7 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
   deployedBattlePassSeasonId,
   battlePassIntroAlreadySeen,
   deferBattlePassIntroAuto,
+  enableBattlePassIntroAuto = true,
   onBattlePassIntroDismissed,
   battlePassIntroStateReady = false,
 }) => {
@@ -101,6 +104,7 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
   }, [deployedBattlePassSeasonId, battlePassIntroAlreadySeen]);
 
   useEffect(() => {
+    if (enableBattlePassIntroAuto === false) return;
     if (battlePassIntroStateReady !== true) return;
     if (deferBattlePassIntroAuto) return;
     if (!deployedBattlePassActive || !battlePassIntroAvailable) return;
@@ -110,6 +114,7 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
     battlePassIntroAutoOpenedRef.current = true;
     setShowBattlePassIntroModal(true);
   }, [
+    enableBattlePassIntroAuto,
     battlePassIntroStateReady,
     deferBattlePassIntroAuto,
     deployedBattlePassActive,

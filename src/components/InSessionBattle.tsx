@@ -69,9 +69,7 @@ import {
   trackElimination,
   trackParticipation,
   getSessionSummary,
-  claimLiveEventSessionEndPendingPp,
-  claimLiveEventSessionEndPowerAndBattlePass,
-  claimLiveEventSessionEndWinChallenge,
+  claimAllLiveEventSessionEndRewards,
   LIVE_EVENT_PP_PER_PARTICIPATION_POINT,
 } from '../utils/inSessionStatsService';
 import { debug, debugError, debugThrottle } from '../utils/inSessionDebug';
@@ -1018,9 +1016,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       if (session.status === 'ended') {
         debug('inSessionBattle', `Session ${sessionId} ended, opening summary if needed...`);
         if (currentUser?.uid) {
-          void claimLiveEventSessionEndPendingPp(sessionId, currentUser.uid);
-          void claimLiveEventSessionEndPowerAndBattlePass(sessionId, currentUser.uid);
-          void claimLiveEventSessionEndWinChallenge(sessionId, currentUser.uid);
+          void claimAllLiveEventSessionEndRewards(sessionId, currentUser.uid);
         }
         void showLiveEventSummaryIfEnded(session as { status?: string; sessionSummary?: SessionSummary });
       }
@@ -1986,7 +1982,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         students.find(s => s.id === userId)?.displayName ||
         'Player';
 
-      // Track participation first (+ session powerPoints for MST MKT) so our follow-up merge does not overwrite PP.
+      // Track participation first (+ session powerPoints for MST MKT).
+      // trackParticipation already bumps players[].participationCount / movesEarned / powerPoints —
+      // do not add a second +1 here or moves/PP double-count.
       await trackParticipation(sessionId, userId, 1, { playerDisplayName: playerName });
 
       const freshSnap = await getDoc(sessionRef);
@@ -1997,18 +1995,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       let updatedPlayers: SessionPlayer[];
 
       if (existingPlayer) {
-        updatedPlayers = freshPlayers.map(p => {
-          if (p.userId === userId) {
-            const newParticipationCount = (p.participationCount || 0) + 1;
-            const newMovesEarned = Math.floor(newParticipationCount / 1);
-            return {
-              ...p,
-              participationCount: newParticipationCount,
-              movesEarned: newMovesEarned,
-            };
-          }
-          return p;
-        });
+        // Row already updated by trackParticipation — keep list as-is for battle log name lookup
+        updatedPlayers = freshPlayers;
       } else {
         const student = students.find(s => s.id === userId);
         if (!student) return;
@@ -2020,18 +2008,24 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         const displayName = latestProfile?.displayName || userData.displayName || student.displayName;
         const photoURL = latestProfile?.photoURL || userData.photoURL || student.photoURL;
 
-        const basePp = student.powerPoints || 0;
-        const newPlayer: SessionPlayer = {
-          userId: student.id,
-          displayName,
-          photoURL,
-          level: student.level || getLevelFromXP(student.xp || 0) || 1,
-          powerPoints: basePp + LIVE_EVENT_PP_PER_PARTICIPATION_POINT,
-          participationCount: 1,
-          movesEarned: 1,
-        };
+        // If trackParticipation created the row, prefer that; otherwise seed a participant row.
+        const already = freshPlayers.find((p) => p.userId === userId);
+        if (already) {
+          updatedPlayers = freshPlayers;
+        } else {
+          const basePp = student.powerPoints || 0;
+          const newPlayer: SessionPlayer = {
+            userId: student.id,
+            displayName,
+            photoURL,
+            level: student.level || getLevelFromXP(student.xp || 0) || 1,
+            powerPoints: basePp + LIVE_EVENT_PP_PER_PARTICIPATION_POINT,
+            participationCount: 1,
+            movesEarned: 1,
+          };
 
-        updatedPlayers = [...freshPlayers, newPlayer];
+          updatedPlayers = [...freshPlayers, newPlayer];
+        }
       }
 
       const updatedPlayer = updatedPlayers.find(p => p.userId === userId);
@@ -2039,7 +2033,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       const updatedLog = [...(freshData.battleLog || []), newLogEntry];
 
       await updateDoc(sessionRef, {
-        players: updatedPlayers,
+        ...(existingPlayer ? {} : { players: updatedPlayers }),
         battleLog: updatedLog,
         updatedAt: serverTimestamp(),
       });
@@ -4784,6 +4778,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             />
             Hide classmates not in this event
           </label>
+          {!showOnlyJoinedPlayersInRoster && notInSessionCount > 0 ? (
+            <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
+              Showing full class · {notInSessionCount} not logged into Live Event (still trackable in Sprint)
+            </span>
+          ) : null}
           {showOnlyJoinedPlayersInRoster && notInSessionCount > 0 ? (
             <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
               Showing {rosterForPlayerColumns.length} joined · {notInSessionCount} hidden

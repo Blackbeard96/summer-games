@@ -151,6 +151,12 @@ const InSessionCreate: React.FC = () => {
       };
 
       const docRef = await addDoc(collection(db, 'inSessionRooms'), roomData);
+      try {
+        const { upsertLiveEventSessionStub } = await import('../utils/liveEventHistoryService');
+        await upsertLiveEventSessionStub(docRef.id, roomData as unknown as Record<string, unknown>);
+      } catch (stubErr) {
+        console.warn('Live Event history stub failed (non-fatal)', stubErr);
+      }
       navigate(`/in-session/room/${docRef.id}`);
     } catch (error) {
       console.error('Error creating room:', error);

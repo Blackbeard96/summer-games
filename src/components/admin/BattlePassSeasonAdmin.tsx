@@ -28,6 +28,7 @@ import { uploadBattlePassSeasonHeroVideo } from '../../utils/battlePassStorage';
 
 const LINKED_GAME_SEASON_PRESETS: { key: string; label: string }[] = [
   { key: '', label: 'Not linked' },
+  { key: 'season_0', label: 'Season 0 — Timu Island' },
   { key: 'season_1', label: 'Season 1 — Flow & Energy' },
   { key: 'season_2', label: 'Season 2' },
   { key: 'season_3', label: 'Season 3' },
@@ -425,12 +426,14 @@ const BattlePassSeasonAdmin: React.FC = () => {
 
   return (
     <div
+      className="mst-battle-pass-admin mst-light-surface"
       style={{
         marginTop: 24,
         border: '1px solid #c7d2fe',
         borderRadius: 12,
         padding: '1.25rem',
         background: '#eef2ff',
+        color: '#0f172a',
       }}
     >
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -440,7 +443,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
             type="button"
             onClick={load}
             disabled={saving}
-            style={{ padding: '0.45rem 0.9rem', borderRadius: 8, border: '1px solid #6366f1', background: '#fff', cursor: 'pointer' }}
+            style={{ padding: '0.45rem 0.9rem', borderRadius: 8, border: '1px solid #6366f1', background: '#fff', color: '#0f172a', cursor: 'pointer' }}
           >
             Refresh
           </button>
@@ -465,10 +468,11 @@ const BattlePassSeasonAdmin: React.FC = () => {
       <p style={{ color: '#4338ca', fontSize: '0.9rem', lineHeight: 1.5, marginTop: 8 }}>
         Each battle pass is a document in <code>seasons/&#123;id&#125;</code> with tiers, XP thresholds, fixed rewards, and
         optional <strong>choice groups</strong> (player picks N of the options you list). Rewards support XP, PP, artifacts,
-        items, and action cards. Link a pass to a <strong>game season</strong> below so players and tools know which
-        content season it belongs to. <strong>Save battle pass</strong> (in the editor) writes to Firestore;{' '}
-        <strong>Deploy as active</strong> sets this pass as the only active one and updates{' '}
-        <code>adminSettings/season1.activeBattlePassSeasonId</code>.
+        items, and action cards. This list includes <strong>Season 0</strong> (Timu Island legacy pass) and every Season 1+
+        pass. Link a pass to a <strong>game season</strong> below so players and tools know which content season it belongs
+        to. <strong>Save battle pass</strong> (in the editor) writes to Firestore; <strong>Deploy as active</strong> sets
+        this pass as the only active one and updates <code>adminSettings/season1.activeBattlePassSeasonId</code>. Keep
+        Season 1 deployed unless you intentionally switch the live Meta State pass.
       </p>
       <p
         style={{
@@ -509,7 +513,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 260px) 1fr', gap: 20, marginTop: 16 }}>
         <div style={{ background: '#fff', borderRadius: 10, padding: 12, border: '1px solid #e0e7ff', maxHeight: 420, overflowY: 'auto' }}>
           {seasons.length === 0 ? (
-            <div style={{ color: '#64748b', fontSize: '0.9rem' }}>No battle passes yet. Create one.</div>
+            <div style={{ color: '#334155', fontSize: '0.9rem' }}>No battle passes yet. Create one.</div>
           ) : (
             <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
               {seasons.map((s) => (
@@ -529,8 +533,8 @@ const BattlePassSeasonAdmin: React.FC = () => {
                     }}
                   >
                     <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1e1b4b' }}>{s.name}</div>
-                    <div style={{ fontSize: '0.75rem', color: '#64748b', wordBreak: 'break-all' }}>{s.id}</div>
-                    <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: 2 }}>
+                    <div style={{ fontSize: '0.75rem', color: '#334155', wordBreak: 'break-all' }}>{s.id}</div>
+                    <div style={{ fontSize: '0.7rem', color: '#475569', marginTop: 2 }}>
                       {s.linkedGameSeasonKey ? `Season: ${s.linkedGameSeasonKey}` : 'No season link'} · {s.tiers.length} tiers ·{' '}
                       {seasonRewardListStats(s.tiers)}
                     </div>
@@ -539,6 +543,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                         style={{
                           display: 'inline-block',
                           marginTop: 4,
+                          marginRight: 4,
                           fontSize: '0.65rem',
                           fontWeight: 800,
                           color: '#059669',
@@ -550,6 +555,22 @@ const BattlePassSeasonAdmin: React.FC = () => {
                         ACTIVE
                       </span>
                     )}
+                    {(s.id === 'season_0' || s.linkedGameSeasonKey === 'season_0') && (
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          marginTop: 4,
+                          fontSize: '0.65rem',
+                          fontWeight: 800,
+                          color: '#92400e',
+                          background: '#fef3c7',
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                        }}
+                      >
+                        SEASON 0
+                      </span>
+                    )}
                   </button>
                 </li>
               ))}
@@ -559,7 +580,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
 
         <div style={{ background: '#fff', borderRadius: 10, padding: 16, border: '1px solid #e0e7ff', minHeight: 320 }}>
           {!draft ? (
-            <div style={{ color: '#64748b' }}>Select a battle pass or create a new one.</div>
+            <div style={{ color: '#334155' }}>Select a battle pass or create a new one.</div>
           ) : (
             <>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
@@ -628,28 +649,28 @@ const BattlePassSeasonAdmin: React.FC = () => {
                 )}
               </div>
 
-              <label style={{ display: 'block', marginBottom: 10 }}>
-                <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Battle pass document ID</span>
+              <label style={{ display: 'block', marginBottom: 10, color: '#0f172a' }}>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a' }}>Battle pass document ID</span>
                 <input
                   value={draft.id}
                   readOnly
-                  style={{ display: 'block', width: '100%', marginTop: 4, padding: 8, borderRadius: 8, border: '1px solid #cbd5e1', background: '#f1f5f9' }}
+                  style={{ display: 'block', width: '100%', marginTop: 4, padding: 8, borderRadius: 8, border: '1px solid #94a3b8', background: '#e2e8f0', color: '#0f172a' }}
                 />
               </label>
-              <label style={{ display: 'block', marginBottom: 10 }}>
-                <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Name</span>
+              <label style={{ display: 'block', marginBottom: 10, color: '#0f172a' }}>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a' }}>Name</span>
                 <input
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                  style={{ display: 'block', width: '100%', marginTop: 4, padding: 8, borderRadius: 8, border: '1px solid #cbd5e1' }}
+                  style={{ display: 'block', width: '100%', marginTop: 4, padding: 8, borderRadius: 8, border: '1px solid #94a3b8', color: '#0f172a', background: '#fff' }}
                 />
               </label>
-              <label style={{ display: 'block', marginBottom: 10 }}>
-                <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Theme</span>
+              <label style={{ display: 'block', marginBottom: 10, color: '#0f172a' }}>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a' }}>Theme</span>
                 <input
                   value={draft.theme}
                   onChange={(e) => setDraft({ ...draft, theme: e.target.value })}
-                  style={{ display: 'block', width: '100%', marginTop: 4, padding: 8, borderRadius: 8, border: '1px solid #cbd5e1' }}
+                  style={{ display: 'block', width: '100%', marginTop: 4, padding: 8, borderRadius: 8, border: '1px solid #94a3b8', color: '#0f172a', background: '#fff' }}
                 />
               </label>
 
@@ -665,7 +686,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                 <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a', marginBottom: 6 }}>
                   Season intro video (optional)
                 </div>
-                <p style={{ margin: '0 0 10px', fontSize: '0.75rem', color: '#64748b', lineHeight: 1.45 }}>
+                <p style={{ margin: '0 0 10px', fontSize: '0.75rem', color: '#334155', lineHeight: 1.45 }}>
                   Legacy fallback: used only when you have <strong>no</strong> intro sequence below. If you use slides + video
                   steps, add your video there (e.g. slide first, then video) and clear this field so players do not see the
                   same video twice.
@@ -702,7 +723,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                     <div style={{ height: 6, background: '#e2e8f0', borderRadius: 4, overflow: 'hidden' }}>
                       <div style={{ height: '100%', width: `${heroIntroProgress}%`, background: '#4f46e5' }} />
                     </div>
-                    <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{heroIntroProgress}%</span>
+                    <span style={{ fontSize: '0.75rem', color: '#334155' }}>{heroIntroProgress}%</span>
                   </div>
                 ) : null}
                 <label style={{ display: 'block', marginBottom: 6 }}>
@@ -769,7 +790,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
               />
 
               <label style={{ display: 'block', marginBottom: 10 }}>
-                <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Description</span>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a' }}>Description</span>
                 <textarea
                   value={draft.description}
                   onChange={(e) => setDraft({ ...draft, description: e.target.value })}
@@ -779,7 +800,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
               </label>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 10 }}>
                 <label style={{ display: 'block' }}>
-                  <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Link to game season</span>
+                  <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a' }}>Link to game season</span>
                   <select
                     value={
                       !draft.linkedGameSeasonKey
@@ -813,7 +834,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                   </select>
                 </label>
                 <label style={{ display: 'block' }}>
-                  <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Custom season key (if selected)</span>
+                  <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a' }}>Custom season key (if selected)</span>
                   <input
                     value={
                       draft.linkedGameSeasonKey && !PRESET_KEYS.has(draft.linkedGameSeasonKey)
@@ -840,7 +861,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 10 }}>
                 <label>
-                  <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Start</span>
+                  <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a' }}>Start</span>
                   <input
                     type="datetime-local"
                     value={dateToDatetimeLocalValue(coerceDate(draft.startAt))}
@@ -849,7 +870,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                   />
                 </label>
                 <label>
-                  <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>End</span>
+                  <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a' }}>End</span>
                   <input
                     type="datetime-local"
                     value={dateToDatetimeLocalValue(coerceDate(draft.endAt))}
@@ -858,30 +879,30 @@ const BattlePassSeasonAdmin: React.FC = () => {
                   />
                 </label>
               </div>
-              <label style={{ display: 'block', marginBottom: 10 }}>
-                <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Featured hero (e.g. Kon)</span>
+              <label style={{ display: 'block', marginBottom: 10, color: '#0f172a' }}>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a' }}>Featured hero (e.g. Kon)</span>
                 <input
                   value={draft.featuredHero || ''}
                   onChange={(e) => setDraft({ ...draft, featuredHero: e.target.value.trim() || undefined })}
-                  style={{ display: 'block', width: '100%', marginTop: 4, padding: 8, borderRadius: 8, border: '1px solid #cbd5e1' }}
+                  style={{ display: 'block', width: '100%', marginTop: 4, padding: 8, borderRadius: 8, border: '1px solid #94a3b8', color: '#0f172a', background: '#fff' }}
                 />
               </label>
-              <label style={{ display: 'block', marginBottom: 14 }}>
-                <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Home banner image URL</span>
+              <label style={{ display: 'block', marginBottom: 14, color: '#0f172a' }}>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a' }}>Home banner image URL</span>
                 <input
                   value={draft.homeBannerImage || ''}
                   onChange={(e) => setDraft({ ...draft, homeBannerImage: e.target.value.trim() || undefined })}
                   placeholder="https://…"
-                  style={{ display: 'block', width: '100%', marginTop: 4, padding: 8, borderRadius: 8, border: '1px solid #cbd5e1' }}
+                  style={{ display: 'block', width: '100%', marginTop: 4, padding: 8, borderRadius: 8, border: '1px solid #94a3b8', color: '#0f172a', background: '#fff' }}
                 />
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, color: '#0f172a' }}>
                 <input
                   type="checkbox"
                   checked={draft.active}
                   onChange={(e) => setDraft({ ...draft, active: e.target.checked })}
                 />
-                <span style={{ fontWeight: 600 }}>Marked active (use Deploy for exclusive active)</span>
+                <span style={{ fontWeight: 700, color: '#0f172a' }}>Marked active (use Deploy for exclusive active)</span>
               </label>
 
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
@@ -890,7 +911,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                   <button
                     type="button"
                     onClick={addTier}
-                    style={{ padding: '0.35rem 0.75rem', borderRadius: 8, border: '1px solid #6366f1', background: '#fff', cursor: 'pointer' }}
+                    style={{ padding: '0.35rem 0.75rem', borderRadius: 8, border: '1px solid #6366f1', background: '#fff', color: '#0f172a', cursor: 'pointer' }}
                   >
                     + Add tier
                   </button>
@@ -913,7 +934,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                   Bulk-add empty tiers (XP = last tier’s XP + step × n; then add rewards per tier)
                 </div>
                 <label style={{ flex: '0 0 88px' }}>
-                  <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b' }}>Count</span>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#334155' }}>Count</span>
                   <input
                     type="number"
                     min={1}
@@ -924,7 +945,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                   />
                 </label>
                 <label style={{ flex: '0 0 100px' }}>
-                  <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b' }}>XP step</span>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#334155' }}>XP step</span>
                   <input
                     type="number"
                     min={1}
@@ -936,7 +957,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                 <button
                   type="button"
                   onClick={addMultipleTiers}
-                  style={{ padding: '0.45rem 0.85rem', borderRadius: 8, border: '1px solid #0d9488', background: '#ccfbf1', cursor: 'pointer', fontWeight: 700 }}
+                  style={{ padding: '0.45rem 0.85rem', borderRadius: 8, border: '1px solid #0d9488', background: '#ccfbf1', color: '#0f172a', cursor: 'pointer', fontWeight: 700 }}
                 >
                   Add tiers
                 </button>
@@ -992,7 +1013,15 @@ const BattlePassSeasonAdmin: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => addReward(tier.id)}
-                      style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #6366f1', background: '#eef2ff', cursor: 'pointer' }}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 6,
+                        border: '1px solid #6366f1',
+                        background: '#eef2ff',
+                        color: '#0f172a',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                      }}
                     >
                       + Reward
                     </button>
@@ -1004,6 +1033,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                         borderRadius: 6,
                         border: '1px solid #7c3aed',
                         background: '#f5f3ff',
+                        color: '#0f172a',
                         cursor: 'pointer',
                         fontWeight: 600,
                       }}
@@ -1012,7 +1042,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                     </button>
                   </div>
                   {tier.rewards.length === 0 ? (
-                    <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
+                    <div style={{ fontSize: '0.85rem', color: '#334155' }}>
                       No rewards — add a fixed reward or a <strong>choice group</strong> (player picks 1 or more options you
                       define).
                     </div>
@@ -1051,7 +1081,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                               }}
                             >
                               <label>
-                                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b' }}>Pick count</span>
+                                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#334155' }}>Pick count</span>
                                 <input
                                   type="number"
                                   min={1}
@@ -1072,7 +1102,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                                 />
                               </label>
                               <label style={{ gridColumn: 'span 2' }}>
-                                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b' }}>
+                                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#334155' }}>
                                   Group title (optional)
                                 </span>
                                 <input
@@ -1094,7 +1124,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                                 />
                               </label>
                               <label style={{ gridColumn: '1 / -1' }}>
-                                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b' }}>Group description</span>
+                                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#334155' }}>Group description</span>
                                 <input
                                   value={entry.description}
                                   onChange={(e) => updateChoiceGroupMeta(tier.id, entry.id, { description: e.target.value })}
@@ -1133,8 +1163,10 @@ const BattlePassSeasonAdmin: React.FC = () => {
                                   borderRadius: 6,
                                   border: '1px solid #6366f1',
                                   background: '#eef2ff',
+                                  color: '#0f172a',
                                   cursor: 'pointer',
                                   fontSize: '0.85rem',
+                                  fontWeight: 600,
                                 }}
                               >
                                 + Option in this group
@@ -1176,7 +1208,7 @@ const BattlePassSeasonAdmin: React.FC = () => {
                   )}
                 </div>
               ))}
-              <p style={{ fontSize: '0.8rem', color: '#64748b', marginTop: 12 }}>
+              <p style={{ fontSize: '0.8rem', color: '#334155', marginTop: 12 }}>
                 Action card rewards use the seed catalog above; ids: <code style={{ fontSize: '0.75rem' }}>{skillCardIds}</code>
               </p>
             </>

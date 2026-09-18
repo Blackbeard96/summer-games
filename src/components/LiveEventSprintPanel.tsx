@@ -9,7 +9,7 @@ import {
   grantClassFlowSprintRewards,
   applyClassFlowSprintIncompletePenalties,
 } from '../utils/liveEventSprintService';
-import { mergeSprintRosterForClassFlow } from '../utils/classFlowSprintRosterService';
+import { mergeSprintRosterForClassFlow, fetchClassroomStudentRoster } from '../utils/classFlowSprintRosterService';
 import LiveEventWeeklyDeliverableMarkPanel from './LiveEventWeeklyDeliverableMarkPanel';
 
 export interface LiveEventSprintPanelProps {
@@ -60,6 +60,41 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
   const [incompletePenaltyVaultPP, setIncompletePenaltyVaultPP] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [fetchedClassRoster, setFetchedClassRoster] = useState<
+    { userId: string; displayName: string }[] | null
+  >(null);
+  const [rosterLoading, setRosterLoading] = useState(false);
+
+  // Harden full-class tracking: if parent didn't pass roster, load classroom.students by classId
+  // so paper / offline formative students still appear for host checkmarks.
+  useEffect(() => {
+    if (classStudentRoster && classStudentRoster.length > 0) {
+      setFetchedClassRoster(null);
+      return;
+    }
+    const cid = typeof classId === 'string' ? classId.trim() : '';
+    if (!cid || !isSessionHost) return;
+    let cancelled = false;
+    setRosterLoading(true);
+    fetchClassroomStudentRoster(cid)
+      .then((rows) => {
+        if (!cancelled) setFetchedClassRoster(rows.length > 0 ? rows : null);
+      })
+      .catch(() => {
+        if (!cancelled) setFetchedClassRoster(null);
+      })
+      .finally(() => {
+        if (!cancelled) setRosterLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [classId, classStudentRoster, isSessionHost]);
+
+  const effectiveClassRoster =
+    classStudentRoster && classStudentRoster.length > 0
+      ? classStudentRoster
+      : fetchedClassRoster;
 
   useEffect(() => {
     if (!sprint || sprint.status !== 'live') return;
@@ -76,10 +111,11 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
   const timerExpired = sprint && sprint.status === 'live' && remainingSec <= 0;
 
   const sprintRosterRows = useMemo(
-    () => mergeSprintRosterForClassFlow(classStudentRoster, sessionPlayers),
-    [classStudentRoster, sessionPlayers]
+    () => mergeSprintRosterForClassFlow(effectiveClassRoster, sessionPlayers),
+    [effectiveClassRoster, sessionPlayers]
   );
-  const showPresenceBadges = Boolean(classStudentRoster && classStudentRoster.length > 0);
+  const showPresenceBadges = Boolean(effectiveClassRoster && effectiveClassRoster.length > 0);
+  const offlineCount = sprintRosterRows.filter((r) => !r.isInSession).length;
 
   const playerNames = useMemo(() => {
     const m = new Map<string, string>();
@@ -260,7 +296,12 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
         )}
       </div>
       <p style={{ margin: '0.5rem 0 0.75rem', fontSize: '0.85rem', opacity: 0.92, lineHeight: 1.45 }}>
-        Host sets a timed goal and checks off students who finish on time. The list includes the whole class when a roster is available; “In session” means the student is currently in this live room. Rewards (session PP, moves, participation stats, and optional vault PP / XP) apply as soon as a student is checked—no separate award step required. Use “Award pending” only to catch anyone who was marked before this update or if a grant failed. Optionally set an incomplete penalty: after the sprint, use “Apply incomplete penalty” to deduct vault PP from everyone on the class roster (or in-session only if no class is linked) who is still unchecked (host excluded).
+        Host sets a timed goal and checks off students who finish. The checklist includes the{' '}
+        <strong>full class roster</strong> — students do <strong>not</strong> need to be logged into the Live Event
+        (paper formative / offline OK). “Not in session” means they never joined the room; you can still mark them and
+        they receive vault PP / XP / participation credit. Rewards apply as soon as you check someone off. Use “Award
+        pending” only if a grant failed. Optional incomplete penalty deducts vault PP from unchecked class students
+        (host excluded).
         {classId && goalSettingAssessmentId?.trim() ? (
           <>
             {' '}
@@ -480,7 +521,16 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
             </div>
           )}
 
-          <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ maxHeight: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {isSessionHost && (
+              <div style={{ fontSize: '0.75rem', opacity: 0.9, marginBottom: 2 }}>
+                {rosterLoading
+                  ? 'Loading class roster…'
+                  : `${sprintRosterRows.length} students on checklist${
+                      showPresenceBadges ? ` · ${offlineCount} not in Live Event` : ''
+                    }`}
+              </div>
+            )}
             {sprintRosterRows.map((p) => {
               const isMarked = marked.has(p.userId);
               const isPaid = granted.has(p.userId);

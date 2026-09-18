@@ -293,14 +293,15 @@ export async function trackElimination(
     }
 
     await runTransaction(db, async (transaction) => {
-      // Increment eliminator's elimination count and add PP (base + vault)
+      // Increment eliminator's elimination count and add PP (base + vault).
+      // Do NOT mark vaultPpGrantedMidSession here — only after account credit succeeds,
+      // otherwise a failed host write would steal the payout from session-end claim.
       const eliminatorStatsDoc = await transaction.get(eliminatorStatsRef);
       if (eliminatorStatsDoc.exists()) {
         const eliminatorStats = eliminatorStatsDoc.data() as SessionStats;
         transaction.update(eliminatorStatsRef, {
           eliminations: (eliminatorStats.eliminations || 0) + 1,
           ppEarned: (eliminatorStats.ppEarned || 0) + ppFromElimination,
-          vaultPpGrantedMidSession: increment(ppFromElimination),
         });
       } else {
         // Ensure elim credit is never silently dropped if stats weren't created yet
@@ -310,7 +311,7 @@ export async function trackElimination(
             playerId: eliminatorId,
             eliminations: 1,
             ppEarned: ppFromElimination,
-            vaultPpGrantedMidSession: ppFromElimination,
+            vaultPpGrantedMidSession: 0,
             participationEarned: 0,
             movesEarned: 0,
             updatedAt: serverTimestamp(),
@@ -343,6 +344,7 @@ export async function trackElimination(
     // Grant PP to eliminator's account (students, users, vault) so they actually receive +500 (and vault PP)
     try {
       await creditPPToStudentUserVault(eliminatorId, ppFromElimination);
+      await addVaultPpGrantedMidSessionStat(sessionId, eliminatorId, ppFromElimination);
 
       void trackPlayerAction(eliminatorId, 'EARN_PP', ppFromElimination).catch((err) =>
         console.error('[inSessionStats] earn_pp daily challenge after elimination:', err)
@@ -366,7 +368,17 @@ export async function trackElimination(
         tx.update(sessionRef, { players, updatedAt: serverTimestamp() });
       });
     } catch (grantError) {
-      debugError('inSessionStats', `Error granting PP to eliminator ${eliminatorId}`, grantError);
+      debugError(
+        'inSessionStats',
+        `Error granting mid-session PP to eliminator ${eliminatorId} — leaving for session-end self-claim`,
+        grantError
+      );
+      try {
+        const { registerLiveEventPendingClaim } = await import('./liveEventPendingClaimsService');
+        await registerLiveEventPendingClaim(sessionId, eliminatorId);
+      } catch {
+        /* non-fatal */
+      }
     }
 
     debug('inSessionStats', `Tracked elimination: ${eliminatorId} eliminated ${eliminatedId} (+${ppFromElimination} PP = 500 + ${eliminatedVaultPP} vault)`);
@@ -511,19 +523,32 @@ async function deductPPFromStudentUserVault(userId: string, amount: number): Pro
 /** Credits PP to students / users / vault (vault currentPP clamped to capacity). */
 export async function creditPPToStudentUserVault(userId: string, amount: number): Promise<void> {
   if (amount <= 0) return;
-  try {
-    const studentRef = doc(db, 'students', userId);
-    const userRef = doc(db, 'users', userId);
-    const vaultRef = doc(db, 'vaults', userId);
+  const studentRef = doc(db, 'students', userId);
+  const userRef = doc(db, 'users', userId);
+  const vaultRef = doc(db, 'vaults', userId);
 
+  // Students doc is authoritative — fail fast before vault/users so a host permission
+  // denial does not partially credit and still leave session-end to double-pay vault.
+  try {
     const studentDoc = await getDoc(studentRef);
     if (studentDoc.exists()) {
       await updateDoc(studentRef, { powerPoints: increment(amount) });
     }
+  } catch (e) {
+    debugError('inSessionStats', `creditPP students failed for ${userId}`, e);
+    throw e;
+  }
+
+  try {
     const userDoc = await getDoc(userRef);
     if (userDoc.exists()) {
       await updateDoc(userRef, { powerPoints: increment(amount) });
     }
+  } catch (e) {
+    debugError('inSessionStats', `creditPP users failed for ${userId} (students already credited)`, e);
+  }
+
+  try {
     const vaultDoc = await getDoc(vaultRef);
     if (vaultDoc.exists()) {
       const v = vaultDoc.data();
@@ -531,11 +556,11 @@ export async function creditPPToStudentUserVault(userId: string, amount: number)
       const cap = v?.capacity ?? 1000;
       await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + amount) });
     }
-    debug('inSessionStats', `Credited ${amount} PP to accounts for ${userId}`);
   } catch (e) {
-    debugError('inSessionStats', `creditPPToStudentUserVault failed for ${userId}`, e);
-    throw e;
+    debugError('inSessionStats', `creditPP vault failed for ${userId} (students already credited)`, e);
   }
+
+  debug('inSessionStats', `Credited ${amount} PP to accounts for ${userId}`);
 }
 
 /**
@@ -1070,15 +1095,27 @@ export async function finalizeSessionStats(
       const alreadyVault = st.vaultPpGrantedMidSession ?? 0;
       const net = st.netPPGained ?? 0;
       const transfer = Math.max(0, net - alreadyVault);
-      if (transfer <= 0) continue;
+      const priorPending =
+        typeof st.sessionEndAccountPpPending === 'number' && st.sessionEndAccountPpPending > 0
+          ? st.sessionEndAccountPpPending
+          : 0;
+      const totalPending = priorPending + transfer;
+      if (totalPending <= 0) continue;
       try {
         const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
         const snap = await getDoc(statsRef);
         if (!snap.exists()) continue;
-        await updateDoc(statsRef, { sessionEndAccountPpPending: transfer });
+        // Preserve mid-session queued amounts (e.g. sprint vault PP host could not write to students/).
+        const livePrior =
+          typeof (snap.data() as SessionStats).sessionEndAccountPpPending === 'number'
+            ? Math.max(0, Number((snap.data() as SessionStats).sessionEndAccountPpPending) || 0)
+            : priorPending;
+        await updateDoc(statsRef, {
+          sessionEndAccountPpPending: livePrior + transfer,
+        });
         debug(
           'inSessionStats',
-          `Live event end: stored ${transfer} PP pending claim (net ${net} − mid-session vault ${alreadyVault}) for ${playerId}`
+          `Live event end: stored ${livePrior + transfer} PP pending claim (prior ${livePrior} + transfer ${transfer}; net ${net} − mid-session vault ${alreadyVault}) for ${playerId}`
         );
       } catch (e) {
         debugError('inSessionStats', `Live event end pending PP write failed for ${playerId}`, e);
@@ -1167,11 +1204,23 @@ export async function finalizeSessionStats(
       }
     }
 
-    for (const playerId of Array.from(new Set(rewardPlayerIds))) {
+    for (const playerId of sessionEndPayoutIds) {
+      // Host cannot write other students' dailyChallenges — queue for self-claim.
       try {
-        await trackPlayerAction(playerId, 'LIVE_EVENT_SESSION_FINALIZED', 1);
+        const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
+        await setDoc(
+          statsRef,
+          { sessionEndParticipateChallengePending: true },
+          { merge: true }
+        );
       } catch (e) {
-        debugError('inSessionStats', 'LIVE_EVENT_SESSION_FINALIZED trackPlayerAction', e);
+        debugError('inSessionStats', 'queue participate challenge pending failed', e);
+      }
+      try {
+        const { registerLiveEventPendingClaim } = await import('./liveEventPendingClaimsService');
+        await registerLiveEventPendingClaim(sessionId, playerId);
+      } catch (e) {
+        debugError('inSessionStats', 'registerLiveEventPendingClaim failed', e);
       }
     }
 
@@ -1366,6 +1415,15 @@ export async function finalizeSessionStats(
       status: 'ended',
       totalPlayers: summary.totalPlayers,
     });
+
+    // Permanent Admin history archive (non-fatal — never block session end)
+    try {
+      const { archiveLiveEventSession } = await import('./liveEventHistoryService');
+      await archiveLiveEventSession(sessionId, summary, sessionData);
+      debug('inSessionStats', 'Live Event history archived', { sessionId });
+    } catch (histErr) {
+      debugError('inSessionStats', 'Live Event history archive failed (non-fatal)', histErr);
+    }
 
     if (liveEventQuizRankByPlayer && Object.keys(liveEventQuizRankByPlayer).length > 0) {
       try {
@@ -1593,6 +1651,82 @@ export async function claimLiveEventSessionEndWinChallenge(
       debugError('inSessionStats', `Failed to restore pending win challenge after claim error for ${playerId}`, restoreErr);
     }
     return false;
+  }
+}
+
+/**
+ * Self-claim participate_live_event daily challenge credit queued at session finalize.
+ * Idempotent via sessionEndParticipateChallengeClaimedAt + dailyChallengeEvents sourceId.
+ */
+export async function claimLiveEventSessionEndParticipateChallenge(
+  sessionId: string,
+  playerId: string
+): Promise<boolean> {
+  const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
+  let reserved = false;
+  try {
+    reserved = await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(statsRef);
+      if (!snap.exists()) return false;
+      const d = snap.data() as SessionStats;
+      if (d.sessionEndParticipateChallengeClaimedAt) return false;
+      if (!d.sessionEndParticipateChallengePending) return false;
+      transaction.update(statsRef, {
+        sessionEndParticipateChallengePending: deleteField(),
+        sessionEndParticipateChallengeClaimedAt: serverTimestamp(),
+      });
+      return true;
+    });
+  } catch (e) {
+    debugError(
+      'inSessionStats',
+      `claimLiveEventSessionEndParticipateChallenge transaction failed for ${playerId}`,
+      e
+    );
+    return false;
+  }
+
+  if (!reserved) return false;
+
+  try {
+    await trackPlayerAction(playerId, 'LIVE_EVENT_SESSION_FINALIZED', 1);
+    debug('inSessionStats', `Claimed participate_live_event for ${playerId} session ${sessionId}`);
+    return true;
+  } catch (e) {
+    debugError('inSessionStats', `claimLiveEventSessionEndParticipateChallenge apply failed for ${playerId}`, e);
+    try {
+      await updateDoc(statsRef, {
+        sessionEndParticipateChallengePending: true,
+        sessionEndParticipateChallengeClaimedAt: deleteField(),
+      });
+    } catch (restoreErr) {
+      debugError(
+        'inSessionStats',
+        `Failed to restore participate challenge pending for ${playerId}`,
+        restoreErr
+      );
+    }
+    return false;
+  }
+}
+
+/**
+ * Run every session-end self-claim for this player (PP, Power/BP, win, participate).
+ * Safe to call repeatedly — each claim is idempotent.
+ */
+export async function claimAllLiveEventSessionEndRewards(
+  sessionId: string,
+  playerId: string
+): Promise<void> {
+  await claimLiveEventSessionEndPendingPp(sessionId, playerId);
+  await claimLiveEventSessionEndPowerAndBattlePass(sessionId, playerId);
+  await claimLiveEventSessionEndWinChallenge(sessionId, playerId);
+  await claimLiveEventSessionEndParticipateChallenge(sessionId, playerId);
+  try {
+    const { markLiveEventPendingClaimSettled } = await import('./liveEventPendingClaimsService');
+    await markLiveEventPendingClaimSettled(sessionId, playerId);
+  } catch {
+    /* non-fatal */
   }
 }
 

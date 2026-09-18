@@ -23,6 +23,7 @@ import {
   type Season,
 } from '../types/season1';
 import type { BattlePassIntroStep } from '../types/missions';
+import { createSeason0BattlePassDefinition, SEASON_0_BATTLE_PASS_ID } from '../data/season0BattlePass';
 
 export const SEASONS_COLLECTION = 'seasons';
 
@@ -304,17 +305,45 @@ export function seasonToFirestoreWrite(season: Season): Record<string, unknown> 
 
 export function sortSeasonsList(list: Season[]): Season[] {
   return [...list].sort((a, b) => {
+    // Keep Season 0 visible near the top after the active pass
+    const a0 = a.id === SEASON_0_BATTLE_PASS_ID || a.linkedGameSeasonKey === 'season_0' ? 1 : 0;
+    const b0 = b.id === SEASON_0_BATTLE_PASS_ID || b.linkedGameSeasonKey === 'season_0' ? 1 : 0;
     if (a.active !== b.active) return a.active ? -1 : 1;
+    if (a0 !== b0) return b0 - a0;
     return coerceToDate(b.startAt).getTime() - coerceToDate(a.startAt).getTime();
   });
 }
 
+/**
+ * Ensure legacy Season 0 exists under `seasons/season_0` so Admin lists every battle pass.
+ * Does not overwrite an existing document (preserves admin edits). Never marks Season 0 active.
+ */
+export async function ensureSeason0BattlePassDocument(): Promise<Season> {
+  const ref = doc(db, SEASONS_COLLECTION, SEASON_0_BATTLE_PASS_ID);
+  const snap = await getDoc(ref);
+  if (snap.exists()) {
+    return parseSeasonFromFirestore(snap.id, snap.data() as Record<string, unknown>);
+  }
+  const season0 = createSeason0BattlePassDefinition();
+  await setDoc(ref, seasonToFirestoreWrite(season0), { merge: true });
+  return season0;
+}
+
 export async function listSeasons(): Promise<Season[]> {
+  try {
+    await ensureSeason0BattlePassDocument();
+  } catch (e) {
+    console.warn('[seasonFirestoreService] ensureSeason0BattlePassDocument failed', e);
+  }
   const snap = await getDocs(collection(db, SEASONS_COLLECTION));
   const list: Season[] = [];
   snap.forEach((docSnap) => {
     list.push(parseSeasonFromFirestore(docSnap.id, docSnap.data() as Record<string, unknown>));
   });
+  // If ensure failed (permissions), still surface a virtual Season 0 so Admin can see it
+  if (!list.some((s) => s.id === SEASON_0_BATTLE_PASS_ID)) {
+    list.push(createSeason0BattlePassDefinition());
+  }
   return sortSeasonsList(list);
 }
 

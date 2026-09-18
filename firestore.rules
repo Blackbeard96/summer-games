@@ -1099,7 +1099,9 @@ service cloud.firestore {
         // CPU definitions for mission / island raid battles (MissionRunner, IslandRaidBattle)
         settingId == 'cpuOpponentMoves' ||
         // Flow / battle pass pointers (activeBattlePassSeasonId, energyTickCap) — clients need read for Home BP UI
-        settingId == 'season1'
+        settingId == 'season1' ||
+        // Login / Home popup kill-switches — all clients read so toggles apply immediately
+        settingId == 'popupControls'
       );
       allow write: if request.auth != null && (isAdmin() || isAppAdminUser());
     }
@@ -1258,8 +1260,11 @@ service cloud.firestore {
       allow read: if request.auth != null && (
         resource.data.userId == request.auth.uid || isLiveEventStaff()
       );
-      allow create: if request.auth != null &&
-        request.resource.data.userId == request.auth.uid;
+      // Students write own evidence; staff may write for Live Event history/mastery backfill
+      allow create: if request.auth != null && (
+        request.resource.data.userId == request.auth.uid ||
+        isLiveEventStaff()
+      );
       allow update, delete: if isLiveEventStaff();
     }
 
@@ -1267,9 +1272,126 @@ service cloud.firestore {
       allow read: if request.auth != null && (
         resource.data.userId == request.auth.uid || isLiveEventStaff()
       );
-      allow create: if request.auth != null &&
-        request.resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null && (
+        request.resource.data.userId == request.auth.uid ||
+        isLiveEventStaff()
+      );
       allow update, delete: if isLiveEventStaff();
+    }
+
+    // Session-end reward claim index — host registers; player discovers + settles on Home/login.
+    match /liveEventPendingClaims/{claimId} {
+      allow read: if request.auth != null && (
+        isLiveEventStaff() ||
+        isAdmin() ||
+        isAppAdminUser() ||
+        resource.data.playerId == request.auth.uid
+      );
+      allow create: if request.auth != null && (
+        isLiveEventStaff() ||
+        isAdmin() ||
+        isAppAdminUser() ||
+        (
+          request.resource.data.keys().hasAll(['sessionId', 'playerId', 'status']) &&
+          request.resource.data.status == 'pending' &&
+          isInSessionRoomHost(request.resource.data.sessionId)
+        )
+      );
+      allow update: if request.auth != null && (
+        isLiveEventStaff() ||
+        isAdmin() ||
+        isAppAdminUser() ||
+        (
+          resource.data.playerId == request.auth.uid &&
+          request.resource.data.playerId == resource.data.playerId &&
+          request.resource.data.sessionId == resource.data.sessionId
+        ) ||
+        isInSessionRoomHost(resource.data.sessionId)
+      );
+      allow delete: if isLiveEventStaff() || isAdmin() || isAppAdminUser();
+    }
+
+    // Permanent Live Event History & Analytics (top-level; distinct from habitSubmissions/.../liveEventSessions)
+    match /liveEventSessions/{sessionId} {
+      allow read: if request.auth != null && (
+        isLiveEventStaff() ||
+        isAdmin() ||
+        isAppAdminUser()
+      );
+      allow create, update: if request.auth != null && (
+        isLiveEventStaff() ||
+        isInSessionRoomHost(sessionId) ||
+        isAdmin() ||
+        isAppAdminUser()
+      );
+      allow delete: if isAdmin() || isAppAdminUser();
+
+      match /participants/{userId} {
+        allow read: if request.auth != null && (
+          isLiveEventStaff() ||
+          isAdmin() ||
+          isAppAdminUser() ||
+          request.auth.uid == userId
+        );
+        allow create, update: if request.auth != null && (
+          isLiveEventStaff() ||
+          isInSessionRoomHost(sessionId) ||
+          isAdmin() ||
+          isAppAdminUser()
+        );
+        allow delete: if isAdmin() || isAppAdminUser();
+      }
+
+      match /questions/{questionId} {
+        allow read: if request.auth != null && (
+          isLiveEventStaff() || isAdmin() || isAppAdminUser()
+        );
+        allow write: if request.auth != null && (
+          isLiveEventStaff() ||
+          isInSessionRoomHost(sessionId) ||
+          isAdmin() ||
+          isAppAdminUser()
+        );
+      }
+
+      match /timeline/{entryId} {
+        allow read: if request.auth != null && (
+          isLiveEventStaff() || isAdmin() || isAppAdminUser()
+        );
+        allow write: if request.auth != null && (
+          isLiveEventStaff() ||
+          isInSessionRoomHost(sessionId) ||
+          isAdmin() ||
+          isAppAdminUser()
+        );
+      }
+
+      match /rewards/{rewardId} {
+        allow read: if request.auth != null && (
+          isLiveEventStaff() ||
+          isAdmin() ||
+          isAppAdminUser() ||
+          resource.data.userId == request.auth.uid
+        );
+        allow write: if request.auth != null && (
+          isLiveEventStaff() ||
+          isInSessionRoomHost(sessionId) ||
+          isAdmin() ||
+          isAppAdminUser()
+        );
+      }
+
+      match /battleEvents/{eventId} {
+        allow read: if request.auth != null && (
+          isLiveEventStaff() || isAdmin() || isAppAdminUser()
+        );
+        allow write: if request.auth != null && (
+          isLiveEventStaff() ||
+          isInSessionRoomHost(sessionId) ||
+          isAdmin() ||
+          isAppAdminUser()
+        );
+      }
     }
 
     // --- Player Journey & missions (were missing; default deny blocked templates + progress) ---

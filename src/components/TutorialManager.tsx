@@ -5,6 +5,7 @@ import { db } from '../firebase';
 import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
 import Tutorial from './Tutorial';
 import TutorialReviewModal from './TutorialReviewModal';
+import { usePopupControls } from '../hooks/usePopupControls';
 
 const TUTORIAL_IDS = [
   'welcome',
@@ -63,6 +64,7 @@ interface TutorialState {
 const TutorialManager: React.FC = () => {
   const { currentUser } = useAuth();
   const location = useLocation();
+  const { controls: popupControls } = usePopupControls();
   const [tutorialState, setTutorialState] = useState<TutorialState>({});
   const [currentTutorial, setCurrentTutorial] = useState<string | null>(null);
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
@@ -160,13 +162,18 @@ const TutorialManager: React.FC = () => {
     }
 
     // Welcome tutorial (first time users only)
-    if (path === '/' && !tutorialState.welcome?.completed && !tutorialState.welcome?.skipped) {
+    if (
+      popupControls.enableWelcomeTutorial &&
+      (path === '/' || path === '/home') &&
+      !tutorialState.welcome?.completed &&
+      !tutorialState.welcome?.skipped
+    ) {
       // Additional check: only trigger if user has no completed tutorials at all
-      const hasAnyCompletedTutorials = Object.values(tutorialState).some(
+      const hasAnyCompletedTutorialsInner = Object.values(tutorialState).some(
         (tutorial: any) => tutorial.completed || tutorial.skipped
       );
       
-      if (!hasAnyCompletedTutorials) {
+      if (!hasAnyCompletedTutorialsInner) {
         console.log('Triggering welcome tutorial - truly new user');
         setHasTriggeredTutorial(true);
         // Add a small delay to ensure the page is fully loaded
@@ -178,7 +185,13 @@ const TutorialManager: React.FC = () => {
     }
 
     // Navigation tutorial (after welcome, only if not completed)
-    if (path === '/' && tutorialState.welcome?.completed && !tutorialState.navigation?.completed && !tutorialState.navigation?.skipped) {
+    if (
+      popupControls.enableWelcomeTutorial &&
+      (path === '/' || path === '/home') &&
+      tutorialState.welcome?.completed &&
+      !tutorialState.navigation?.completed &&
+      !tutorialState.navigation?.skipped
+    ) {
       console.log('Triggering navigation tutorial');
       setHasTriggeredTutorial(true);
       setTimeout(() => triggerTutorial('navigation'), 1000);
@@ -222,7 +235,7 @@ const TutorialManager: React.FC = () => {
     }
 
     console.log('No tutorial triggered for current path and state');
-  }, [location.pathname, tutorialState, currentUser, currentTutorial, isReviewModalOpen, isTutorialStateLoaded]);
+  }, [location.pathname, tutorialState, currentUser, currentTutorial, isReviewModalOpen, isTutorialStateLoaded, popupControls.enableWelcomeTutorial]);
 
   const triggerTutorial = (tutorialId: string) => {
     setCurrentTutorial(tutorialId);

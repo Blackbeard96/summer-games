@@ -224,3 +224,121 @@
 .mst-app-shell [style*="background-color: #e0f2fe"][style*="color: #0c4a6e"] {
   color: #0c4a6e !important;
 }
+
+/* ------------------------------------------------------------------ */
+/* Battle Pass / Season admin — force readable ink on light forms     */
+/* (shell remaps slate→cream; labels without color were nearly invisible) */
+/* ------------------------------------------------------------------ */
+
+.mst-app-shell .mst-battle-pass-admin,
+.mst-app-shell .mst-battle-pass-admin.mst-light-surface {
+  color: #0f172a !important;
+}
+
+.mst-app-shell .mst-battle-pass-admin label,
+.mst-app-shell .mst-battle-pass-admin p,
+.mst-app-shell .mst-battle-pass-admin li,
+.mst-app-shell .mst-battle-pass-admin h2,
+.mst-app-shell .mst-battle-pass-admin h3,
+.mst-app-shell .mst-battle-pass-admin h4 {
+  color: #0f172a !important;
+}
+
+.mst-app-shell .mst-battle-pass-admin [style*="color: #64748b"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#64748b"],
+.mst-app-shell .mst-battle-pass-admin [style*="color: #94a3b8"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#94a3b8"],
+.mst-app-shell .mst-battle-pass-admin [style*="color: #9ca3af"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#9ca3af"],
+.mst-app-shell .mst-battle-pass-admin [style*="color: #6b7280"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#6b7280"],
+.mst-app-shell .mst-battle-pass-admin [style*="color: #475569"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#475569"],
+.mst-app-shell .mst-battle-pass-admin [style*="color: #334155"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#334155"] {
+  color: #334155 !important;
+}
+
+.mst-app-shell .mst-battle-pass-admin [style*="color: #0f172a"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#0f172a"],
+.mst-app-shell .mst-battle-pass-admin [style*="color: #1e1b4b"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#1e1b4b"],
+.mst-app-shell .mst-battle-pass-admin [style*="color: #1f2937"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#1f2937"] {
+  color: #0f172a !important;
+}
+
+.mst-app-shell .mst-battle-pass-admin [style*="color: #312e81"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#312e81"],
+.mst-app-shell .mst-battle-pass-admin [style*="color: #4338ca"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#4338ca"],
+.mst-app-shell .mst-battle-pass-admin [style*="color: #3730a3"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#3730a3"] {
+  color: #3730a3 !important;
+}
+
+.mst-app-shell .mst-battle-pass-admin input,
+.mst-app-shell .mst-battle-pass-admin textarea,
+.mst-app-shell .mst-battle-pass-admin select {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  border: 1px solid #94a3b8 !important;
+  caret-color: #0f172a;
+}
+
+.mst-app-shell .mst-battle-pass-admin input::placeholder,
+.mst-app-shell .mst-battle-pass-admin textarea::placeholder {
+  color: #64748b !important;
+  opacity: 1;
+}
+
+.mst-app-shell .mst-battle-pass-admin input[readonly] {
+  background: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+.mst-app-shell .mst-battle-pass-admin button {
+  color: #0f172a !important;
+}
+
+/* Filled primary actions keep white label text on dark fills */
+.mst-app-shell .mst-battle-pass-admin button[style*="background: #4f46e5"],
+.mst-app-shell .mst-battle-pass-admin button[style*="background:#4f46e5"],
+.mst-app-shell .mst-battle-pass-admin button[style*="background: #2563eb"],
+.mst-app-shell .mst-battle-pass-admin button[style*="background:#2563eb"],
+.mst-app-shell .mst-battle-pass-admin button[style*="background: #059669"],
+.mst-app-shell .mst-battle-pass-admin button[style*="background:#059669"],
+.mst-app-shell .mst-battle-pass-admin button[style*="background: #047857"],
+.mst-app-shell .mst-battle-pass-admin button[style*="background:#047857"],
+.mst-app-shell .mst-battle-pass-admin button[style*="background: #10b981"],
+.mst-app-shell .mst-battle-pass-admin button[style*="background:#10b981"],
+.mst-app-shell .mst-battle-pass-admin button[style*="background: #dc2626"],
+.mst-app-shell .mst-battle-pass-admin button[style*="background:#dc2626"],
+.mst-app-shell .mst-battle-pass-admin button[style*="background: #b91c1c"],
+.mst-app-shell .mst-battle-pass-admin button[style*="background:#b91c1c"] {
+  color: #ffffff !important;
+}
+
+.mst-app-shell .mst-battle-pass-admin [style*="color: #059669"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#059669"],
+.mst-app-shell .mst-battle-pass-admin [style*="color: #047857"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#047857"] {
+  color: #047857 !important;
+}
+
+.mst-app-shell .mst-battle-pass-admin [style*="color: #b91c1c"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#b91c1c"] {
+  color: #b91c1c !important;
+}
+
+.mst-app-shell .mst-battle-pass-admin [style*="color: #92400e"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#92400e"],
+.mst-app-shell .mst-battle-pass-admin [style*="color: #9a3412"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#9a3412"] {
+  color: #9a3412 !important;
+}
+
+.mst-app-shell .mst-battle-pass-admin [style*="color: #6d28d9"],
+.mst-app-shell .mst-battle-pass-admin [style*="color:#6d28d9"] {
+  color: #5b21b6 !important;
+}

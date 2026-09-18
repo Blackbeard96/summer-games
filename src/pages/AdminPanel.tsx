@@ -44,6 +44,8 @@ import WeeklyGoalsAdminReview from '../components/admin/WeeklyGoalsAdminReview';
 import TrainingGroundsAdmin from '../components/TrainingGroundsAdmin';
 import SkillLibraryAdmin from './admin/SkillLibraryAdmin';
 import SkillAnalyticsAdmin from './admin/SkillAnalyticsAdmin';
+import LiveEventHistoryAdmin from './admin/LiveEventHistoryAdmin';
+import PopupControlsAdmin from './admin/PopupControlsAdmin';
 import SearchBar from '../components/SearchBar';
 import { searchStudents } from '../utils/searchUtils';
 import MissionAdmin from '../components/MissionAdmin';
@@ -255,7 +257,7 @@ const AdminPanel: React.FC = () => {
     | 'manifests' | 'level2-manifest' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup'
     | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts'
     | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'weekly-goals-review' | 'training-grounds'
-    | 'skill-library' | 'skill-analytics'
+    | 'skill-library' | 'skill-analytics' | 'live-event-history' | 'popup-controls'
     | 'season1' | 'rr-candies' | 'progression-repair' | 'vault-recovery' | 'uxp-approval' | 'missions'
     | 'island-raid-levels' | 'productivity-dashboard' | 'civic-economy';
   const ADMIN_TAB_STORAGE_KEY = 'adminPanel.activeTab.v1';
@@ -267,6 +269,8 @@ const AdminPanel: React.FC = () => {
       if (urlTab === 'rr-candies') return 'rr-candies';
       if (urlTab === 'level2-manifest') return 'level2-manifest';
       if (urlTab === 'productivity') return 'productivity-dashboard';
+      if (urlTab === 'live-event-history') return 'live-event-history';
+      if (urlTab === 'popup-controls') return 'popup-controls';
       if (urlTab === 'civic-economy') return 'civic-economy';
       const stored = sessionStorage.getItem(ADMIN_TAB_STORAGE_KEY) as AdminTab | null;
       if (stored) return stored;
@@ -3309,6 +3313,36 @@ const AdminPanel: React.FC = () => {
           📈 Skill Analytics
         </button>
         <button
+          onClick={() => setActiveTab('live-event-history')}
+          style={{
+            backgroundColor: activeTab === 'live-event-history' ? '#1e293b' : '#e5e7eb',
+            color: activeTab === 'live-event-history' ? '#C9A227' : '#374151',
+            border: activeTab === 'live-event-history' ? '1px solid #C9A227' : 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          ⚔ Live Event History
+        </button>
+        <button
+          onClick={() => setActiveTab('popup-controls')}
+          style={{
+            backgroundColor: activeTab === 'popup-controls' ? '#0f172a' : '#e5e7eb',
+            color: activeTab === 'popup-controls' ? '#f8fafc' : '#374151',
+            border: activeTab === 'popup-controls' ? '1px solid #64748b' : 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          🪟 Popup Controls
+        </button>
+        <button
           onClick={() => setActiveTab('rr-candies')}
           style={{
             backgroundColor: activeTab === 'rr-candies' ? '#0891b2' : '#e5e7eb',
@@ -3508,6 +3542,10 @@ const AdminPanel: React.FC = () => {
         <SkillLibraryAdmin />
       ) : activeTab === 'skill-analytics' ? (
         <SkillAnalyticsAdmin />
+      ) : activeTab === 'live-event-history' ? (
+        <LiveEventHistoryAdmin />
+      ) : activeTab === 'popup-controls' ? (
+        <PopupControlsAdmin />
       ) : activeTab === 'rr-candies' ? (
         <RRCandyAdminPage />
       ) : activeTab === 'season1' ? (

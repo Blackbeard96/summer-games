@@ -54,7 +54,7 @@ const BattlePassSeasonRewardRow: React.FC<BattlePassSeasonRewardRowProps> = ({
       }}
     >
       <label>
-        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b' }}>Type</span>
+        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#334155' }}>Type</span>
         <select
           value={r.rewardType}
           onChange={(e) => onPatch({ rewardType: e.target.value as BattlePassReward['rewardType'] })}
@@ -68,7 +68,7 @@ const BattlePassSeasonRewardRow: React.FC<BattlePassSeasonRewardRowProps> = ({
         </select>
       </label>
       <label style={{ gridColumn: 'span 2' }}>
-        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b' }}>Display name</span>
+        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#334155' }}>Display name</span>
         <input
           value={r.displayName}
           onChange={(e) => onPatch({ displayName: e.target.value })}
@@ -76,7 +76,7 @@ const BattlePassSeasonRewardRow: React.FC<BattlePassSeasonRewardRowProps> = ({
         />
       </label>
       <label style={{ gridColumn: '1 / -1' }}>
-        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b' }}>Description</span>
+        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#334155' }}>Description</span>
         <input
           value={r.description}
           onChange={(e) => onPatch({ description: e.target.value })}
@@ -84,7 +84,7 @@ const BattlePassSeasonRewardRow: React.FC<BattlePassSeasonRewardRowProps> = ({
         />
       </label>
       <label>
-        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b' }}>Quantity</span>
+        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#334155' }}>Quantity</span>
         <input
           type="number"
           value={r.quantity ?? ''}
@@ -93,7 +93,7 @@ const BattlePassSeasonRewardRow: React.FC<BattlePassSeasonRewardRowProps> = ({
         />
       </label>
       <label>
-        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b' }}>Rarity</span>
+        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#334155' }}>Rarity</span>
         <select
           value={r.rarity || ''}
           onChange={(e) => onPatch({ rarity: (e.target.value || undefined) as BattlePassReward['rarity'] })}
@@ -108,7 +108,7 @@ const BattlePassSeasonRewardRow: React.FC<BattlePassSeasonRewardRowProps> = ({
         </select>
       </label>
       <label style={{ gridColumn: '1 / -1' }}>
-        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b' }}>
+        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#334155' }}>
           {r.rewardType === 'artifact'
             ? 'Artifact (from marketplace, equippable, and store catalogs)'
             : r.rewardType === 'skill_card'
@@ -122,7 +122,7 @@ const BattlePassSeasonRewardRow: React.FC<BattlePassSeasonRewardRowProps> = ({
         {r.rewardType === 'artifact' ? (
           <>
             {artifactsLoading ? (
-              <div style={{ marginTop: 6, fontSize: '0.8rem', color: '#64748b' }}>Loading artifacts…</div>
+              <div style={{ marginTop: 6, fontSize: '0.8rem', color: '#334155' }}>Loading artifacts…</div>
             ) : null}
             {(() => {
               const forceCustom = artifactCustomRewardKeys.has(rk);
@@ -286,7 +286,7 @@ const BattlePassSeasonRewardRow: React.FC<BattlePassSeasonRewardRowProps> = ({
             );
           })()
         ) : r.rewardType === 'truth_metal' ? (
-          <div style={{ marginTop: 6, fontSize: '0.8rem', color: '#64748b', lineHeight: 1.45 }}>
+          <div style={{ marginTop: 6, fontSize: '0.8rem', color: '#334155', lineHeight: 1.45 }}>
             Set the Truth Metal amount in <strong>Quantity</strong> above.
           </div>
         ) : (
@@ -299,7 +299,7 @@ const BattlePassSeasonRewardRow: React.FC<BattlePassSeasonRewardRowProps> = ({
         )}
       </label>
       <label style={{ gridColumn: '1 / -1' }}>
-        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b' }}>Icon URL (optional)</span>
+        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#334155' }}>Icon URL (optional)</span>
         <input
           value={r.iconUrl || ''}
           onChange={(e) => onPatch({ iconUrl: e.target.value.trim() || undefined })}

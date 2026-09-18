@@ -47,6 +47,7 @@ import NavigationDebugger from './components/NavigationDebugger';
 import InSessionNotification from './components/InSessionNotification';
 import ToastContainer from './components/ToastContainer';
 import { useDailyChallengeToasts } from './hooks/useDailyChallengeToasts';
+import { usePopupControls } from './hooks/usePopupControls';
 
 // Load debug commands
 import './utils/consoleCommands';
@@ -286,6 +287,7 @@ const AppContent = () => {
   
   // Global hook to detect daily challenge completions and show toasts
   useDailyChallengeToasts();
+  const { controls: popupControls, loading: popupControlsLoading } = usePopupControls();
   
   // Generator earnings modal state
   const [generatorEarnings, setGeneratorEarnings] = React.useState<{
@@ -318,7 +320,7 @@ const AppContent = () => {
 
   // Check for daily generator notification and announcements on app load
   React.useEffect(() => {
-    if (!currentUser || loading || !vault) {
+    if (!currentUser || loading || !vault || popupControlsLoading) {
       return;
     }
     if (loginModalsCheckedForUidRef.current === currentUser.uid) {
@@ -339,7 +341,7 @@ const AppContent = () => {
         const usersData = usersDoc.exists() ? usersDoc.data() : {};
         
         const lastModalDate = usersData.lastDailyGeneratorModalDate || null;
-        if (shouldShowDailyGeneratorModal(lastModalDate)) {
+        if (popupControls.enableDailyGeneratorModal && shouldShowDailyGeneratorModal(lastModalDate)) {
           const generatorLevel = vault.generatorLevel || 1;
           const rates = getGeneratorRates(generatorLevel);
           
@@ -371,30 +373,34 @@ const AppContent = () => {
         }
         
         // 2. Check announcements (show after daily generator)
-        const seenAnnouncements = usersData.seenAnnouncements || {};
-        const activeAnnouncements = getActiveAnnouncements();
-        const chapter2AnnouncementId = ROLLOUT_ANNOUNCEMENTS.CHAPTER2_PARTIAL_OPEN;
-        
-        const pendingAnnouncements: Array<'chapter2'> = [];
-        if (activeAnnouncements.includes(chapter2AnnouncementId) && 
-            !seenAnnouncements[chapter2AnnouncementId]) {
-          pendingAnnouncements.push('chapter2');
-        }
-        
-        if (pendingAnnouncements.length > 0) {
-          setAnnouncementTypes(pendingAnnouncements);
-          queue.push('announcements');
+        if (popupControls.enableChapter2Announcement) {
+          const seenAnnouncements = usersData.seenAnnouncements || {};
+          const activeAnnouncements = getActiveAnnouncements();
+          const chapter2AnnouncementId = ROLLOUT_ANNOUNCEMENTS.CHAPTER2_PARTIAL_OPEN;
+          
+          const pendingAnnouncements: Array<'chapter2'> = [];
+          if (activeAnnouncements.includes(chapter2AnnouncementId) && 
+              !seenAnnouncements[chapter2AnnouncementId]) {
+            pendingAnnouncements.push('chapter2');
+          }
+          
+          if (pendingAnnouncements.length > 0) {
+            setAnnouncementTypes(pendingAnnouncements);
+            queue.push('announcements');
+          }
         }
         
         // 3. Squad check-in reminder (first login of the day)
-        if (shouldShowSquadCheckInReminder(currentUser.uid)) {
+        if (popupControls.enableSquadCheckInReminder && shouldShowSquadCheckInReminder(currentUser.uid)) {
           queue.push('squadCheckIn');
         }
 
         // 4. One-time Skill Loadout tutorial (existing players who haven't seen it)
-        const seenSkillLoadout = await hasSeenSkillLoadoutTutorial(currentUser.uid);
-        if (!seenSkillLoadout) {
-          queue.push('skillLoadoutTutorial');
+        if (popupControls.enableSkillLoadoutTutorial) {
+          const seenSkillLoadout = await hasSeenSkillLoadoutTutorial(currentUser.uid);
+          if (!seenSkillLoadout) {
+            queue.push('skillLoadoutTutorial');
+          }
         }
         
         // Set queue and show first modal
@@ -414,7 +420,7 @@ const AppContent = () => {
     // Small delay to ensure vault is fully loaded
     const timeoutId = setTimeout(checkModals, 1000);
     return () => clearTimeout(timeoutId);
-  }, [currentUser, loading, vault, getGeneratorRates]);
+  }, [currentUser, loading, vault, getGeneratorRates, popupControls, popupControlsLoading]);
 
   // Reset login-modal gate when the signed-in user changes
   React.useEffect(() => {
@@ -809,12 +815,12 @@ const AppContent = () => {
       
       {/* Global Components */}
       <TutorialManager />
-      <InvitationManager />
-      <BattleInvitationManager />
-      <RewardNotifier />
-      <AssessmentGoalsNotifier />
-      <AssessmentGoalResultNotifier />
-      <InSessionNotification />
+      {popupControls.enableSquadInvitePopup ? <InvitationManager /> : null}
+      {popupControls.enableBattleInvitePopup ? <BattleInvitationManager /> : null}
+      {popupControls.enableRewardNotifications ? <RewardNotifier /> : null}
+      {popupControls.enableAssessmentGoalReminder ? <AssessmentGoalsNotifier /> : null}
+      {popupControls.enableAssessmentGoalResultModal ? <AssessmentGoalResultNotifier /> : null}
+      {popupControls.enableLiveEventJoinBanner ? <InSessionNotification /> : null}
       <ToastContainer />
       
       {/* Milestone Modal */}

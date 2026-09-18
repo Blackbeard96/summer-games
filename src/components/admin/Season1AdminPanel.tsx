@@ -58,23 +58,33 @@ const Season1AdminPanel: React.FC = () => {
   if (loading) return <div style={{ padding: 24 }}>Loading admin…</div>;
 
   return (
-    <div style={{ background: '#f8fafc', borderRadius: 12, padding: '2rem', border: '1px solid #e5e7eb', maxWidth: 1280 }}>
-      <h2 style={{ marginTop: 0 }}>Battle Pass</h2>
-      <p style={{ color: '#64748b', lineHeight: 1.5, marginBottom: 8 }}>
+    <div
+      className="mst-battle-pass-admin mst-light-surface"
+      style={{
+        background: '#f8fafc',
+        color: '#0f172a',
+        borderRadius: 12,
+        padding: '2rem',
+        border: '1px solid #e5e7eb',
+        maxWidth: 1280,
+      }}
+    >
+      <h2 style={{ marginTop: 0, color: '#0f172a' }}>Battle Pass</h2>
+      <p style={{ color: '#334155', lineHeight: 1.5, marginBottom: 8 }}>
         Create and edit battle passes, set XP per level, and attach rewards (XP, PP, artifacts, items, action cards). Link each pass
-        to a game season for organization. Only one pass should be <strong>active</strong> at a time for players reading{' '}
-        <code>adminSettings/season1.activeBattlePassSeasonId</code>.
+        to a game season for organization. Only one pass should be <strong style={{ color: '#0f172a' }}>active</strong> at a time for players reading{' '}
+        <code style={{ color: '#0f172a' }}>adminSettings/season1.activeBattlePassSeasonId</code>.
       </p>
 
       <BattlePassSeasonAdmin />
 
       <hr style={{ margin: '2rem 0', borderColor: '#e2e8f0' }} />
-      <h3 style={{ marginTop: 0 }}>Flow &amp; Energy (Season 1)</h3>
-      <p style={{ color: '#64748b', lineHeight: 1.5 }}>
-        Global caps and test flags for Flow State. Students still merge their own <code>season1</code> slice on their profile.
+      <h3 style={{ marginTop: 0, color: '#0f172a' }}>Flow &amp; Energy (Season 1)</h3>
+      <p style={{ color: '#334155', lineHeight: 1.5 }}>
+        Global caps and test flags for Flow State. Students still merge their own <code style={{ color: '#0f172a' }}>season1</code> slice on their profile.
       </p>
-      <label style={{ display: 'block', marginTop: 16 }}>
-        <span style={{ fontWeight: 600 }}>Max energy per client tick</span>
+      <label style={{ display: 'block', marginTop: 16, color: '#0f172a' }}>
+        <span style={{ fontWeight: 600, color: '#0f172a' }}>Max energy per client tick</span>
         <input
           type="number"
           value={energyTickCap}
@@ -82,9 +92,9 @@ const Season1AdminPanel: React.FC = () => {
           style={{ display: 'block', marginTop: 8, padding: 8, width: 120, borderRadius: 8, border: '1px solid #cbd5e1' }}
         />
       </label>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16 }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, color: '#0f172a' }}>
         <input type="checkbox" checked={awakenedFlowTest} onChange={(e) => setAwakenedFlowTest(e.target.checked)} />
-        <span>Awakened Flow test mode (clients should read this flag from session or settings)</span>
+        <span style={{ color: '#0f172a', fontWeight: 600 }}>Awakened Flow test mode (clients should read this flag from session or settings)</span>
       </label>
       <button
         type="button"
@@ -102,19 +112,19 @@ const Season1AdminPanel: React.FC = () => {
       >
         Save flow &amp; energy settings
       </button>
-      <p style={{ marginTop: 10, fontSize: '0.85rem', color: '#64748b', maxWidth: 640, lineHeight: 1.5 }}>
-        Saves only <code>adminSettings/season1</code> (energy tick cap, Awakened Flow test). Battle pass tracks live in{' '}
-        <code>seasons/&#123;id&#125;</code> — use <strong>Save battle pass</strong> in the blue editor above.
+      <p style={{ marginTop: 10, fontSize: '0.85rem', color: '#334155', maxWidth: 640, lineHeight: 1.5 }}>
+        Saves only <code style={{ color: '#0f172a' }}>adminSettings/season1</code> (energy tick cap, Awakened Flow test). Battle pass tracks live in{' '}
+        <code style={{ color: '#0f172a' }}>seasons/&#123;id&#125;</code> — use <strong style={{ color: '#0f172a' }}>Save battle pass</strong> in the blue editor above.
       </p>
-      {status && <p style={{ marginTop: 12 }}>{status}</p>}
+      {status && <p style={{ marginTop: 12, color: '#0f172a' }}>{status}</p>}
 
       <hr style={{ margin: '2rem 0', borderColor: '#e2e8f0' }} />
-      <h3>Skill cards (seed catalog)</h3>
-      <p style={{ color: '#64748b', fontSize: '0.9rem' }}>{SKILL_CARDS_CATALOG.length} cards in code — mirror to Firestore collection <code>skillCards</code> for live edits.</p>
-      <ul style={{ fontSize: '0.875rem' }}>
+      <h3 style={{ color: '#0f172a' }}>Skill cards (seed catalog)</h3>
+      <p style={{ color: '#334155', fontSize: '0.9rem' }}>{SKILL_CARDS_CATALOG.length} cards in code — mirror to Firestore collection <code style={{ color: '#0f172a' }}>skillCards</code> for live edits.</p>
+      <ul style={{ fontSize: '0.875rem', color: '#0f172a' }}>
         {SKILL_CARDS_CATALOG.map((c) => (
           <li key={c.id}>
-            <strong>{c.name}</strong> — {c.rarity} / {c.energyType}
+            <strong style={{ color: '#0f172a' }}>{c.name}</strong> — {c.rarity} / {c.energyType}
           </li>
         ))}
       </ul>

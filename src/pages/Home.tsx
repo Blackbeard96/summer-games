@@ -26,6 +26,8 @@ import {
   isBattlePassIntroDismissedLocally,
   markBattlePassIntroDismissedLocally,
 } from '../utils/battlePassIntroClient';
+import { usePopupControls } from '../hooks/usePopupControls';
+import { claimOutstandingLiveEventRewardsForPlayer } from '../utils/liveEventPendingClaimsService';
 
 // Season 0 Battle Pass Tiers - Each tier requires 1000 XP more than the previous
 const season0Tiers = [
@@ -60,6 +62,7 @@ const Home: React.FC = () => {
   const { vault } = useBattle();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { controls: popupControls } = usePopupControls();
   // Season 1: Flow State hub — battle pass + energy (see docs/SEASON1_IMPLEMENTATION.md)
   const [userLevel, setUserLevel] = useState(1);
   const [showSeason0Intro, setShowSeason0Intro] = useState(false);
@@ -110,6 +113,22 @@ const Home: React.FC = () => {
       cancelled = true;
     };
   }, [currentUser]);
+
+  // Reclaim Live Event session-end rewards (PP, Power/BP, daily challenges) if the player
+  // left before the summary screen could self-claim.
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    let cancelled = false;
+    void claimOutstandingLiveEventRewardsForPlayer(currentUser.uid).then((result) => {
+      if (cancelled || !result.ok || result.sessionsChecked <= 0) return;
+      console.log(
+        `[Home] Reclaimed Live Event rewards from ${result.sessionsChecked} pending session(s)`
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.uid]);
 
   const refreshNpcMissionAttention = () => {
     if (!currentUser) return;
@@ -192,7 +211,7 @@ const Home: React.FC = () => {
           const calculatedLevel = getLevelFromXP(userData.xp || 0);
           setUserLevel(calculatedLevel);
 
-          if (userData.season0IntroSeen !== true) {
+          if (popupControls.enableSeason0Intro && userData.season0IntroSeen !== true) {
             setShowSeason0Intro(true);
           }
 
@@ -205,7 +224,9 @@ const Home: React.FC = () => {
           setBpDisplay(disp);
           syncBpIntro(userData as Record<string, unknown>);
         } else {
-          setShowSeason0Intro(true);
+          if (popupControls.enableSeason0Intro) {
+            setShowSeason0Intro(true);
+          }
           setBpDisplay(
             computeHomeBattlePassDisplay(undefined, activeSeason, season0Tiers.length, calculateTier)
           );
@@ -235,7 +256,7 @@ const Home: React.FC = () => {
     };
 
     fetchUserData();
-  }, [currentUser]);
+  }, [currentUser, popupControls.enableSeason0Intro]);
 
   // Journey status is now handled by useJourneyStatus hook
   // No need for separate fetchJourneyProgress useEffect
@@ -394,6 +415,7 @@ const Home: React.FC = () => {
           deployedBattlePassSeasonId={bpIntroSeasonId}
           battlePassIntroAlreadySeen={bpIntroSeen}
           deferBattlePassIntroAuto={showSeason0Intro}
+          enableBattlePassIntroAuto={popupControls.enableBattlePassIntroAuto}
           onBattlePassIntroDismissed={handleBattlePassIntroDismissed}
           battlePassIntroStateReady={bpIntroStateReady}
         />

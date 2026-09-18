@@ -15,6 +15,7 @@ import {
   markBattlePassIntroDismissedLocally,
 } from '../utils/battlePassIntroClient';
 import type { Season } from '../types/season1';
+import { usePopupControls } from '../hooks/usePopupControls';
 
 /**
  * `/battle-pass` — shows the admin-deployed active pass from `seasons/{id}` when set on
@@ -23,6 +24,7 @@ import type { Season } from '../types/season1';
 const BattlePassSeasonPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
+  const { controls: popupControls } = usePopupControls();
   const [showLegacy, setShowLegacy] = useState(false);
   const [introOpen, setIntroOpen] = useState(false);
   const [season, setSeason] = useState<Season | null>(null);
@@ -86,6 +88,7 @@ const BattlePassSeasonPage: React.FC = () => {
 
   useEffect(() => {
     if (loading || !season || !currentUser) return;
+    if (!popupControls.enableBattlePassIntroAuto) return;
     if (introSeenForSeason) return;
     const hasIntro = !!(
       season.seasonIntroVideoUrl?.trim() ||
@@ -94,7 +97,7 @@ const BattlePassSeasonPage: React.FC = () => {
     if (!hasIntro || introAutoOpenedRef.current) return;
     introAutoOpenedRef.current = true;
     setIntroOpen(true);
-  }, [loading, season, currentUser, introSeenForSeason]);
+  }, [loading, season, currentUser, introSeenForSeason, popupControls.enableBattlePassIntroAuto]);
 
   const closeSeasonIntro = async () => {
     setIntroOpen(false);
