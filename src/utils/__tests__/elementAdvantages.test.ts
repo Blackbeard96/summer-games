@@ -1,4 +1,5 @@
 import {
+  applyElementalDamage,
   attackElementFromActionCard,
   attackElementFromCpuStrike,
   attackElementFromMove,
@@ -158,6 +159,79 @@ describe('elementAdvantages', () => {
           })
         )
       ).toBe('metal');
+    });
+  });
+
+  /**
+   * Characterization tests: these pin the exact arithmetic the six inlined copies in
+   * BattleEngine performed before they were replaced by applyElementalDamage —
+   * `Math.max(0, Math.floor(damage * mult))` plus the matching log line. If a change
+   * here makes one of these fail, battle damage has shifted.
+   */
+  describe('applyElementalDamage', () => {
+    it('multiplies by 1.5 and floors on advantage', () => {
+      // 25 * 1.5 = 37.5 -> 37, not 38
+      expect(applyElementalDamage(25, 'water', 'fire')).toEqual({
+        damage: 37,
+        multiplier: 1.5,
+        logLine: '✨ Type advantage — deals extra damage! (Advantage)',
+      });
+    });
+
+    it('multiplies by 0.5 and floors on disadvantage', () => {
+      // 25 * 0.5 = 12.5 -> 12
+      expect(applyElementalDamage(25, 'fire', 'water')).toEqual({
+        damage: 12,
+        multiplier: 0.5,
+        logLine: '📉 Type disadvantage — deals reduced damage. (Disadvantage)',
+      });
+    });
+
+    it('leaves damage untouched and logs nothing on a neutral matchup', () => {
+      expect(applyElementalDamage(40, 'fire', 'lightning')).toEqual({
+        damage: 40,
+        multiplier: 1,
+        logLine: null,
+      });
+    });
+
+    it('treats a missing attack or defender element as neutral', () => {
+      expect(applyElementalDamage(40, null, 'fire')).toEqual({
+        damage: 40,
+        multiplier: 1,
+        logLine: null,
+      });
+      expect(applyElementalDamage(40, 'water', null)).toEqual({
+        damage: 40,
+        multiplier: 1,
+        logLine: null,
+      });
+      expect(applyElementalDamage(40, undefined, undefined).damage).toBe(40);
+    });
+
+    it('clamps to 0 rather than returning negative damage', () => {
+      expect(applyElementalDamage(-10, 'water', 'fire').damage).toBe(0);
+      expect(applyElementalDamage(0, 'water', 'fire').damage).toBe(0);
+    });
+
+    it('floors a disadvantaged 1-damage hit to 0', () => {
+      // 1 * 0.5 = 0.5 -> 0; matches the pre-refactor inline behavior exactly
+      expect(applyElementalDamage(1, 'fire', 'water').damage).toBe(0);
+    });
+
+    it('agrees with getElementMultiplier across the whole chart', () => {
+      /** Untyped so Jest/Babel accepts this .ts file, matching the helpers above. */
+      const elements = ['water', 'fire', 'earth', 'air', 'lightning', 'metal', 'light', 'dark'] as any[];
+      const base = 100;
+      elements.forEach((atk) => {
+        elements.forEach((def) => {
+          const expected = getElementMultiplier(atk, def);
+          const result = applyElementalDamage(base, atk, def);
+          expect(result.multiplier).toBe(expected);
+          expect(result.damage).toBe(Math.max(0, Math.floor(base * expected)));
+          expect(result.logLine).toBe(elementEffectivenessBattleLogLine(expected));
+        });
+      });
     });
   });
 });
