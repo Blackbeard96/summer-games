@@ -46,6 +46,35 @@ export function elementEffectivenessBattleLogLine(multiplier: number): string | 
   return null;
 }
 
+export interface ElementalDamageResult {
+  /** Damage after the matchup multiplier — floored, never below 0. */
+  damage: number;
+  multiplier: number;
+  /** Battle log line for the matchup, or null when neutral. */
+  logLine: string | null;
+}
+
+/**
+ * Apply the elemental type chart to a damage figure.
+ *
+ * Every battle path routes elemental damage through here so the multiplier, the
+ * rounding and the log line stay identical across Arena, Live Events, Island Raid,
+ * CPU strikes and summon strikes. Call sites differ only in how they derive the
+ * two elements — use the `attackElementFrom*` helpers below for that.
+ */
+export function applyElementalDamage(
+  baseDamage: number,
+  attackType?: ElementType | null,
+  targetType?: ElementType | null
+): ElementalDamageResult {
+  const multiplier = getElementMultiplier(attackType, targetType);
+  return {
+    damage: Math.max(0, Math.floor(baseDamage * multiplier)),
+    multiplier,
+    logLine: elementEffectivenessBattleLogLine(multiplier),
+  };
+}
+
 /**
  * Element used for offensive type chart: elemental-category attacks, plus construct
  * skills (`construct-skill::…`) when `elementalAffinity` is set on the move.

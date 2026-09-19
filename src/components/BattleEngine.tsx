@@ -95,11 +95,10 @@ import {
 import type { ElementType } from '../types/elementTypes';
 import { normalizeElementType } from '../types/elementTypes';
 import {
+  applyElementalDamage,
   attackElementFromCpuStrike,
   attackElementFromMove,
   attackElementFromSummonAffinity,
-  elementEffectivenessBattleLogLine,
-  getElementMultiplier,
 } from '../utils/elementAdvantages';
 import CpuAwakeningSequenceModal from './CpuAwakeningSequenceModal';
 import { filterCpuAwakeningAnimationSteps } from '../types/missions';
@@ -4183,9 +4182,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         const baseSummonDmg = moveData.move.damage ?? summon.summonDamage ?? 100;
         const elem = summon.summonElementalType || 'fire';
         const atkEl = attackElementFromSummonAffinity(elem);
-        const elemMult = getElementMultiplier(atkEl, target.enemyType ?? null);
-        const summonDmg = Math.max(0, Math.floor(baseSummonDmg * elemMult));
-        const elemLine = elementEffectivenessBattleLogLine(elemMult);
+        const summonElemental = applyElementalDamage(baseSummonDmg, atkEl, target.enemyType ?? null);
+        const summonDmg = summonElemental.damage;
+        const elemLine = summonElemental.logLine;
         const targetId = target.id;
         const targetName = target.name || 'Unknown';
         const targetHealth = target.vaultHealth !== undefined ? target.vaultHealth : (target.currentPP || 0);
@@ -4336,9 +4335,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           !(isSelfDirectedMove && isTargetingSelf)
         ) {
           const atkEl = attackElementFromMove(playerMove);
-          const mult = getElementMultiplier(atkEl, target.enemyType ?? null);
-          totalDamage = Math.max(0, Math.floor(totalDamage * mult));
-          elementMatchLog = elementEffectivenessBattleLogLine(mult);
+          const elemental = applyElementalDamage(totalDamage, atkEl, target.enemyType ?? null);
+          totalDamage = elemental.damage;
+          elementMatchLog = elemental.logLine;
         }
         
         // Apply damage to target (skip for self-directed moves — they apply to actor's vault)
@@ -4820,9 +4819,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           const defEl =
             target.enemyType ??
             (target.id === currentUser?.uid ? normalizeElementType(userElement) : null);
-          const mult = getElementMultiplier(atkEl, defEl);
-          totalDamage = Math.max(0, Math.floor(totalDamage * mult));
-          cpuElementMatchLog = elementEffectivenessBattleLogLine(mult);
+          const elemental = applyElementalDamage(totalDamage, atkEl, defEl);
+          totalDamage = elemental.damage;
+          cpuElementMatchLog = elemental.logLine;
         }
         
         // Apply damage to target
@@ -5872,9 +5871,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
       if (move.type === 'attack' && damage > 0) {
         const atkEl = attackElementFromMove(move);
-        const mult = getElementMultiplier(atkEl, targetOpponent.enemyType ?? null);
-        damage = Math.max(0, Math.floor(damage * mult));
-        elementMatchLog = elementEffectivenessBattleLogLine(mult);
+        const elemental = applyElementalDamage(damage, atkEl, targetOpponent.enemyType ?? null);
+        damage = elemental.damage;
+        elementMatchLog = elemental.logLine;
       }
       
       // Log damage reduction/increase for Mindforge mode
@@ -7579,12 +7578,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           const baseDmg = summon.summonDamage ?? 100;
           const elem = summon.summonElementalType || 'fire';
           const atkEl = attackElementFromSummonAffinity(elem);
-          const mult = getElementMultiplier(atkEl, targetEnemy.enemyType ?? null);
-          const dmg = Math.max(0, Math.floor(baseDmg * mult));
+          const elemental = applyElementalDamage(baseDmg, atkEl, targetEnemy.enemyType ?? null);
+          const dmg = elemental.damage;
           damageByTargetId[targetEnemy.id] = (damageByTargetId[targetEnemy.id] || 0) + dmg;
           logEntries.push(`⚡ ${summon.name} struck ${targetEnemy.name} for ${dmg} ${elem} damage!`);
-          const effLine = elementEffectivenessBattleLogLine(mult);
-          if (effLine) logEntries.push(effLine);
+          if (elemental.logLine) logEntries.push(elemental.logLine);
         }
 
         if (Object.keys(damageByTargetId).length === 0) return;
@@ -8109,9 +8107,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const defEl = mpAllyStrikeTarget?.isSummon
         ? normalizeElementType(mpAllyStrikeTarget.summonElementalType)
         : normalizeElementType(userElement);
-      const mult = getElementMultiplier(atkEl, defEl);
-      totalDamage = Math.max(0, Math.floor(totalDamage * mult));
-      cpuOpponentTypeMatchLog = elementEffectivenessBattleLogLine(mult);
+      const elemental = applyElementalDamage(totalDamage, atkEl, defEl);
+      totalDamage = elemental.damage;
+      cpuOpponentTypeMatchLog = elemental.logLine;
     }
     
     // Handle healing moves (Phoenix Regeneration)
