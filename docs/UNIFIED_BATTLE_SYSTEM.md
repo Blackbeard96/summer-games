@@ -1,12 +1,27 @@
 # Unified Battle System Architecture
 
+> **Status: target design, not current behavior.**
+>
+> `resolveSkillAction()` is **not currently on any live battle path.** Its only
+> runtime caller is `resolveAndApplyAction()` in `battleAdapters.ts`, and nothing
+> imports that module; `inSessionMoveService` and `skillEffectEngine/resolverBridge`
+> import from `battleSkillResolver` for *types only*. `applyInSessionMove()` takes an
+> optional `resolvedAction`, but every caller passes the legacy individual values
+> instead, so the legacy branch is the one that runs.
+>
+> In practice all damage, healing, shield and PP math still happens inline in
+> `BattleEngine.tsx` (and in `BattleContext.tsx` for Vault Siege). Treat the sections
+> below as the intended destination and the migration guide as still-unstarted work.
+> Elemental damage is the one piece that has been centralized — see
+> `applyElementalDamage()` in `utils/elementAdvantages.ts`.
+
 ## Overview
 
 This document describes the unified battle system that ensures ALL battle modes (Arena, Live Events, Island Raid, Journey, etc.) use the same skill resolution and logging pipeline.
 
 ## Core Principles
 
-1. **Single Source of Truth**: `resolveSkillAction()` in `battleSkillResolver.ts` is the ONLY place where damage, healing, shield, and PP calculations happen.
+1. **Single Source of Truth** *(target)*: `resolveSkillAction()` in `battleSkillResolver.ts` should become the ONLY place where damage, healing, shield, and PP calculations happen.
 
 2. **Consistent Logging**: `formatBattleLogEntry()` ensures all battle logs use the same format across all modes.
 
@@ -60,20 +75,35 @@ This document describes the unified battle system that ensures ALL battle modes 
 
 ## Implementation Status
 
-### ✅ Completed
+### ✅ Written, but NOT wired into any battle
+
+These modules exist and are self-consistent. Nothing calls them at runtime, so
+changing them does not change what players experience.
 
 1. **Unified Skill Resolver** (`src/utils/battleSkillResolver.ts`)
-   - `resolveSkillAction()` - Single source of truth for all calculations
-   - `formatBattleLogEntry()` - Unified log formatting
+   - `resolveSkillAction()` - intended single source of truth for all calculations
+   - `formatBattleLogEntry()` - packages a pre-built message string with metadata
    - Handles all move types: attack, defense, healing, shield, PP steal, RR Candy
+   - **Only runtime caller is `battleAdapters.ts`, which nothing imports.**
 
 2. **Battle Adapter Interface** (`src/utils/battleAdapters.ts`)
    - Defines `BattleAdapter` interface
-   - `resolveAndApplyAction()` - Canonical function for all modes
+   - `resolveAndApplyAction()` - intended canonical function for all modes
+   - **Imported by nothing.**
 
 3. **Pipeline Analysis** (`docs/BATTLE_PIPELINE_ANALYSIS.md`)
    - Documented all battle modes and their pipelines
    - Identified canonical implementation (Battle Arena CPU)
+
+### ✅ Actually live
+
+1. **Elemental damage** (`src/utils/elementAdvantages.ts`)
+   - `applyElementalDamage()` — the one calculation that is genuinely centralized.
+     Every elemental damage path in `BattleEngine.tsx` routes through it, so the
+     multiplier, the flooring and the battle-log line are identical across Arena,
+     Live Events, Island Raid, CPU strikes and summon strikes.
+   - Not yet used by Vault Siege, which still calls `getElementMultiplier` directly
+     in `BattleContext.tsx`.
 
 ### 🚧 In Progress
 
