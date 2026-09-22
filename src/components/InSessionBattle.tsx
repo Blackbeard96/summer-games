@@ -150,6 +150,8 @@ import {
   tryCreditLiveEventPassiveParticipation,
 } from '../utils/liveEventPassiveParticipation';
 import PlayerBuildInspectModal from './PlayerBuildInspectModal';
+import GameTimeHostPanel from './liveEvent/GameTimeHostPanel';
+import { computeSiegeProtectionFloor } from '../utils/liveEventGameTimeService';
 import { finitePowerLevel } from '../utils/playerBuildInspect';
 import { truthMetalBalanceForHud } from '../utils/truthMetalPlayerBalance';
 
@@ -207,6 +209,10 @@ interface SessionPlayer {
   flowStateNonce?: number;
   /** Anchor for passive +1 Participation Power every 2 minutes (liveEventPassiveParticipation). */
   participationPassiveStartedAtMs?: number;
+  /** Game Time: online = live in event; offline = open to Vault Siege. */
+  participationMode?: 'online' | 'offline';
+  /** PP snapshot at join — Offline Siege protection floor base. */
+  liveEventStartingPP?: number;
 }
 
 const InSessionBattle: React.FC<InSessionBattleProps> = ({
@@ -809,6 +815,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           shield,
           maxShield,
           participationPassiveStartedAtMs: Date.now(),
+          participationMode: 'online',
+          liveEventStartingPP: Math.max(0, Math.floor(Number(powerPoints) || 0)),
           ...(sessionDoc.exists() &&
           (sessionDoc.data()?.hostUid === currentUser.uid ||
             sessionDoc.data()?.teacherId === currentUser.uid)
@@ -820,6 +828,20 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         const result = await joinSession(sessionId, newPlayer);
         if (result.success) {
           debug('inSessionBattle', `User ${currentUser.uid} joined session ${sessionId}`);
+
+          // Ensure room defaults to Class Flow when mode was never set
+          if (sessionDoc.exists() && !sessionDoc.data()?.liveEventMode) {
+            try {
+              await updateDoc(doc(db, 'inSessionRooms', sessionId), {
+                liveEventMode: 'class_flow',
+                goalLinkingEnabled: true,
+                energyTypeAwarded: 'physical',
+                updatedAt: serverTimestamp(),
+              });
+            } catch (modeErr) {
+              console.warn('[InSessionBattle] could not default liveEventMode to class_flow', modeErr);
+            }
+          }
           
           // Create session loadout snapshot
           const userElement = studentData.elementalAffinity;
@@ -1434,53 +1456,60 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   useEffect(() => {
     const loadVaultData = async () => {
       const vaultDataMap: Record<string, any> = {};
-      
-      for (const player of sessionPlayers) {
+      const ids = new Set<string>();
+      sessionPlayers.forEach((p) => ids.add(p.userId));
+      students.forEach((s) => {
+        if (s.id) ids.add(s.id);
+      });
+
+      for (const userId of Array.from(ids)) {
         try {
-          const vaultRef = doc(db, 'vaults', player.userId);
+          const vaultRef = doc(db, 'vaults', userId);
           const vaultDoc = await getDoc(vaultRef);
-          
+          const sessionPlayer = sessionPlayers.find((p) => p.userId === userId);
+          const student = students.find((s) => s.id === userId);
+
           if (vaultDoc.exists()) {
             const vaultData = vaultDoc.data();
-            const student = students.find(s => s.id === player.userId);
             // Use vault document as source of truth (match Vault Management / Battle Arena)
             const maxPP = vaultData.capacity || 1000; // Capacity is the max PP
-            const currentPP = vaultData.currentPP ?? student?.powerPoints ?? player.powerPoints ?? 0;
+            const currentPP =
+              vaultData.currentPP ?? student?.powerPoints ?? sessionPlayer?.powerPoints ?? 0;
             const maxVaultHealth = Math.floor(maxPP * 0.1); // Health is 10% of max PP
-            const vaultHealth = vaultData.vaultHealth !== undefined
-              ? Math.min(vaultData.vaultHealth, maxVaultHealth, vaultData.currentPP ?? currentPP)
-              : Math.min(currentPP, maxVaultHealth);
+            const vaultHealth =
+              vaultData.vaultHealth !== undefined
+                ? Math.min(vaultData.vaultHealth, maxVaultHealth, vaultData.currentPP ?? currentPP)
+                : Math.min(currentPP, maxVaultHealth);
 
-            vaultDataMap[player.userId] = {
+            vaultDataMap[userId] = {
               vaultHealth,
               maxVaultHealth,
               shieldStrength: vaultData.shieldStrength ?? 0,
               maxShieldStrength: vaultData.maxShieldStrength ?? 100,
               currentPP,
-              maxPP
+              maxPP,
             };
           } else {
             // Default values if no vault exists
-            const student = students.find(s => s.id === player.userId);
-            const currentPP = student?.powerPoints || player.powerPoints;
-            vaultDataMap[player.userId] = {
-              vaultHealth: Math.floor(currentPP * 0.1),
-              maxVaultHealth: Math.floor(currentPP * 0.1),
+            const currentPP = student?.powerPoints || sessionPlayer?.powerPoints || 0;
+            vaultDataMap[userId] = {
+              vaultHealth: Math.floor(currentPP * 0.1) || 100,
+              maxVaultHealth: Math.floor(currentPP * 0.1) || 100,
               shieldStrength: 100,
               maxShieldStrength: 100,
               currentPP,
-              maxPP: currentPP
+              maxPP: currentPP || 1000,
             };
           }
         } catch (error) {
-          console.error(`Error loading vault for ${player.userId}:`, error);
+          console.error(`Error loading vault for ${userId}:`, error);
         }
       }
-      
+
       setPlayerVaultData(vaultDataMap);
     };
 
-    if (sessionPlayers.length > 0) {
+    if (sessionPlayers.length > 0 || students.length > 0) {
       loadVaultData();
     }
   }, [sessionPlayers, students]);
@@ -1725,25 +1754,43 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     checkUserPermissions();
   }, [currentUser]);
 
-  // Convert students to opponents format for BattleEngine
-  const opponents = sessionPlayers
-    .filter(p => p.userId !== currentUser?.uid)
-    .map(player => {
-      const student = students.find(s => s.id === player.userId);
+  // BattleEngine opponents: joined session players + classmates open to Offline Siege (not in event).
+  const opponents = useMemo(() => {
+    const selfUid = currentUser?.uid;
+    const byId = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        currentPP: number;
+        maxPP: number;
+        vaultHealth: number;
+        maxVaultHealth: number;
+        shieldStrength: number;
+        maxShieldStrength: number;
+        level: number;
+        photoURL?: string;
+        speed: number;
+      }
+    >();
+
+    const pushFromSession = (player: SessionPlayer) => {
+      if (!player.userId || player.userId === selfUid) return;
+      const student = students.find((s) => s.id === player.userId);
       const profile = userProfiles.get(player.userId);
-      
-      // In-Session mode: Use hp/shield from session player if available
-      // Otherwise fall back to vault data
-      const useSessionHealth = (player.hp !== undefined || player.shield !== undefined);
-      
-      let health, maxHealth, shield, maxShield, pp, maxPP;
-      
+      const useSessionHealth = player.hp !== undefined || player.shield !== undefined;
+      let health: number;
+      let maxHealth: number;
+      let shield: number;
+      let maxShield: number;
+      let pp: number;
+      let maxPP: number;
+
       if (useSessionHealth) {
         health = player.hp ?? 100;
         shield = player.shield ?? 100;
         pp = player.powerPoints ?? 0;
         maxPP = student?.powerPoints || player.powerPoints || 1000;
-        // Use vault max when available so display reflects upgrades; otherwise session max
         const vaultForMax = playerVaultData[player.userId];
         maxHealth = vaultForMax?.maxVaultHealth ?? player.maxHp ?? 100;
         maxShield = vaultForMax?.maxShieldStrength ?? player.maxShield ?? 100;
@@ -1754,7 +1801,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           shieldStrength: 100,
           maxShieldStrength: 100,
           currentPP: student?.powerPoints || player.powerPoints,
-          maxPP: student?.powerPoints || player.powerPoints
+          maxPP: student?.powerPoints || player.powerPoints,
         };
         health = vaultData.vaultHealth;
         maxHealth = vaultData.maxVaultHealth;
@@ -1763,21 +1810,53 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         pp = vaultData.currentPP;
         maxPP = vaultData.maxPP;
       }
-      
-      return {
+
+      byId.set(player.userId, {
         id: player.userId,
         name: profile?.displayName || player.displayName,
         currentPP: pp,
-        maxPP: maxPP,
+        maxPP,
         vaultHealth: health,
         maxVaultHealth: maxHealth,
         shieldStrength: shield,
         maxShieldStrength: maxShield,
         level: player.level,
         photoURL: profile?.photoURL || player.photoURL,
-        speed: 50
+        speed: 50,
+      });
+    };
+
+    sessionPlayers.forEach(pushFromSession);
+
+    // Classmates not in the Live Event — still Fight-targetable (Offline Siege).
+    students.forEach((student) => {
+      if (!student.id || student.id === selfUid || byId.has(student.id)) return;
+      const profile = userProfiles.get(student.id);
+      const vaultData = playerVaultData[student.id] || {
+        vaultHealth: Math.max(3, Math.floor((student.powerPoints || 0) * 0.1) || 100),
+        maxVaultHealth: Math.max(3, Math.floor((student.powerPoints || 0) * 0.1) || 100),
+        shieldStrength: 100,
+        maxShieldStrength: 100,
+        currentPP: student.powerPoints || 0,
+        maxPP: student.powerPoints || 1000,
       };
+      byId.set(student.id, {
+        id: student.id,
+        name: profile?.displayName || student.displayName || 'Player',
+        currentPP: vaultData.currentPP,
+        maxPP: vaultData.maxPP,
+        vaultHealth: vaultData.vaultHealth,
+        maxVaultHealth: vaultData.maxVaultHealth,
+        shieldStrength: vaultData.shieldStrength,
+        maxShieldStrength: vaultData.maxShieldStrength,
+        level: student.level || 1,
+        photoURL: profile?.photoURL || student.photoURL,
+        speed: 50,
+      });
     });
+
+    return Array.from(byId.values());
+  }, [sessionPlayers, students, currentUser?.uid, userProfiles, playerVaultData]);
 
   const allies = useMemo(
     () =>
@@ -2483,6 +2562,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     ? allClassStudents.filter((s) => s.isInSession)
     : allClassStudents;
   const notInSessionCount = allClassStudents.filter((s) => !s.isInSession).length;
+  const offlineOpenToSiegeCount = allClassStudents.filter((s) => {
+    if (!s.isInSession) return true;
+    return s.sessionData?.participationMode === 'offline';
+  }).length;
+  const onlineInEventCount = allClassStudents.filter((s) => {
+    if (!s.isInSession) return false;
+    return s.sessionData?.participationMode !== 'offline';
+  }).length;
   const midPoint = Math.ceil(rosterForPlayerColumns.length / 2);
   const leftStudents = rosterForPlayerColumns.slice(0, midPoint);
   const rightStudents = rosterForPlayerColumns.slice(midPoint);
@@ -2648,6 +2735,19 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     ]
   );
 
+  /** Admin / session hosts can always open Fight and select skills (server waives participation shortfall). */
+  const hostCanAlwaysFight = useMemo(
+    () =>
+      isSessionHost ||
+      isAdminUser ||
+      isGlobalHost(
+        currentUser?.uid || '',
+        currentUser?.email || undefined,
+        currentUser?.displayName || undefined
+      ),
+    [isSessionHost, isAdminUser, currentUser?.uid, currentUser?.email, currentUser?.displayName]
+  );
+
   useEffect(() => {
     if (!playerLiveEventSkillsLocked) return;
     setShowMoveMenu(false);
@@ -2752,6 +2852,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     const isPresentInPresenceService = playerPresence?.connected === true;
     const isPresentInActiveViewers = activeViewers.includes(student.id);
     const isPresent = isActiveInSession && (isPresentInPresenceService || isPresentInActiveViewers);
+    /** Not in the Live Event, or explicitly joined Offline — open to Vault Siege. */
+    const isOpenToSiege =
+      !isActiveInSession || player?.participationMode === 'offline';
+    const isLiveOnline = isActiveInSession && !isOpenToSiege;
+    const siegeStartingPP = Math.max(
+      0,
+      Math.floor(
+        Number(
+          player?.liveEventStartingPP ??
+            vaultData.currentPP ??
+            student.powerPoints ??
+            0
+        ) || 0
+      )
+    );
+    const siegeProtectionFloor = computeSiegeProtectionFloor(siegeStartingPP);
     // Eliminated: session row (flag or 0 HP+0 shield) or display fallback when in session with 0/0 vault snapshot
     const isEliminated =
       isLiveEventPlayerEliminatedForRevive(player || {}) ||
@@ -2903,45 +3019,54 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           }
         }}
         style={{
-          background: inFlowState
-            ? isActiveInSession
-              ? 'linear-gradient(168deg, #ecfeff 0%, #e0f2fe 42%, #f5f3ff 100%)'
-              : 'linear-gradient(168deg, #f0fdfa 0%, #ecfeff 55%, #f8fafc 100%)'
-            : isActiveInSession
-              ? 'white'
-              : '#f9fafb',
+          background: isOpenToSiege
+            ? 'linear-gradient(165deg, #1f2937 0%, #111827 55%, #0f172a 100%)'
+            : inFlowState
+              ? isActiveInSession
+                ? 'linear-gradient(168deg, #ecfeff 0%, #e0f2fe 42%, #f5f3ff 100%)'
+                : 'linear-gradient(168deg, #f0fdfa 0%, #ecfeff 55%, #f8fafc 100%)'
+              : isLiveOnline
+                ? 'white'
+                : '#f9fafb',
           borderRadius: '0.5rem',
           padding: '0.75rem',
+          color: isOpenToSiege ? '#e2e8f0' : undefined,
           border: canPickThisLiveEventTarget
             ? '3px solid #fbbf24'
-            : inFlowState
-              ? isCurrentPlayer
-                ? '2px solid #0891b2'
-                : '2px solid #22d3ee'
-              : isCurrentPlayer
-                ? '2px solid #3b82f6'
-                : isPresent
-                  ? '2px solid #10b981'
-                  : isActiveInSession
-                    ? '2px solid #ef4444'
-                    : '1px solid #e5e7eb',
+            : isOpenToSiege
+              ? '2px solid #ef4444'
+              : inFlowState
+                ? isCurrentPlayer
+                  ? '2px solid #0891b2'
+                  : '2px solid #22d3ee'
+                : isCurrentPlayer
+                  ? '2px solid #3b82f6'
+                  : isPresent
+                    ? '2px solid #10b981'
+                    : isActiveInSession
+                      ? '2px solid #ef4444'
+                      : '1px solid #e5e7eb',
           ...(canPickThisLiveEventTarget
             ? {
                 boxShadow:
                   '0 0 20px rgba(251, 191, 36, 0.8), 0 4px 12px rgba(0, 0, 0, 0.2)',
               }
-            : !inFlowState
+            : isOpenToSiege
               ? {
-                  boxShadow: isCurrentPlayer
-                    ? '0 2px 8px rgba(59, 130, 246, 0.2)'
-                    : isPresent
-                      ? '0 2px 8px rgba(16, 185, 129, 0.2)'
-                      : isActiveInSession
-                        ? '0 2px 8px rgba(239, 68, 68, 0.2)'
-                        : '0 1px 3px rgba(0, 0, 0, 0.1)',
+                  boxShadow: '0 0 16px rgba(239, 68, 68, 0.45), 0 4px 12px rgba(0, 0, 0, 0.35)',
                 }
-              : {}),
-          opacity: isActiveInSession ? 1 : selectedMove ? 1 : 0.7,
+              : !inFlowState
+                ? {
+                    boxShadow: isCurrentPlayer
+                      ? '0 2px 8px rgba(59, 130, 246, 0.2)'
+                      : isPresent
+                        ? '0 2px 8px rgba(16, 185, 129, 0.2)'
+                        : isActiveInSession
+                          ? '0 2px 8px rgba(239, 68, 68, 0.2)'
+                          : '0 1px 3px rgba(0, 0, 0, 0.1)',
+                  }
+                : {}),
+          opacity: 1,
           position: 'relative',
           cursor: canPickThisLiveEventTarget ? 'pointer' : 'default',
           transform: canPickThisLiveEventTarget ? 'scale(1.05)' : 'scale(1)',
@@ -2963,7 +3088,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           }
         }}
       >
-        {/* Active/Inactive Indicator */}
+        {/* Active / Offline Siege Indicator */}
         <div style={{
           position: 'absolute',
           top: '0.375rem',
@@ -2971,10 +3096,34 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           width: '10px',
           height: '10px',
           borderRadius: '50%',
-          background: isPresent ? '#10b981' : (isActiveInSession ? '#ef4444' : '#9ca3af'),
+          background: isOpenToSiege
+            ? '#ef4444'
+            : isPresent
+              ? '#10b981'
+              : isActiveInSession
+                ? '#f59e0b'
+                : '#9ca3af',
           border: '2px solid white',
-          boxShadow: '0 0 0 1px ' + (isPresent ? '#10b981' : (isActiveInSession ? '#ef4444' : '#9ca3af'))
-        }} title={isPresent ? 'Present in Session' : (isActiveInSession ? 'Not Present' : 'Not in Session')} />
+          boxShadow:
+            '0 0 0 1px ' +
+            (isOpenToSiege
+              ? '#ef4444'
+              : isPresent
+                ? '#10b981'
+                : isActiveInSession
+                  ? '#f59e0b'
+                  : '#9ca3af'),
+        }}
+          title={
+            isOpenToSiege
+              ? 'Offline — open to siege'
+              : isPresent
+                ? 'Online in Live Event'
+                : isActiveInSession
+                  ? 'Joined but not present'
+                  : 'Not in session'
+          }
+        />
         {inFlowState && (
           <span className="mst-flow-badge-chip" title="Flow State — 3+ successes in a row">
             FLOW
@@ -2990,7 +3139,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 width: '40px',
                 height: '40px',
                 borderRadius: '50%',
-                border: isCurrentPlayer ? '2px solid #3b82f6' : (isPresent ? '2px solid #10b981' : (isActiveInSession ? '2px solid #ef4444' : '1px solid #e5e7eb')),
+                border: isCurrentPlayer
+                  ? '2px solid #3b82f6'
+                  : isOpenToSiege
+                    ? '2px solid #ef4444'
+                    : isPresent
+                      ? '2px solid #10b981'
+                      : isActiveInSession
+                        ? '2px solid #f59e0b'
+                        : '1px solid #e5e7eb',
                 objectFit: 'cover',
                 flexShrink: 0
               }}
@@ -3000,7 +3157,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               width: '40px',
               height: '40px',
               borderRadius: '50%',
-              background: isCurrentPlayer ? '#3b82f6' : (isPresent ? '#10b981' : (isActiveInSession ? '#ef4444' : '#8b5cf6')),
+              background: isCurrentPlayer
+                ? '#3b82f6'
+                : isOpenToSiege
+                  ? '#dc2626'
+                  : isPresent
+                    ? '#10b981'
+                    : isActiveInSession
+                      ? '#f59e0b'
+                      : '#8b5cf6',
               color: 'white',
               display: 'flex',
               alignItems: 'center',
@@ -3014,28 +3179,40 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           )}
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <div style={{ fontWeight: '600', fontSize: '0.875rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <div style={{ fontWeight: '600', fontSize: '0.875rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: '4px', color: isOpenToSiege ? '#f8fafc' : undefined }}>
                 <span>{student.displayName}</span>
                 {squadAbbreviations.get(student.id) && (
                   <span style={{
                     fontSize: '0.7rem',
-                    color: '#4f46e5',
+                    color: isOpenToSiege ? '#fca5a5' : '#4f46e5',
                     fontWeight: '600'
                   }}>
                     [{squadAbbreviations.get(student.id)}]
                   </span>
                 )}
               </div>
-              {isActiveInSession ? (
+              {isOpenToSiege ? (
                 <span style={{
                   fontSize: '0.65rem',
-                  background: isPresent ? '#10b981' : '#ef4444',
+                  background: '#dc2626',
+                  color: 'white',
+                  padding: '0.125rem 0.375rem',
+                  borderRadius: '0.25rem',
+                  fontWeight: '700',
+                  letterSpacing: '0.02em',
+                }}>
+                  {isActiveInSession ? 'OFFLINE · OPEN TO SIEGE' : 'NOT IN EVENT · OPEN TO SIEGE'}
+                </span>
+              ) : isLiveOnline ? (
+                <span style={{
+                  fontSize: '0.65rem',
+                  background: isPresent ? '#10b981' : '#f59e0b',
                   color: 'white',
                   padding: '0.125rem 0.375rem',
                   borderRadius: '0.25rem',
                   fontWeight: '600'
                 }}>
-                  {isPresent ? 'IN SESSION' : 'NOT PRESENT'}
+                  {isPresent ? 'ONLINE · IN EVENT' : 'JOINED · AWAY'}
                 </span>
               ) : (
                 <span style={{
@@ -3050,7 +3227,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 </span>
               )}
             </div>
-            <div style={{ fontSize: '0.75rem', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div style={{ fontSize: '0.75rem', color: isOpenToSiege ? '#94a3b8' : '#6b7280', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <span>Level {player?.level || student.level || 1}</span>
               {effectivePowerLevel != null && (
                 <span
@@ -3089,6 +3266,59 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             </button>
           </div>
         </div>
+
+        {isOpenToSiege && (
+          <div
+            style={{
+              marginBottom: '0.5rem',
+              padding: '0.55rem 0.6rem',
+              borderRadius: '0.45rem',
+              background: 'rgba(127, 29, 29, 0.55)',
+              border: '1px solid rgba(248, 113, 113, 0.65)',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                fontSize: '0.72rem',
+                fontWeight: 800,
+                color: '#fecaca',
+                letterSpacing: '0.03em',
+              }}
+            >
+              <span aria-hidden>◎</span>
+              OPEN TO SIEGE
+            </div>
+            <div style={{ fontSize: '0.68rem', color: '#fca5a5', marginTop: '0.2rem', lineHeight: 1.35 }}>
+              {isActiveInSession
+                ? 'Joined Offline — focusing on Work. Vault remains attackable.'
+                : 'Not logged into this Live Event — vault can be sieged.'}
+            </div>
+            <div
+              style={{
+                marginTop: '0.45rem',
+                padding: '0.4rem 0.45rem',
+                borderRadius: '0.35rem',
+                background: 'rgba(15, 23, 42, 0.55)',
+                border: '1px solid rgba(148, 163, 184, 0.35)',
+                fontSize: '0.65rem',
+                color: '#cbd5e1',
+                lineHeight: 1.4,
+              }}
+            >
+              <div style={{ fontWeight: 700, color: '#e2e8f0', marginBottom: '0.15rem' }}>
+                Protection Floor Active
+              </div>
+              PP cannot fall below 1/9 of starting amount from Live Event siege.
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.35rem', gap: 8 }}>
+                <span>Current PP: <strong style={{ color: '#f8fafc' }}>{vaultData.currentPP}</strong></span>
+                <span>Floor: <strong style={{ color: '#fbbf24' }}>{siegeProtectionFloor}</strong></span>
+              </div>
+            </div>
+          </div>
+        )}
         
         {/* Health Bar */}
         <div style={{ marginBottom: '0.375rem' }}>
@@ -3855,6 +4085,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           )}
         </div>
       </div>
+
+      {(isSessionHost || isAdminUser) && sessionId && (
+        <GameTimeHostPanel sessionId={sessionId} isHost={isSessionHost || isAdminUser} />
+      )}
 
       {!showSessionSummary &&
         mstMktOpen &&
@@ -4778,14 +5012,17 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             />
             Hide classmates not in this event
           </label>
-          {!showOnlyJoinedPlayersInRoster && notInSessionCount > 0 ? (
-            <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
-              Showing full class · {notInSessionCount} not logged into Live Event (still trackable in Sprint)
+          {!showOnlyJoinedPlayersInRoster && offlineOpenToSiegeCount > 0 ? (
+            <span style={{ fontSize: '0.78rem', color: '#b91c1c', fontWeight: 600 }}>
+              {onlineInEventCount} online in event · {offlineOpenToSiegeCount} offline and open to siege
             </span>
           ) : null}
           {showOnlyJoinedPlayersInRoster && notInSessionCount > 0 ? (
             <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
-              Showing {rosterForPlayerColumns.length} joined · {notInSessionCount} hidden
+              Showing {rosterForPlayerColumns.length} joined · {notInSessionCount} not in event hidden
+              {offlineOpenToSiegeCount > notInSessionCount
+                ? ` · ${offlineOpenToSiegeCount - notInSessionCount} joined Offline (open to siege)`
+                : ''}
             </span>
           ) : null}
         </div>
@@ -4816,7 +5053,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           overflow: 'hidden',
           minHeight: 0,
         }}>
-          <h2 style={{ fontSize: '1.125rem', marginBottom: '1rem', color: '#1f2937', fontWeight: '600' }}>Players</h2>
+          <h2 style={{ fontSize: '1.125rem', marginBottom: '1rem', color: '#1f2937', fontWeight: '600' }}>
+            Players{' '}
+            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#059669' }}>
+              ● ONLINE
+            </span>
+            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#dc2626', marginLeft: 8 }}>
+              ● OFFLINE / SIEGE
+            </span>
+          </h2>
           <div style={{ 
             flex: 1, 
             overflowY: 'auto',
@@ -4835,8 +5080,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   textAlign: 'center',
                 }}
               >
-                No one has joined this live event yet. Uncheck &quot;Hide classmates not in this event&quot; to see the
-                full class roster.
+                No one has joined this live event yet. Uncheck &quot;Hide classmates not in this event&quot; to see
+                classmates who are offline and open to siege.
               </div>
             ) : null}
             {leftStudents.map((student) => (
@@ -5940,7 +6185,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               display: 'flex',
               flexDirection: 'column',
               gap: '0.35rem',
-              zIndex: 2,
+              position: 'relative',
+              zIndex: 5,
             }}
           >
             {playerLiveEventSkillsLocked ? (
@@ -5971,15 +6217,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (playerLiveEventSkillsLocked) {
+                  if (playerLiveEventSkillsLocked && !hostCanAlwaysFight) {
                     alert('The host has paused Fight. Skills are locked until the host allows Fight again.');
                     return;
                   }
-                  if (currentPlayerEliminated) {
+                  if (currentPlayerEliminated && !hostCanAlwaysFight) {
                     alert('You have been eliminated and cannot use skills.');
                     return;
                   }
-                  if (currentPlayer && (currentPlayer.movesEarned || 0) > 0) {
+                  if (hostCanAlwaysFight || (currentPlayer && (currentPlayer.movesEarned || 0) > 0)) {
                     setCenterView('battleLog');
                     setShowMoveMenu(true);
                   } else {
@@ -5988,14 +6234,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     );
                   }
                 }}
-                disabled={!currentPlayer || currentPlayerEliminated || playerLiveEventSkillsLocked}
+                disabled={!hostCanAlwaysFight && (!currentPlayer || currentPlayerEliminated || playerLiveEventSkillsLocked)}
                 style={{
                   flex: '1 1 110px',
                   background:
-                    currentPlayer &&
-                    (currentPlayer.movesEarned || 0) > 0 &&
-                    !currentPlayerEliminated &&
-                    !playerLiveEventSkillsLocked
+                    hostCanAlwaysFight ||
+                    (currentPlayer &&
+                      (currentPlayer.movesEarned || 0) > 0 &&
+                      !currentPlayerEliminated &&
+                      !playerLiveEventSkillsLocked)
                       ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)'
                       : '#9ca3af',
                   color: 'white',
@@ -6005,9 +6252,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   fontSize: compactFightBtnFont,
                   fontWeight: 700,
                   cursor:
-                    !currentPlayer || currentPlayerEliminated || playerLiveEventSkillsLocked
-                      ? 'not-allowed'
-                      : 'pointer',
+                    hostCanAlwaysFight ||
+                    (currentPlayer && !currentPlayerEliminated && !playerLiveEventSkillsLocked)
+                      ? 'pointer'
+                      : 'not-allowed',
                 }}
                 title="Opens Battle Log to pick a skill and target"
               >
@@ -6082,13 +6330,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             </div>
           </div>
           ) : (
-          <div style={{ flexShrink: 0, width: '100%' }}>
+          <div style={{ flexShrink: 0, width: '100%', position: 'relative', zIndex: 5 }}>
           {/* Action Buttons — full size on Battle Log / no-quiz */}
           <div style={{
             display: 'flex',
             flexDirection: 'column',
             gap: '0.75rem',
-            zIndex: 2
+            position: 'relative',
+            zIndex: 5,
           }}>
             {playerLiveEventSkillsLocked ? (
               <div
@@ -6107,21 +6356,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               </div>
             ) : null}
             <button
+              type="button"
               onClick={() => {
                 console.log('⚔️ [InSessionBattle] FIGHT button clicked', {
                   hasCurrentPlayer: !!currentPlayer,
                   movesEarned: currentPlayer?.movesEarned || 0,
-                  willOpenMenu: !!(currentPlayer && (currentPlayer.movesEarned || 0) > 0)
+                  hostCanAlwaysFight,
                 });
-                if (playerLiveEventSkillsLocked) {
+                if (playerLiveEventSkillsLocked && !hostCanAlwaysFight) {
                   alert('The host has paused Fight. Skills are locked until the host allows Fight again.');
                   return;
                 }
-                if (currentPlayerEliminated) {
+                if (currentPlayerEliminated && !hostCanAlwaysFight) {
                   alert('You have been eliminated and cannot use skills.');
                   return;
                 }
-                if (currentPlayer && (currentPlayer.movesEarned || 0) > 0) {
+                if (hostCanAlwaysFight || (currentPlayer && (currentPlayer.movesEarned || 0) > 0)) {
                   setShowMoveMenu(true);
                   console.log('✅ [InSessionBattle] Move menu opened');
                 } else {
@@ -6131,26 +6381,24 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   );
                 }
               }}
-              disabled={
-                !currentPlayer ||
-                currentPlayerEliminated ||
-                playerLiveEventSkillsLocked
-              }
+              disabled={!hostCanAlwaysFight && (!currentPlayer || currentPlayerEliminated || playerLiveEventSkillsLocked)}
               style={{
                 width: '100%',
                 background:
-                  currentPlayer &&
-                  (currentPlayer.movesEarned || 0) > 0 &&
-                  !currentPlayerEliminated &&
-                  !playerLiveEventSkillsLocked
+                  hostCanAlwaysFight ||
+                  (currentPlayer &&
+                    (currentPlayer.movesEarned || 0) > 0 &&
+                    !currentPlayerEliminated &&
+                    !playerLiveEventSkillsLocked)
                     ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)'
                     : '#9ca3af',
                 color: 'white',
                 border:
-                  currentPlayer &&
-                  (currentPlayer.movesEarned || 0) > 0 &&
-                  !currentPlayerEliminated &&
-                  !playerLiveEventSkillsLocked
+                  hostCanAlwaysFight ||
+                  (currentPlayer &&
+                    (currentPlayer.movesEarned || 0) > 0 &&
+                    !currentPlayerEliminated &&
+                    !playerLiveEventSkillsLocked)
                     ? '3px solid #b91c1c'
                     : '3px solid #6b7280',
                 borderRadius: '0.5rem',
@@ -6158,41 +6406,46 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 fontSize: compactFightBtnFont,
                 fontWeight: 'bold',
                 cursor:
-                  !currentPlayer ||
-                  currentPlayerEliminated ||
-                  playerLiveEventSkillsLocked
-                    ? 'not-allowed'
-                    : 'pointer',
+                  hostCanAlwaysFight ||
+                  (currentPlayer && !currentPlayerEliminated && !playerLiveEventSkillsLocked)
+                    ? 'pointer'
+                    : 'not-allowed',
                 opacity:
-                  currentPlayer &&
-                  (currentPlayer.movesEarned || 0) > 0 &&
-                  !currentPlayerEliminated &&
-                  !playerLiveEventSkillsLocked
+                  hostCanAlwaysFight ||
+                  (currentPlayer &&
+                    (currentPlayer.movesEarned || 0) > 0 &&
+                    !currentPlayerEliminated &&
+                    !playerLiveEventSkillsLocked)
                     ? 1
                     : 0.75,
                 transition: 'all 0.2s',
                 boxShadow:
-                  currentPlayer &&
-                  (currentPlayer.movesEarned || 0) > 0 &&
-                  !currentPlayerEliminated &&
-                  !playerLiveEventSkillsLocked
+                  hostCanAlwaysFight ||
+                  (currentPlayer &&
+                    (currentPlayer.movesEarned || 0) > 0 &&
+                    !currentPlayerEliminated &&
+                    !playerLiveEventSkillsLocked)
                     ? '0 4px 12px rgba(239, 68, 68, 0.4)'
                     : 'none',
+                position: 'relative',
+                zIndex: 6,
               }}
               title={
-                playerLiveEventSkillsLocked
-                  ? 'Host paused Fight — skills locked'
-                  : currentPlayerEliminated
-                    ? 'Eliminated — cannot fight'
-                    : (currentPlayer?.movesEarned || 0) <= 0
-                      ? 'Earn Participation Points (correct answers) to fight'
-                      : `Fight — ${currentPlayer?.movesEarned || 0} participation available`
+                hostCanAlwaysFight
+                  ? `Fight (Host) — ${currentPlayer?.movesEarned || 0} participation available`
+                  : playerLiveEventSkillsLocked
+                    ? 'Host paused Fight — skills locked'
+                    : currentPlayerEliminated
+                      ? 'Eliminated — cannot fight'
+                      : (currentPlayer?.movesEarned || 0) > 0
+                        ? `Fight — ${currentPlayer?.movesEarned || 0} participation available`
+                        : 'Earn Participation Points (correct answers) to fight'
               }
             >
               ⚔️ FIGHT{' '}
-              {playerLiveEventSkillsLocked
+              {playerLiveEventSkillsLocked && !hostCanAlwaysFight
                 ? '(LOCKED)'
-                : currentPlayerEliminated
+                : currentPlayerEliminated && !hostCanAlwaysFight
                   ? '(ELIMINATED)'
                   : `(${currentPlayer?.movesEarned || 0})`}
             </button>
@@ -6374,7 +6627,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           </div>
           )}
 
-          {/* BattleEngine - always mounted so Quiz-tab targeting still resolves */}
+          {/* BattleEngine - always mounted so Quiz-tab targeting still resolves.
+              Keep pointer-events off so Fight/Bag/Vault buttons remain clickable;
+              InSessionBattle owns the Fight move modal (z-index 10000). */}
           <div style={{
             position: 'absolute',
             top: 0,
@@ -6400,7 +6655,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 }
               `}
             </style>
-            <div style={{ pointerEvents: 'auto', width: '100%', height: '100%' }}>
+            <div style={{ pointerEvents: 'none', width: '100%', height: '100%' }}>
               <BattleEngine
                 onBattleEnd={handleBattleEnd}
                 onMoveConsumption={handleMoveConsumption}
@@ -6436,7 +6691,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           overflow: 'hidden',
           minHeight: 0,
         }}>
-          <h2 style={{ fontSize: '1.125rem', marginBottom: '1rem', color: '#1f2937', fontWeight: '600' }}>Players</h2>
+          <h2 style={{ fontSize: '1.125rem', marginBottom: '1rem', color: '#1f2937', fontWeight: '600' }}>
+            Players{' '}
+            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#059669' }}>
+              ● ONLINE
+            </span>
+            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#dc2626', marginLeft: 8 }}>
+              ● OFFLINE / SIEGE
+            </span>
+          </h2>
           <div style={{ 
             flex: 1, 
             overflowY: 'auto',
@@ -6738,7 +7001,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       )}
 
       {/* Move Selection Modal - Only show when selecting a move, not when a move is selected */}
-      {showMoveMenu && !selectedMove && !playerLiveEventSkillsLocked && (
+      {showMoveMenu && !selectedMove && (!playerLiveEventSkillsLocked || hostCanAlwaysFight) && (
         <div style={{
           position: 'fixed',
           top: 0,
@@ -7055,9 +7318,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                 (move as { useSessionPowerPoints?: boolean }).useSessionPowerPoints === true;
                               const sessionPpAvail = currentPlayer?.powerPoints ?? 0;
                               const canAffordSkill =
-                                isConstructSkill || isLevel2ManifestSkill
+                                hostCanAlwaysFight ||
+                                (isConstructSkill || isLevel2ManifestSkill
                                   ? sessionPpAvail >= le.finalCost
-                                  : participationMe >= le.finalCost;
+                                  : participationMe >= le.finalCost);
                               
                               return (
                                 <button
@@ -7270,7 +7534,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                               }
 
                               const leEl = ppLive(move as BattleMove);
-                              const canAffordEl = participationMe >= leEl.finalCost;
+                              const canAffordEl = hostCanAlwaysFight || participationMe >= leEl.finalCost;
                               
                               return (
                                 <button
@@ -7522,7 +7786,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                               }
 
                               const leRr = ppLive(move as BattleMove);
-                              const canAffordRr = participationMe >= leRr.finalCost;
+                              const canAffordRr = hostCanAlwaysFight || participationMe >= leRr.finalCost;
                               
                               return (
                                 <button

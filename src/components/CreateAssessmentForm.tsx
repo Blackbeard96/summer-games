@@ -547,8 +547,8 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
   };
 
   return (
-    <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-      <h2>{isEditMode ? 'Edit Assessment' : 'Create Assessment'}</h2>
+    <div style={{ maxWidth: '800px', margin: '0 auto', color: '#0f172a' }}>
+      <h2 style={{ color: '#0f172a' }}>{isEditMode ? 'Edit Assessment' : 'Create Assessment'}</h2>
       
       <form onSubmit={handleSubmit}>
         {/* Class Selection (Multi-select for create mode) */}
@@ -909,12 +909,14 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
               border: '1px solid #34d399',
             }}
           >
-            <h3 style={{ marginTop: 0, marginBottom: '0.5rem' }}>Weekly deliverable</h3>
+            <h3 style={{ marginTop: 0, marginBottom: '0.5rem', color: '#065f46', fontWeight: 800 }}>
+              Weekly deliverable
+            </h3>
             <p style={{ margin: '0 0 0.75rem', fontSize: '0.875rem', color: '#065f46' }}>
               Physical work item for the week. Students acknowledge the deliverable (or you mark them in the dashboard).
               Grading is <strong>completed</strong> vs <strong>did not complete</strong> — configure PP for each tier below.
             </p>
-            <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', marginBottom: 6 }}>
+            <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', marginBottom: 6, color: '#064e3b' }}>
               Assignment type <span style={{ color: '#b91c1c' }}>*</span>
             </label>
             <input
@@ -945,7 +947,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
               checked={isLocked}
               onChange={(e) => setIsLocked(e.target.checked)}
             />
-            <span style={{ fontWeight: 'bold' }}>Locked (students cannot change goals)</span>
+            <span style={{ fontWeight: 'bold', color: '#0f172a' }}>Locked (students cannot change goals)</span>
           </label>
         </div>
 
@@ -1254,7 +1256,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
           <>
           <div style={{ marginBottom: '1.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h3>Reward Tiers</h3>
+            <h3 style={{ margin: 0, color: '#0f172a' }}>Reward Tiers</h3>
             {type !== 'weekly_deliverable' && (
               <button
                 type="button"

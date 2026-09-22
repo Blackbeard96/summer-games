@@ -32,7 +32,7 @@ const GeneratorEarningsModal: React.FC<GeneratorEarningsModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       style={{
         position: 'fixed',
         top: 0,
@@ -47,8 +47,8 @@ const GeneratorEarningsModal: React.FC<GeneratorEarningsModalProps> = ({
         padding: '1rem'
       }}
       onClick={onClose}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         style={{
           background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)',
           borderRadius: '1rem',

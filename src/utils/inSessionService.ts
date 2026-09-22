@@ -59,6 +59,8 @@ export interface SessionPlayer {
   /** Host / teacher participant row */
   isTeacher?: boolean;
   isReady?: boolean;
+  participationMode?: 'online' | 'offline';
+  liveEventStartingPP?: number;
 }
 
 export interface InSessionRoom {
@@ -155,6 +157,8 @@ export async function createSession(
       movesEarned: 5,
       participationCount: 0,
       powerPoints: 0,
+      participationMode: 'online',
+      liveEventStartingPP: 0,
       hp: 100,
       maxHp: 100,
       shield: 100,
@@ -169,10 +173,15 @@ export async function createSession(
       hostUid: hostUid || '',
       status: 'live' as const, // Use 'live' consistently
       mode: 'in_session' as const,
+      /** Default Live Event mode — Class Flow (sprints / participation). */
+      liveEventMode: 'class_flow' as const,
+      goalLinkingEnabled: true,
+      energyTypeAwarded: 'physical',
       players: [hostPlayer] as SessionPlayer[],
       battleLog: [
         `🎉 Live Event is now active for ${className || 'this class'}! Join the battle in the arena.`,
         `👑 ${hostName} joined as host (can participate in battle).`,
+        '🏃 Mode: Class Flow — use the Sprint panel for timed goals and participation rewards.',
         '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
         '📋 How to earn PP this event:',
         `  • +${LIVE_EVENT_PP_BASE_PER_ELIMINATION} PP for every player you eliminate (plus their vault PP)`,
@@ -272,7 +281,8 @@ export async function getActiveSessionForClass(classId: string): Promise<InSessi
  */
 export async function joinSession(
   sessionId: string,
-  player: SessionPlayer
+  player: SessionPlayer,
+  options?: { participationMode?: 'online' | 'offline' }
 ): Promise<{ success: boolean; error?: string; isNewPlayer?: boolean }> {
   const DEBUG_JOIN = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
                      process.env.REACT_APP_DEBUG === 'true';
@@ -379,7 +389,17 @@ export async function joinSession(
         typeof player.displayName === 'string' && player.displayName.trim()
           ? player.displayName.trim()
           : 'Player';
-      player = { ...player, displayName: resolvedName };
+      const participationMode = options?.participationMode || player.participationMode || 'online';
+      const startingPP = Math.max(0, Math.floor(Number(player.powerPoints) || 0));
+      player = {
+        ...player,
+        displayName: resolvedName,
+        participationMode,
+        liveEventStartingPP:
+          player.liveEventStartingPP != null
+            ? Math.max(0, Math.floor(Number(player.liveEventStartingPP) || 0))
+            : startingPP,
+      };
 
       // PHASE 2: ALL WRITES AFTER READS
       // Update or add player

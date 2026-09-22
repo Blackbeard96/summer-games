@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { VaultSiegeAttack } from '../types/battle';
+import PlayerBuildInspectModal from './PlayerBuildInspectModal';
 
 interface AttackHistoryProps {
   attacks: VaultSiegeAttack[];
@@ -8,6 +9,19 @@ interface AttackHistoryProps {
 
 const AttackHistory: React.FC<AttackHistoryProps> = ({ attacks }) => {
   const { currentUser } = useAuth();
+  const [inspectPlayerId, setInspectPlayerId] = useState<string | null>(null);
+  const [inspectDisplayName, setInspectDisplayName] = useState<string | undefined>(undefined);
+
+  const openPlayerProfile = (
+    event: React.MouseEvent,
+    playerId: string | undefined,
+    displayName: string | undefined
+  ) => {
+    event.stopPropagation();
+    if (!playerId) return;
+    setInspectPlayerId(playerId);
+    setInspectDisplayName(displayName || 'Player');
+  };
 
   if (!attacks || attacks.length === 0) {
     return (
@@ -113,8 +127,30 @@ const AttackHistory: React.FC<AttackHistoryProps> = ({ attacks }) => {
                   fontSize: '0.875rem',
                   textShadow: '0 1px 2px rgba(0,0,0,0.5)'
                 }}>
-                  {isAttacker ? 'ATTACK' : isTarget ? 'DEFENDED' : 'BATTLE'}
+                  {attack.liveEventSiege || attack.source === 'live_event_siege'
+                    ? isAttacker
+                      ? 'SIEGE'
+                      : 'SIEGED'
+                    : isAttacker
+                      ? 'ATTACK'
+                      : isTarget
+                        ? 'DEFENDED'
+                        : 'BATTLE'}
                 </div>
+                {(attack.liveEventSiege || attack.source === 'live_event_siege') && (
+                  <div
+                    style={{
+                      marginTop: '0.2rem',
+                      fontSize: '0.65rem',
+                      fontWeight: 700,
+                      color: 'rgba(254, 226, 226, 0.95)',
+                      letterSpacing: '0.04em',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    During Live Event
+                  </div>
+                )}
               </div>
 
               {/* Attack Type Badge */}
@@ -122,15 +158,26 @@ const AttackHistory: React.FC<AttackHistoryProps> = ({ attacks }) => {
                 position: 'absolute',
                 top: '0.75rem',
                 right: '0.75rem',
-                background: 'rgba(255,255,255,0.9)',
+                background: attack.liveEventSiege || attack.source === 'live_event_siege'
+                  ? 'rgba(127, 29, 29, 0.95)'
+                  : 'rgba(255,255,255,0.9)',
                 padding: '0.25rem 0.5rem',
                 borderRadius: '0.5rem',
-                fontSize: '0.75rem',
+                fontSize: '0.7rem',
                 fontWeight: 'bold',
-                color: '#374151',
-                backdropFilter: 'blur(10px)'
+                color: attack.liveEventSiege || attack.source === 'live_event_siege' ? '#fecaca' : '#374151',
+                backdropFilter: 'blur(10px)',
+                maxWidth: '46%',
+                textAlign: 'right',
+                lineHeight: 1.2,
               }}>
-                {attack.moveName ? 'MOVE' : attack.actionCardName ? 'CARD' : 'ATTACK'}
+                {attack.liveEventSiege || attack.source === 'live_event_siege'
+                  ? 'LIVE EVENT SIEGE'
+                  : attack.moveName
+                    ? 'MOVE'
+                    : attack.actionCardName
+                      ? 'CARD'
+                      : 'ATTACK'}
               </div>
 
               {/* Attack Description */}
@@ -150,9 +197,67 @@ const AttackHistory: React.FC<AttackHistoryProps> = ({ attacks }) => {
                   fontWeight: '500'
                 }}>
                   {isAttacker ? (
-                    <>Attacked <span style={{ color: '#dc2626', fontWeight: 'bold' }}>{attack.targetName}</span></>
+                    <>
+                      {attack.liveEventSiege || attack.source === 'live_event_siege'
+                        ? 'Sieged '
+                        : 'Attacked '}
+                      <button
+                        type="button"
+                        onClick={(e) => openPlayerProfile(e, attack.targetId, attack.targetName)}
+                        title={`View ${attack.targetName}'s profile`}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: 0,
+                          margin: 0,
+                          color: '#dc2626',
+                          fontWeight: 'bold',
+                          cursor: attack.targetId ? 'pointer' : 'default',
+                          textDecoration: attack.targetId ? 'underline' : 'none',
+                          fontSize: 'inherit',
+                          fontFamily: 'inherit',
+                          lineHeight: 'inherit',
+                        }}
+                      >
+                        {attack.targetName}
+                      </button>
+                      {(attack.liveEventSiege || attack.source === 'live_event_siege') && (
+                        <span style={{ display: 'block', marginTop: 4, fontSize: '0.7rem', color: '#9a3412' }}>
+                          Offline Siege in a Live Event
+                        </span>
+                      )}
+                    </>
                   ) : (
-                    <>Attacked by <span style={{ color: '#059669', fontWeight: 'bold' }}>{attack.attackerName}</span></>
+                    <>
+                      {attack.liveEventSiege || attack.source === 'live_event_siege'
+                        ? 'Sieged by '
+                        : 'Attacked by '}
+                      <button
+                        type="button"
+                        onClick={(e) => openPlayerProfile(e, attack.attackerId, attack.attackerName)}
+                        title={`View ${attack.attackerName}'s profile`}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: 0,
+                          margin: 0,
+                          color: '#059669',
+                          fontWeight: 'bold',
+                          cursor: attack.attackerId ? 'pointer' : 'default',
+                          textDecoration: attack.attackerId ? 'underline' : 'none',
+                          fontSize: 'inherit',
+                          fontFamily: 'inherit',
+                          lineHeight: 'inherit',
+                        }}
+                      >
+                        {attack.attackerName}
+                      </button>
+                      {(attack.liveEventSiege || attack.source === 'live_event_siege') && (
+                        <span style={{ display: 'block', marginTop: 4, fontSize: '0.7rem', color: '#9a3412' }}>
+                          Offline Siege in a Live Event
+                        </span>
+                      )}
+                    </>
                   )}
                 </div>
                 <div style={{ 
@@ -323,6 +428,17 @@ const AttackHistory: React.FC<AttackHistoryProps> = ({ attacks }) => {
           Showing 6 most recent attacks. {sortedAttacks.length - 6} more attacks in history.
         </div>
       )}
+
+      <PlayerBuildInspectModal
+        open={Boolean(inspectPlayerId)}
+        onClose={() => {
+          setInspectPlayerId(null);
+          setInspectDisplayName(undefined);
+        }}
+        playerId={inspectPlayerId}
+        rosterDisplayName={inspectDisplayName}
+        viewerSubtitle="Battle History — loadout & artifacts"
+      />
     </div>
   );
 };

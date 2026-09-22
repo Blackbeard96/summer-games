@@ -401,7 +401,7 @@ const BattleInvitationManager: React.FC = () => {
   if (!showingInvitation) return null;
 
   return (
-    <div style={{
+    <div className="mst-popup-panel" style={{
       position: 'fixed',
       top: '50%',
       left: '50%',

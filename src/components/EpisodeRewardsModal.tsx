@@ -194,7 +194,7 @@ const EpisodeRewardsModal: React.FC<EpisodeRewardsModalProps> = ({ episode, onCl
   };
 
   return (
-    <div style={{
+    <div className="mst-popup-overlay" style={{
       position: 'fixed',
       top: 0,
       left: 0,
@@ -207,7 +207,7 @@ const EpisodeRewardsModal: React.FC<EpisodeRewardsModalProps> = ({ episode, onCl
       zIndex: 2000,
       padding: '2rem',
       animation: 'fadeIn 0.3s ease-in-out'
-    }}>
+    }}><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
       <style>{`
         @keyframes fadeIn {
           from { opacity: 0; }
@@ -227,7 +227,7 @@ const EpisodeRewardsModal: React.FC<EpisodeRewardsModalProps> = ({ episode, onCl
         }
       `}</style>
       
-      <div style={{
+      <div className="mst-popup-panel" style={{
         background: 'linear-gradient(135deg, #1e3a8a 0%, #312e81 100%)',
         borderRadius: '1.5rem',
         padding: '3rem',

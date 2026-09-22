@@ -122,6 +122,12 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
               visibility: 'all'
             },
             {
+              label: 'Work Board',
+              path: '/work-board',
+              icon: '📋',
+              visibility: 'all'
+            },
+            {
               label: 'Skill Library',
               path: '/admin/skill-library',
               icon: '✦',

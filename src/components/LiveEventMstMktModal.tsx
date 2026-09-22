@@ -115,7 +115,7 @@ const LiveEventMstMktModal: React.FC<LiveEventMstMktModalProps> = ({
   };
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       role="dialog"
       aria-modal="true"
       aria-labelledby="mst-mkt-title"
@@ -130,8 +130,8 @@ const LiveEventMstMktModal: React.FC<LiveEventMstMktModalProps> = ({
         justifyContent: 'center',
         padding: '1rem',
       }}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         onClick={(e) => e.stopPropagation()}
         style={{
           width: '100%',

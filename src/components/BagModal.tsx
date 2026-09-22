@@ -222,7 +222,7 @@ const BagModal: React.FC<BagModalProps> = ({
   };
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       style={{
         position: 'fixed',
         top: 0,
@@ -236,8 +236,8 @@ const BagModal: React.FC<BagModalProps> = ({
         zIndex: 10000
       }}
       onClick={onClose}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         style={{
           backgroundColor: '#1a1a2e',
           border: '3px solid #4f46e5',

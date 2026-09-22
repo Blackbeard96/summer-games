@@ -41,6 +41,7 @@ import ArtifactsAdmin from '../components/ArtifactsAdmin';
 import DailyChallengesAdmin from '../components/DailyChallengesAdmin';
 import AssessmentGoalsAdmin from '../components/AssessmentGoalsAdmin';
 import WeeklyGoalsAdminReview from '../components/admin/WeeklyGoalsAdminReview';
+import WorkBoardAdmin from './admin/WorkBoardAdmin';
 import TrainingGroundsAdmin from '../components/TrainingGroundsAdmin';
 import SkillLibraryAdmin from './admin/SkillLibraryAdmin';
 import SkillAnalyticsAdmin from './admin/SkillAnalyticsAdmin';
@@ -256,7 +257,7 @@ const AdminPanel: React.FC = () => {
     | 'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management'
     | 'manifests' | 'level2-manifest' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup'
     | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts'
-    | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'weekly-goals-review' | 'training-grounds'
+    | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'weekly-goals-review' | 'work-board' | 'training-grounds'
     | 'skill-library' | 'skill-analytics' | 'live-event-history' | 'popup-controls'
     | 'season1' | 'rr-candies' | 'progression-repair' | 'vault-recovery' | 'uxp-approval' | 'missions'
     | 'island-raid-levels' | 'productivity-dashboard' | 'civic-economy';
@@ -271,6 +272,7 @@ const AdminPanel: React.FC = () => {
       if (urlTab === 'productivity') return 'productivity-dashboard';
       if (urlTab === 'live-event-history') return 'live-event-history';
       if (urlTab === 'popup-controls') return 'popup-controls';
+      if (urlTab === 'work-board') return 'work-board';
       if (urlTab === 'civic-economy') return 'civic-economy';
       const stored = sessionStorage.getItem(ADMIN_TAB_STORAGE_KEY) as AdminTab | null;
       if (stored) return stored;
@@ -3232,6 +3234,22 @@ const AdminPanel: React.FC = () => {
           📆 Weekly Goals Review
         </button>
         <button
+          onClick={() => setActiveTab('work-board')}
+          style={{
+            backgroundColor: activeTab === 'work-board' ? '#0f766e' : '#e5e7eb',
+            color: activeTab === 'work-board' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+          }}
+        >
+          📋 Work Board (W)
+        </button>
+        <button
           onClick={() => setActiveTab('productivity-dashboard')}
           style={{
             backgroundColor: activeTab === 'productivity-dashboard' ? '#0369a1' : '#e5e7eb',
@@ -3519,6 +3537,8 @@ const AdminPanel: React.FC = () => {
         <AssessmentGoalsAdmin />
       ) : activeTab === 'weekly-goals-review' ? (
         <WeeklyGoalsAdminReview />
+      ) : activeTab === 'work-board' ? (
+        <WorkBoardAdmin />
       ) : activeTab === 'productivity-dashboard' ? (
         <ProductivityDashboardAdmin
           students={students.map((s) => ({

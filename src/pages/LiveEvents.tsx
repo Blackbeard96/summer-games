@@ -181,7 +181,10 @@ const LiveEvents: React.FC = () => {
     };
   }, [currentUser, userClassrooms]);
 
-  const handleJoinEvent = async (event: LiveEvent) => {
+  const handleJoinEvent = async (
+    event: LiveEvent,
+    participationMode: 'online' | 'offline' = 'online'
+  ) => {
     if (!currentUser || joiningEventId) return;
 
     setJoiningEventId(event.id);
@@ -236,7 +239,7 @@ const LiveEvents: React.FC = () => {
         return;
       }
 
-      const result = await joinSession(event.id, newPlayer);
+      const result = await joinSession(event.id, newPlayer, { participationMode });
 
       if (result.success) {
         console.log('[LiveEvents] Successfully joined session:', event.id);
@@ -608,30 +611,71 @@ const LiveEvents: React.FC = () => {
                     <div style={{ color: '#7c3aed', fontSize: '0.8rem', marginTop: 6 }}>{formatSeason1Mode(event)}</div>
                     <div style={{ color: '#6b7280', fontSize: '0.78rem', marginTop: 4 }}>{formatEventAudience(event)}</div>
                   </div>
-                  <button
-                    onClick={() => isJoined ? navigate(`/live-events/${event.id}`) : handleJoinEvent(event)}
-                    disabled={joiningEventId === event.id}
-                    style={{
-                      background: isJoined
-                        ? 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)'
-                        : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '0.5rem',
-                      padding: '0.75rem 1.5rem',
-                      fontSize: '0.875rem',
-                      fontWeight: 'bold',
-                      cursor: 'pointer',
-                      width: '100%',
-                      opacity: joiningEventId === event.id ? 0.6 : 1
-                    }}
-                  >
-                    {joiningEventId === event.id
-                      ? 'Joining...'
-                      : isJoined
-                      ? '🎮 Rejoin Live Event'
-                      : '🎮 Join Live Event'}
-                  </button>
+                  {isJoined ? (
+                    <button
+                      onClick={() => navigate(`/live-events/${event.id}`)}
+                      disabled={joiningEventId === event.id}
+                      style={{
+                        background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '0.5rem',
+                        padding: '0.75rem 1.5rem',
+                        fontSize: '0.875rem',
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                        width: '100%',
+                        opacity: joiningEventId === event.id ? 0.6 : 1
+                      }}
+                    >
+                      {joiningEventId === event.id ? 'Joining...' : '🎮 Rejoin Live Event'}
+                    </button>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <p style={{ margin: 0, fontSize: '0.75rem', color: '#64748b' }}>
+                        Online = enter Live Event. Offline = focus on Work; still present for Siege when enabled.
+                        Does not affect grades.
+                      </p>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          onClick={() => handleJoinEvent(event, 'online')}
+                          disabled={joiningEventId === event.id}
+                          style={{
+                            flex: 1,
+                            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.5rem',
+                            padding: '0.75rem 0.5rem',
+                            fontSize: '0.8rem',
+                            fontWeight: 'bold',
+                            cursor: 'pointer',
+                            opacity: joiningEventId === event.id ? 0.6 : 1
+                          }}
+                        >
+                          {joiningEventId === event.id ? '…' : 'Join Online'}
+                        </button>
+                        <button
+                          onClick={() => handleJoinEvent(event, 'offline')}
+                          disabled={joiningEventId === event.id}
+                          style={{
+                            flex: 1,
+                            background: 'linear-gradient(135deg, #64748b 0%, #475569 100%)',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.5rem',
+                            padding: '0.75rem 0.5rem',
+                            fontSize: '0.8rem',
+                            fontWeight: 'bold',
+                            cursor: 'pointer',
+                            opacity: joiningEventId === event.id ? 0.6 : 1
+                          }}
+                        >
+                          {joiningEventId === event.id ? '…' : 'Join Offline'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}

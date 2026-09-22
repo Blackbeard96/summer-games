@@ -93,6 +93,23 @@
 .mst-app-shell [style*="background: #ffffff"],
 .mst-app-shell [style*="background: #f8fafc"],
 .mst-app-shell [style*="background: #f9fafb"],
+.mst-app-shell [style*="background: #f3f4f6"],
+.mst-app-shell [style*="background: #e5e7eb"],
+.mst-app-shell [style*="background: #f0f9ff"],
+.mst-app-shell [style*="background: #e0f2fe"],
+.mst-app-shell [style*="background: #eff6ff"],
+.mst-app-shell [style*="background: #dbeafe"],
+.mst-app-shell [style*="background: #f0fdf4"],
+.mst-app-shell [style*="background: #dcfce7"],
+.mst-app-shell [style*="background: #ecfdf5"],
+.mst-app-shell [style*="background: #fef3c7"],
+.mst-app-shell [style*="background: #fffbeb"],
+.mst-app-shell [style*="background: #fef2f2"],
+.mst-app-shell [style*="background: #f5f3ff"],
+.mst-app-shell [style*="background: #ede9fe"],
+.mst-app-shell [style*="background: #faf5ff"],
+.mst-app-shell [style*="background: #fff7ed"],
+.mst-app-shell [style*="background: #ffedd5"],
 .mst-app-shell [style*="background: linear-gradient(135deg, #ffffff"],
 .mst-app-shell [style*="background: linear-gradient(135deg, #f8fafc"],
 .mst-app-shell [style*="background: linear-gradient(135deg, #f0fdf4"],
@@ -341,4 +358,113 @@
 .mst-app-shell .mst-battle-pass-admin [style*="color: #6d28d9"],
 .mst-app-shell .mst-battle-pass-admin [style*="color:#6d28d9"] {
   color: #5b21b6 !important;
+}
+
+/* ------------------------------------------------------------------ */
+/* Assessment Goals — readable ink on light form panels (admin + student) */
+/* ------------------------------------------------------------------ */
+
+.mst-app-shell .mst-assessment-goals,
+.mst-app-shell .mst-assessment-goals.mst-light-surface {
+  color: #0f172a !important;
+  background: rgba(248, 250, 252, 0.97);
+  border-radius: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+}
+
+.mst-app-shell .mst-assessment-goals label,
+.mst-app-shell .mst-assessment-goals p,
+.mst-app-shell .mst-assessment-goals li,
+.mst-app-shell .mst-assessment-goals span,
+.mst-app-shell .mst-assessment-goals h1,
+.mst-app-shell .mst-assessment-goals h2,
+.mst-app-shell .mst-assessment-goals h3,
+.mst-app-shell .mst-assessment-goals h4,
+.mst-app-shell .mst-assessment-goals strong {
+  color: #0f172a !important;
+}
+
+.mst-app-shell .mst-assessment-goals [style*="color: #065f46"],
+.mst-app-shell .mst-assessment-goals [style*="color:#065f46"],
+.mst-app-shell .mst-assessment-goals [style*="color: #047857"],
+.mst-app-shell .mst-assessment-goals [style*="color:#047857"],
+.mst-app-shell .mst-assessment-goals [style*="color: #166534"],
+.mst-app-shell .mst-assessment-goals [style*="color:#166534"] {
+  color: #065f46 !important;
+}
+
+.mst-app-shell .mst-assessment-goals [style*="color: #0c4a6e"],
+.mst-app-shell .mst-assessment-goals [style*="color:#0c4a6e"],
+.mst-app-shell .mst-assessment-goals [style*="color: #0369a1"],
+.mst-app-shell .mst-assessment-goals [style*="color:#0369a1"],
+.mst-app-shell .mst-assessment-goals [style*="color: #1e3a8a"],
+.mst-app-shell .mst-assessment-goals [style*="color:#1e3a8a"],
+.mst-app-shell .mst-assessment-goals [style*="color: #1e40af"],
+.mst-app-shell .mst-assessment-goals [style*="color:#1e40af"] {
+  color: #0c4a6e !important;
+}
+
+.mst-app-shell .mst-assessment-goals [style*="color: #92400e"],
+.mst-app-shell .mst-assessment-goals [style*="color:#92400e"],
+.mst-app-shell .mst-assessment-goals [style*="color: #78350f"],
+.mst-app-shell .mst-assessment-goals [style*="color:#78350f"] {
+  color: #92400e !important;
+}
+
+.mst-app-shell .mst-assessment-goals [style*="color: #6b7280"],
+.mst-app-shell .mst-assessment-goals [style*="color:#6b7280"],
+.mst-app-shell .mst-assessment-goals [style*="color: #4b5563"],
+.mst-app-shell .mst-assessment-goals [style*="color:#4b5563"],
+.mst-app-shell .mst-assessment-goals [style*="color: #374151"],
+.mst-app-shell .mst-assessment-goals [style*="color:#374151"] {
+  color: #374151 !important;
+}
+
+.mst-app-shell .mst-assessment-goals [style*="color: #b91c1c"],
+.mst-app-shell .mst-assessment-goals [style*="color:#b91c1c"],
+.mst-app-shell .mst-assessment-goals [style*="color: #ef4444"],
+.mst-app-shell .mst-assessment-goals [style*="color:#ef4444"],
+.mst-app-shell .mst-assessment-goals [style*="color: #dc2626"],
+.mst-app-shell .mst-assessment-goals [style*="color:#dc2626"] {
+  color: #b91c1c !important;
+}
+
+.mst-app-shell .mst-assessment-goals input,
+.mst-app-shell .mst-assessment-goals textarea,
+.mst-app-shell .mst-assessment-goals select {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  border: 1px solid #94a3b8 !important;
+  caret-color: #0f172a;
+}
+
+.mst-app-shell .mst-assessment-goals input::placeholder,
+.mst-app-shell .mst-assessment-goals textarea::placeholder {
+  color: #64748b !important;
+  opacity: 1;
+}
+
+.mst-app-shell .mst-assessment-goals button {
+  color: #0f172a !important;
+}
+
+.mst-app-shell .mst-assessment-goals button[style*="background: #10b981"],
+.mst-app-shell .mst-assessment-goals button[style*="background:#10b981"],
+.mst-app-shell .mst-assessment-goals button[style*="background: #059669"],
+.mst-app-shell .mst-assessment-goals button[style*="background:#059669"],
+.mst-app-shell .mst-assessment-goals button[style*="background: #3b82f6"],
+.mst-app-shell .mst-assessment-goals button[style*="background:#3b82f6"],
+.mst-app-shell .mst-assessment-goals button[style*="background: #8b5cf6"],
+.mst-app-shell .mst-assessment-goals button[style*="background:#8b5cf6"],
+.mst-app-shell .mst-assessment-goals button[style*="background: #f59e0b"],
+.mst-app-shell .mst-assessment-goals button[style*="background:#f59e0b"],
+.mst-app-shell .mst-assessment-goals button[style*="background: #d97706"],
+.mst-app-shell .mst-assessment-goals button[style*="background:#d97706"],
+.mst-app-shell .mst-assessment-goals button[style*="background: #ef4444"],
+.mst-app-shell .mst-assessment-goals button[style*="background:#ef4444"],
+.mst-app-shell .mst-assessment-goals button[style*="background: #dc2626"],
+.mst-app-shell .mst-assessment-goals button[style*="background:#dc2626"],
+.mst-app-shell .mst-assessment-goals button[style*="background: #6b7280"],
+.mst-app-shell .mst-assessment-goals button[style*="background:#6b7280"] {
+  color: #ffffff !important;
 }

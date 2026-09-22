@@ -557,7 +557,7 @@ const TimuIslandStoryModal: React.FC<TimuIslandStoryModalProps> = ({ isOpen, onC
         
         {/* Video Modal - plays after battle victory */}
         {showVideoModal && (
-          <div style={{
+          <div className="mst-popup-overlay" style={{
             position: 'fixed',
             top: 0,
             left: 0,
@@ -568,8 +568,8 @@ const TimuIslandStoryModal: React.FC<TimuIslandStoryModalProps> = ({ isOpen, onC
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 20000
-          }}>
-            <div style={{
+          }}><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+            <div className="mst-popup-panel" style={{
               position: 'relative',
               width: '100%',
               maxWidth: '1200px',
@@ -639,7 +639,7 @@ const TimuIslandStoryModal: React.FC<TimuIslandStoryModalProps> = ({ isOpen, onC
   const isLastSlide = currentSlide === storySlides.length - 1;
 
   return (
-    <div style={{
+    <div className="mst-popup-overlay" style={{
       position: 'fixed',
       top: 0,
       left: 0,
@@ -651,8 +651,8 @@ const TimuIslandStoryModal: React.FC<TimuIslandStoryModalProps> = ({ isOpen, onC
       justifyContent: 'center',
       zIndex: 10000,
       padding: '2rem'
-    }}>
-      <div style={{
+    }}><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel" style={{
         position: 'relative',
         width: '100%',
         maxWidth: '1400px',

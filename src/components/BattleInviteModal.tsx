@@ -316,7 +316,7 @@ const BattleInviteModal: React.FC<BattleInviteModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div style={{
+    <div className="mst-popup-overlay" style={{
       position: 'fixed',
       top: 0,
       left: 0,
@@ -329,8 +329,8 @@ const BattleInviteModal: React.FC<BattleInviteModalProps> = ({
       zIndex: 40000
     }}
     onClick={onClose}
-    >
-      <div style={{
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel" style={{
         backgroundColor: 'white',
         borderRadius: '0.75rem',
         padding: '2rem',

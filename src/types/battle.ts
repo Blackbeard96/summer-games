@@ -319,16 +319,26 @@ export interface VaultSiegeAttack {
   targetVaultBefore: {
     currentPP: number;
     shieldStrength: number;
+    vaultHealth?: number;
+    overshield?: number;
   };
   targetVaultAfter: {
     currentPP: number;
     shieldStrength: number;
+    vaultHealth?: number;
+    overshield?: number;
   };
   // Track PP stolen for restoration purposes
   ppStolenFromTarget: number;
   ppStolenDate: Date;
   /** Attacker was frozen; no damage — still consumes a daily vault siege attempt */
   skippedByFreeze?: boolean;
+  /** True when this attack was an Offline / Open-to-Siege hit during a Live Event. */
+  liveEventSiege?: boolean;
+  /** Live Event session id when liveEventSiege is true. */
+  liveEventSessionId?: string;
+  /** Source channel for history UI. */
+  source?: 'vault_siege' | 'live_event_siege';
 }
 
 export interface BattleLobby {

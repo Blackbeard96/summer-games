@@ -538,7 +538,7 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
   }
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       style={{
         position: 'fixed',
         top: 0,
@@ -558,8 +558,8 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
           onClose();
         }
       }}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         style={{
           backgroundColor: '#1f2937',
           borderRadius: '1rem',

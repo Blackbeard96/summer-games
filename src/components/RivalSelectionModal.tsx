@@ -135,7 +135,7 @@ const RivalSelectionModal: React.FC<RivalSelectionModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div style={{
+    <div className="mst-popup-overlay" style={{
       position: 'fixed',
       top: 0,
       left: 0,
@@ -146,8 +146,8 @@ const RivalSelectionModal: React.FC<RivalSelectionModalProps> = ({
       justifyContent: 'center',
       alignItems: 'center',
       zIndex: 1000,
-    }}>
-      <div style={{
+    }}><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel" style={{
         background: 'white',
         borderRadius: '12px',
         padding: '2rem',

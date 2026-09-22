@@ -51,10 +51,51 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
     void claimAllLiveEventSessionEndRewards(summary.sessionId, currentPlayerId);
   }, [isOpen, summary?.sessionId, currentPlayerId]);
 
+  const [liveWorkSummary, setLiveWorkSummary] = React.useState<
+    import('../types/inSessionStats').LiveEventWorkSummary | null
+  >(null);
+
+  React.useEffect(() => {
+    if (!isOpen || !summary?.sessionId) return;
+    if (summary.workSummary) {
+      setLiveWorkSummary(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { buildLiveEventWorkSummary } = await import('../utils/workBoardService');
+        const players =
+          roomPlayers?.map((p) => ({
+            userId: p.userId,
+            displayName: p.displayName,
+            classId: p.classId,
+          })) ||
+          Object.values(summary.stats).map((s) => ({
+            userId: s.playerId,
+            displayName: s.playerName,
+          }));
+        const built = await buildLiveEventWorkSummary({
+          sessionId: summary.sessionId,
+          classId: summary.classId,
+          players,
+        });
+        if (!cancelled) setLiveWorkSummary(built);
+      } catch (e) {
+        console.warn('[SessionSummaryModal] work summary enrich failed', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, summary, roomPlayers]);
+
   const displaySummary = React.useMemo(() => {
     if (!summary) return null;
-    return mergeRoomEliminationsIntoSummary(summary, roomPlayers);
-  }, [summary, roomPlayers]);
+    const merged = mergeRoomEliminationsIntoSummary(summary, roomPlayers);
+    if (merged.workSummary || !liveWorkSummary) return merged;
+    return { ...merged, workSummary: liveWorkSummary };
+  }, [summary, roomPlayers, liveWorkSummary]);
   const classIdByPlayer = React.useMemo(() => {
     const map = new Map<string, string>();
     (roomPlayers || []).forEach((p) => {
@@ -86,12 +127,26 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
   // Players eliminated
   const eliminatedPlayers = allStats.filter((s) => s.isEliminated);
 
+  const resolvePlayerName = React.useCallback(
+    (uid: string | undefined) => {
+      if (!uid) return 'Unknown';
+      return (
+        displaySummary?.stats[uid]?.playerName ||
+        roomPlayers?.find((p) => p.userId === uid)?.displayName ||
+        'Unknown'
+      );
+    },
+    [displaySummary, roomPlayers]
+  );
+
   // Who had the most participation
   const mostParticipation = allStats.reduce<SessionStats | null>((best, s) => {
     const p = s.participationEarned || 0;
     if (!best || p > (best.participationEarned || 0)) return s;
     return best;
   }, null);
+
+  const workSummary = displaySummary?.workSummary;
 
   const classRollup = React.useMemo(() => {
     type ClassRow = {
@@ -102,8 +157,13 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
       totalEliminations: number;
       eliminatedCount: number;
       participatingPlayers: number;
+      workCompletedW: number;
+      workAvailableW: number;
     };
     const rows = new Map<string, ClassRow>();
+    const workByPlayer = new Map(
+      (workSummary?.byPlayer || []).map((p) => [p.playerId, p] as const)
+    );
     for (const stats of allStats) {
       const classId = classIdByPlayer.get(stats.playerId) || 'Unspecified class';
       const current = rows.get(classId) || {
@@ -114,24 +174,31 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
         totalEliminations: 0,
         eliminatedCount: 0,
         participatingPlayers: 0,
+        workCompletedW: 0,
+        workAvailableW: 0,
       };
       current.players.push(stats);
       current.totalPP += totalEarned(stats);
       current.totalParticipation += stats.participationEarned || 0;
       current.totalEliminations += stats.eliminations || 0;
-      current.eliminatedCount += stats.isEliminated ? 1 : 0;
-      current.participatingPlayers += (stats.participationEarned || 0) > 0 ? 1 : 0;
+      if (stats.isEliminated) current.eliminatedCount += 1;
+      if ((stats.participationEarned || 0) > 0) current.participatingPlayers += 1;
+      const wp = workByPlayer.get(stats.playerId);
+      if (wp) {
+        current.workCompletedW += wp.completedW;
+        current.workAvailableW += wp.availableW;
+      }
       rows.set(classId, current);
     }
-    return Array.from(rows.values()).sort((a, b) => b.players.length - a.players.length);
-  }, [allStats, classIdByPlayer]);
+    return Array.from(rows.values()).sort((a, b) => b.totalPP - a.totalPP);
+  }, [allStats, classIdByPlayer, workSummary, quizPpByPlayer]);
 
   if (!isOpen || !displaySummary) return null;
 
   const currentPlayerStats = displaySummary.stats[currentPlayerId];
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       style={{
         position: 'fixed',
         top: 0,
@@ -155,8 +222,8 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
           e.stopPropagation();
         }
       }}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         style={{
           background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
           borderRadius: '1rem',
@@ -430,29 +497,126 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
             <p style={{ fontSize: '0.9rem', color: '#6b7280' }}>No one was eliminated.</p>
           ) : (
             <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-              {eliminatedPlayers.map((s) => (
-                <li
-                  key={s.playerId}
-                  style={{
-                    padding: '0.35rem 0',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem'
-                  }}
-                >
-                  <span style={{ color: '#ef4444', fontWeight: 'bold' }}>{s.playerName}</span>
-                  {s.eliminatedBy && (
+              {eliminatedPlayers.map((s) => {
+                const eliminatorName = s.eliminatedBy
+                  ? resolvePlayerName(s.eliminatedBy)
+                  : null;
+                return (
+                  <li
+                    key={s.playerId}
+                    style={{
+                      padding: '0.35rem 0',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <span style={{ color: '#ef4444', fontWeight: 'bold' }}>{s.playerName}</span>
                     <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>
-                      (eliminated by{' '}
-                      {displaySummary.stats[s.eliminatedBy]?.playerName ||
-                        roomPlayers?.find((p) => p.userId === s.eliminatedBy)?.displayName ||
-                        'Unknown'}
-                      )
+                      {eliminatorName
+                        ? `(eliminated by ${eliminatorName})`
+                        : '(eliminator unknown)'}
                     </span>
-                  )}
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
+          )}
+        </div>
+
+        {/* 2b. Work Completed */}
+        <div
+          style={{
+            background: 'rgba(255, 255, 255, 0.95)',
+            borderRadius: '0.75rem',
+            padding: '1.25rem',
+            marginBottom: '1rem',
+            border: '2px solid #0ea5e9',
+          }}
+        >
+          <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.75rem' }}>
+            📋 Work Completed
+          </h3>
+          {!workSummary || (workSummary.availableW <= 0 && workSummary.completedW <= 0) ? (
+            <p style={{ fontSize: '0.9rem', color: '#6b7280', margin: 0 }}>
+              No Work Board items were available for this event.
+            </p>
+          ) : (
+            <>
+              {workSummary.periodTitle ? (
+                <p style={{ fontSize: '0.85rem', color: '#64748b', margin: '0 0 0.65rem' }}>
+                  Period: {workSummary.periodTitle}
+                </p>
+              ) : null}
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '0.75rem 1.25rem',
+                  marginBottom: '0.75rem',
+                  fontSize: '0.95rem',
+                  color: '#0f172a',
+                }}
+              >
+                <span>
+                  <strong>Completed:</strong> {workSummary.completedW} W
+                </span>
+                <span>
+                  <strong>Available:</strong> {workSummary.availableW} W
+                </span>
+                <span style={{ color: '#0369a1', fontWeight: 700 }}>
+                  {workSummary.completionPct}% of available Work
+                </span>
+              </div>
+              <div
+                style={{
+                  height: 10,
+                  borderRadius: 999,
+                  background: '#e2e8f0',
+                  overflow: 'hidden',
+                  marginBottom: '0.85rem',
+                }}
+              >
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${Math.min(100, Math.max(0, workSummary.completionPct))}%`,
+                    background: 'linear-gradient(90deg, #0ea5e9, #0369a1)',
+                  }}
+                />
+              </div>
+              {workSummary.requiredAvailableW > 0 ? (
+                <p style={{ fontSize: '0.85rem', color: '#475569', margin: '0 0 0.75rem' }}>
+                  Required Work: {workSummary.requiredCompletedW} / {workSummary.requiredAvailableW} W (
+                  {workSummary.requiredCompletionPct}%)
+                </p>
+              ) : null}
+              {workSummary.byPlayer.length > 0 ? (
+                <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                  {workSummary.byPlayer.map((p) => (
+                    <li
+                      key={p.playerId}
+                      style={{
+                        padding: '0.3rem 0',
+                        fontSize: '0.85rem',
+                        color: '#334155',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: '0.75rem',
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <span style={{ fontWeight: 600 }}>{p.playerName}</span>
+                      <span>
+                        {p.completedW} / {p.availableW} W ({p.completionPct}%)
+                        {p.declaredW > 0 ? ` · Expected ${p.declaredW}` : ''}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </>
           )}
         </div>
 
@@ -497,9 +661,12 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               {classRollup.map((row) => {
                 const total = row.players.length;
-                const completionCount = total - row.eliminatedCount;
-                const completionRate = total > 0 ? Math.round((completionCount / total) * 100) : 0;
+                const survivalRate = total > 0 ? Math.round(((total - row.eliminatedCount) / total) * 100) : 0;
                 const participationRate = total > 0 ? Math.round((row.participatingPlayers / total) * 100) : 0;
+                const workPct =
+                  row.workAvailableW > 0
+                    ? Math.round((row.workCompletedW / row.workAvailableW) * 1000) / 10
+                    : null;
                 return (
                   <div
                     key={row.classId}
@@ -512,11 +679,15 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
                       <div style={{ fontWeight: 'bold', color: '#0f172a' }}>{row.classId}</div>
                       <div style={{ fontSize: '0.85rem', color: '#334155' }}>
-                        {total} player{total !== 1 ? 's' : ''} • +{row.totalPP} PP • {row.totalEliminations} elim
+                        {total} player{total !== 1 ? 's' : ''} • +{row.totalPP} PP • {row.eliminatedCount} elim
                       </div>
                     </div>
                     <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: '#475569' }}>
-                      Participation points: {row.totalParticipation} • Participation rate: {participationRate}% • Completion rate: {completionRate}%
+                      Participation points: {row.totalParticipation} • Participation rate: {participationRate}% •
+                      Survival rate: {survivalRate}%
+                      {workPct != null
+                        ? ` • Work completed: ${row.workCompletedW}/${row.workAvailableW} W (${workPct}%)`
+                        : ''}
                     </div>
                     <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: '#64748b' }}>
                       {row.players.map((p) => p.playerName).join(', ')}

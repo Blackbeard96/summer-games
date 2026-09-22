@@ -278,7 +278,7 @@ const AssessmentGoalsStudent: React.FC = () => {
   }
 
   return (
-    <div style={{ padding: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
+    <div className="mst-assessment-goals mst-light-surface" style={{ padding: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
       <h1 style={{ marginBottom: '2rem' }}>Assessment Goals</h1>
 
       {/* Class Selector */}

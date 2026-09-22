@@ -13,7 +13,7 @@ const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
 
   if (!vault) {
     return (
-      <div
+      <div className="mst-popup-overlay"
         style={{
           position: 'fixed',
           top: 0,
@@ -27,8 +27,8 @@ const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
           zIndex: 10000,
         }}
         onClick={onClose}
-      >
-        <div
+      ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+        <div className="mst-popup-panel"
           style={{
             backgroundColor: '#1a1a2e',
             border: '3px solid #4f46e5',
@@ -49,7 +49,7 @@ const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
   const shieldPercentage = (vault.shieldStrength / vault.maxShieldStrength) * 100;
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       style={{
         position: 'fixed',
         top: 0,
@@ -63,8 +63,8 @@ const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
         zIndex: 10000,
       }}
       onClick={onClose}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         style={{
           backgroundColor: '#1a1a2e',
           border: '3px solid #4f46e5',

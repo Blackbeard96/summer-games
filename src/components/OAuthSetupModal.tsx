@@ -23,7 +23,7 @@ const OAuthSetupModal: React.FC<OAuthSetupModalProps> = ({ isOpen, onClose, clie
   };
 
   return (
-    <div style={{
+    <div className="mst-popup-overlay" style={{
       position: 'fixed',
       top: 0,
       left: 0,
@@ -34,8 +34,8 @@ const OAuthSetupModal: React.FC<OAuthSetupModalProps> = ({ isOpen, onClose, clie
       alignItems: 'center',
       justifyContent: 'center',
       zIndex: 1000
-    }}>
-      <div style={{
+    }}><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel" style={{
         backgroundColor: 'white',
         borderRadius: '8px',
         padding: '24px',

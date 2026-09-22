@@ -106,7 +106,7 @@ const ChallengeRewardModal: React.FC<ChallengeRewardModalProps> = ({
           50% { opacity: 0.7; transform: scale(1.1); }
         }
       `}</style>
-      <div
+      <div className="mst-popup-overlay"
         style={{
           position: 'fixed',
           top: 0,
@@ -122,8 +122,8 @@ const ChallengeRewardModal: React.FC<ChallengeRewardModalProps> = ({
           padding: '1.5rem'
         }}
         onClick={onClose}
-      >
-        <div
+      ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+        <div className="mst-popup-panel"
           style={{
             background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
             borderRadius: '1.5rem',

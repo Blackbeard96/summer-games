@@ -81,7 +81,7 @@ const Chapter2AnnouncementModal: React.FC<Chapter2AnnouncementModalProps> = ({
           }
         `}
       </style>
-      <div
+      <div className="mst-popup-overlay"
         style={{
           position: 'fixed',
           top: 0,
@@ -97,8 +97,8 @@ const Chapter2AnnouncementModal: React.FC<Chapter2AnnouncementModalProps> = ({
           padding: '1rem'
         }}
         onClick={handleClose}
-      >
-        <div
+      ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+        <div className="mst-popup-panel"
           style={{
             background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
             borderRadius: '1rem',

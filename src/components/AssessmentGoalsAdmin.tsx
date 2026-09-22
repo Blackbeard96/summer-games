@@ -411,7 +411,7 @@ const AssessmentGoalsAdmin: React.FC = () => {
   }
 
   return (
-    <div style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
+    <div className="mst-assessment-goals mst-light-surface" style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
         <h1>Assessment Goals Admin</h1>
         {viewMode !== 'list' && (

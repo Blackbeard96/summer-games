@@ -103,7 +103,7 @@ const VaultUpgradeModal: React.FC<VaultUpgradeModalProps> = ({
           50% { transform: scale(1.05); }
         }
       `}</style>
-      <div
+      <div className="mst-popup-overlay"
         style={{
           position: 'fixed',
           top: 0,
@@ -123,8 +123,8 @@ const VaultUpgradeModal: React.FC<VaultUpgradeModalProps> = ({
             onClose();
           }
         }}
-      >
-        <div
+      ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+        <div className="mst-popup-panel"
           style={{
             background: config.gradient,
             borderRadius: '1.5rem',

@@ -172,7 +172,7 @@ const Season0IntroModal: React.FC<Season0IntroModalProps> = ({ isOpen, onClose, 
   const currentSlideData = slides[currentSlide];
 
   return (
-    <div 
+    <div className="mst-popup-overlay" 
       style={{
         position: 'fixed',
         top: 0,
@@ -192,8 +192,8 @@ const Season0IntroModal: React.FC<Season0IntroModalProps> = ({ isOpen, onClose, 
           handleClose();
         }
       }}
-    >
-      <div 
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel" 
         style={{
           background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
           color: 'white',

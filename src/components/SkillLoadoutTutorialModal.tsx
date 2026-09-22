@@ -84,6 +84,7 @@ const SkillLoadoutTutorialModal: React.FC<SkillLoadoutTutorialModalProps> = ({
         onClick={handleBackdropClick}
       />
       <div
+        className="mst-popup-panel"
         role="dialog"
         aria-labelledby="skill-loadout-tutorial-title"
         aria-modal="true"

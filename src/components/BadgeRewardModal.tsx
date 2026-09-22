@@ -90,7 +90,7 @@ const BadgeRewardModal: React.FC<BadgeRewardModalProps> = ({
   };
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       style={{
         position: 'fixed',
         top: 0,
@@ -111,8 +111,8 @@ const BadgeRewardModal: React.FC<BadgeRewardModalProps> = ({
           onClose();
         }
       }}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         style={{
           background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
           borderRadius: '1.5rem',

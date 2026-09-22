@@ -47,7 +47,7 @@ const BattlePassIntroExperienceModal: React.FC<Props> = ({
   const currentStep = !atHero && stepIndex >= 0 ? introSteps[stepIndex] : null;
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="Season intro"
@@ -62,8 +62,8 @@ const BattlePassIntroExperienceModal: React.FC<Props> = ({
         padding: '1rem',
       }}
       onClick={onClose}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         style={{
           width: '100%',
           maxWidth: 720,

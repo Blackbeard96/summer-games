@@ -188,7 +188,7 @@ const EditRivalModal: React.FC<EditRivalModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       style={{
         position: 'fixed',
         top: 0,
@@ -203,8 +203,8 @@ const EditRivalModal: React.FC<EditRivalModalProps> = ({
         padding: '1rem'
       }}
       onClick={onClose}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         style={{
           background: 'white',
           borderRadius: '1rem',

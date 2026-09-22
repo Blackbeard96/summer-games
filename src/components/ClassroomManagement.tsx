@@ -508,6 +508,9 @@ const ClassroomManagement: React.FC = () => {
         hostUid: authUid,
         status: 'live' as const,
         mode: 'in_session' as const,
+        liveEventMode: 'class_flow' as const,
+        goalLinkingEnabled: true,
+        energyTypeAwarded: 'physical',
         players: [
           {
             userId: currentUser.uid,
@@ -519,6 +522,8 @@ const ClassroomManagement: React.FC = () => {
             participationCount: 0,
             movesEarned: 5,
             isTeacher: true,
+            participationMode: 'online' as const,
+            liveEventStartingPP: 0,
             hp: 100,
             maxHp: 100,
             shield: 100,
@@ -527,6 +532,7 @@ const ClassroomManagement: React.FC = () => {
         ],
         battleLog: [
           '🎉 Universal Live Event is now active! Join the battle in the arena.',
+          '🏃 Mode: Class Flow — use the Sprint panel for timed goals and participation rewards.',
           universalInviteAllClasses
             ? '🌍 Invite scope: All classes'
             : `🏫 Invite scope: ${selectedClassNameList.join(', ')}`,
@@ -660,7 +666,11 @@ const ClassroomManagement: React.FC = () => {
   const adjustPowerPoints = async (studentId: string, delta: number) => {
     const student = students.find(s => s.id === studentId);
     if (!student) return;
-    const newPP = await adjustPlayerPowerPoints(studentId, delta);
+    const newPP = await adjustPlayerPowerPoints(studentId, delta, {
+      sourceType: 'classroom',
+      sourceId: 'classroom-admin',
+      notes: delta >= 0 ? `Classroom +${delta} PP` : `Classroom ${delta} PP`,
+    });
     setStudents(prev =>
       prev.map(s =>
         s.id === studentId ? { ...s, powerPoints: newPP } : s
@@ -676,7 +686,15 @@ const ClassroomManagement: React.FC = () => {
       console.log('Student not found:', studentId);
       return;
     }
-    const newPP = await setPlayerPowerPoints(studentId, amount);
+    const previousAmount = student.powerPoints || 0;
+    const newPP = await setPlayerPowerPoints(studentId, amount, {
+      previousAmount,
+      meta: {
+        sourceType: 'classroom',
+        sourceId: 'classroom-admin',
+        notes: `Classroom set PP to ${amount}`,
+      },
+    });
     console.log('New PP value:', newPP);
     setStudents(prev =>
       prev.map(s =>
@@ -745,6 +763,28 @@ const ClassroomManagement: React.FC = () => {
 
         // Commit batch for this chunk
         await chunkBatch.commit();
+      }
+
+      // Record PP history for Profile (non-fatal)
+      try {
+        const { recordPPChange } = await import('../utils/ppLedgerService');
+        await Promise.all(
+          updatedStudents.map((u) =>
+            recordPPChange({
+              studentId: u.id,
+              amount: u.newPP - u.oldPP,
+              sourceType: 'classroom',
+              sourceId: 'classroom-bulk',
+              notes:
+                ppViewBulkReason?.trim() ||
+                (ppViewBulkPPAmount >= 0
+                  ? `Classroom bulk +${ppViewBulkPPAmount} PP`
+                  : `Classroom bulk ${ppViewBulkPPAmount} PP`),
+            })
+          )
+        );
+      } catch (ledgerErr) {
+        console.warn('Classroom bulk PP ledger write failed (non-fatal)', ledgerErr);
       }
 
       // Update local state

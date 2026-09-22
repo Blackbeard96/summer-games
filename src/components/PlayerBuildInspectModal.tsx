@@ -85,7 +85,7 @@ const PlayerBuildInspectModal: React.FC<PlayerBuildInspectModalProps> = ({
   if (!open) return null;
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       onClick={onClose}
       style={{
         position: 'fixed',
@@ -97,8 +97,8 @@ const PlayerBuildInspectModal: React.FC<PlayerBuildInspectModalProps> = ({
         justifyContent: 'center',
         padding: '1rem',
       }}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         onClick={(e) => e.stopPropagation()}
         style={{
           width: '100%',

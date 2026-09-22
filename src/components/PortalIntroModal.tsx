@@ -189,7 +189,7 @@ const PortalIntroModal: React.FC<PortalIntroModalProps> = ({ isOpen, onClose, on
           to { transform: rotate(360deg); }
         }
       `}</style>
-      <div style={{
+      <div className="mst-popup-overlay" style={{
         position: 'fixed',
         top: 0,
         left: 0,
@@ -201,8 +201,8 @@ const PortalIntroModal: React.FC<PortalIntroModalProps> = ({ isOpen, onClose, on
         justifyContent: 'center',
         zIndex: 10000,
         padding: '2rem'
-      }}>
-      <div style={{
+      }}><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel" style={{
         position: 'relative',
         width: '100%',
         maxWidth: '1200px',

@@ -44,6 +44,19 @@ export interface InSessionRoom {
     awardXP?: boolean;
   };
   liveEventMode?: string;
+  /**
+   * Classroom OS Game Time — overlays Live Event without replacing modes.
+   * open = students may join Online/Offline; paused = frozen; ended = closed with event.
+   */
+  gameTime?: {
+    status: 'closed' | 'open' | 'paused' | 'ended';
+    openedAt?: Date | any;
+    pausedAt?: Date | any;
+    endedAt?: Date | any;
+    /** When true, Online players may Siege Offline players (Phase 2). Default false. */
+    offlineSiegeEnabled?: boolean;
+    workPeriodId?: string | null;
+  };
 }
 
 export interface InSessionPlayer {
@@ -79,6 +92,14 @@ export interface InSessionPlayer {
   battlesWon?: number; // Optional for backward compatibility
   battlesLost?: number; // Optional for backward compatibility
   activeLoadout?: any; // Session loadout snapshot (from inSessionSkillsService)
+  /**
+   * Game Time participation strategy.
+   * offline = focus on classroom Work; still listed for Siege when enabled.
+   * Does not affect academic grades.
+   */
+  participationMode?: 'online' | 'offline';
+  /** Snapshot PP when Game Time / join recorded (Offline Siege floor base). */
+  liveEventStartingPP?: number;
 }
 
 export interface InSessionLaw {

@@ -11,7 +11,7 @@ interface Props {
 const SkillDetailModal: React.FC<Props> = ({ mastery, skill, onClose }) => {
   const trend = mastery.trend || [];
   return (
-    <div
+    <div className="mst-popup-overlay"
       style={{
         position: 'fixed',
         inset: 0,
@@ -25,8 +25,8 @@ const SkillDetailModal: React.FC<Props> = ({ mastery, skill, onClose }) => {
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         style={{
           width: '100%',
           maxWidth: '480px',

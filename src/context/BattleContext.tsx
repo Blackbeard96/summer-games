@@ -1854,6 +1854,19 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
       setShowVaultUpgradeModal(true);
       
+      try {
+        const { recordPPChange } = await import('../utils/ppLedgerService');
+        await recordPPChange({
+          studentId: currentUser.uid,
+          amount: -upgradeCost,
+          sourceType: 'vaultUpgrade',
+          sourceId: 'capacity',
+          notes: `Vault capacity upgrade (Lv ${oldCapacityLevel} → ${newCapacityLevel})`,
+        });
+      } catch (_) {
+        /* non-fatal */
+      }
+
       setSuccess(`Vault capacity upgraded to Level ${newCapacityLevel}! ${oldCapacity} → ${newCapacity} PP (+${newCapacity - oldCapacity} capacity) (Cost: ${upgradeCost} PP)`);
     } catch (error: any) {
       console.error('Error upgrading vault capacity:', error);
@@ -1950,6 +1963,19 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
       setShowVaultUpgradeModal(true);
       
+      try {
+        const { recordPPChange } = await import('../utils/ppLedgerService');
+        await recordPPChange({
+          studentId: currentUser.uid,
+          amount: -upgradeCost,
+          sourceType: 'vaultUpgrade',
+          sourceId: 'shields',
+          notes: `Vault shield upgrade (Lv ${oldShieldLevel} → ${newShieldLevel})`,
+        });
+      } catch (_) {
+        /* non-fatal */
+      }
+
       setSuccess(`Vault shields upgraded to Level ${newShieldLevel}! ${oldMaxShields} → ${newMaxShields} Shields (+${newMaxShields - oldMaxShields} shields) (Cost: ${upgradeCost} PP)`);
     } catch (error: any) {
       console.error('Error upgrading vault shields:', error);
@@ -2059,6 +2085,19 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
       setShowVaultUpgradeModal(true);
       
+      try {
+        const { recordPPChange } = await import('../utils/ppLedgerService');
+        await recordPPChange({
+          studentId: currentUser.uid,
+          amount: -upgradeCost,
+          sourceType: 'vaultUpgrade',
+          sourceId: 'generator',
+          notes: `Generator upgrade (Lv ${oldGeneratorLevel} → ${newGeneratorLevel})`,
+        });
+      } catch (_) {
+        /* non-fatal */
+      }
+
       setSuccess(`Generator upgraded to Level ${newGeneratorLevel}! ${oldPPPerDay} → ${newPPPerDay} PP/day (+${newPPPerDay - oldPPPerDay}), ${oldShieldsPerDay} → ${newShieldsPerDay} Shields/day (+${newShieldsPerDay - oldShieldsPerDay}) (Cost: ${upgradeCost} PP)`);
     } catch (error: any) {
       console.error('Error upgrading generator:', error);
@@ -2236,6 +2275,21 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           generatorLastClaimedAt: getCurrentUTCDayStart()
         };
       });
+
+      if (ppEarned > 0 && currentUser) {
+        try {
+          const { recordPPChange } = await import('../utils/ppLedgerService');
+          await recordPPChange({
+            studentId: currentUser.uid,
+            amount: ppEarned,
+            sourceType: 'generator',
+            sourceId: 'pp-generator',
+            notes: `PP Generator (${daysAway} day${daysAway === 1 ? '' : 's'})`,
+          });
+        } catch (_) {
+          /* non-fatal */
+        }
+      }
 
       return { daysAway, ppEarned, shieldsEarned };
     } catch (error) {
@@ -3476,7 +3530,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Deduct PP from vault + students + users (never go negative)
       const newPP = Math.max(0, freshPP - upgradeCost);
       const { setPlayerPowerPoints } = await import('../utils/playerPowerPoints');
-      await setPlayerPowerPoints(currentUser.uid, newPP);
+      await setPlayerPowerPoints(currentUser.uid, newPP, {
+        previousAmount: freshPP,
+        meta: {
+          sourceType: 'skillUpgrade',
+          sourceId: move.id || 'skill',
+          notes: `Skill upgrade: ${move.name || 'skill'}`,
+        },
+      });
 
       // Update vault state AFTER Firestore update
       setVault({ ...vault, currentPP: newPP });
@@ -3760,7 +3821,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Deduct PP from vault + students + users
       const newPP = Math.max(0, vault.currentPP - upgradeCost);
       const { setPlayerPowerPoints } = await import('../utils/playerPowerPoints');
-      await setPlayerPowerPoints(currentUser.uid, newPP);
+      await setPlayerPowerPoints(currentUser.uid, newPP, {
+        previousAmount: vault.currentPP,
+        meta: {
+          sourceType: 'skillUpgrade',
+          sourceId: card.id || 'action-card',
+          notes: `Action card upgrade: ${card.name || 'card'}`,
+        },
+      });
 
       // Update vault state
       setVault({ ...vault, currentPP: newPP });
@@ -5003,6 +5071,19 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         } catch (notificationError) {
           console.error('Error creating PP notification:', notificationError);
         }
+
+        try {
+          const { recordPPChange } = await import('../utils/ppLedgerService');
+          await recordPPChange({
+            studentId: currentUser.uid,
+            amount: finalPPStolen,
+            sourceType: 'siege',
+            sourceId: `siege:${targetUserId}`,
+            notes: `Vault Siege vs ${targetName}`,
+          });
+        } catch (ledgerErr) {
+          console.warn('Siege PP ledger write failed (non-fatal)', ledgerErr);
+        }
         
         console.log('=== VAULT HEALTH DAMAGE COMPLETED ===');
         console.log('Attacker vault updated:', newAttackerPP);
@@ -5367,6 +5448,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // Count vault siege attacks from attackHistory (these consume offline moves)
     const todayVaultSiegeAttacks = attackHistory.filter(attack => {
       if (!attack.timestamp) return false; // Skip attacks without timestamps
+      // Live Event Offline Sieges use the same collection for Battle History but do not
+      // consume daily Vault Siege offline moves.
+      if (attack.liveEventSiege || attack.source === 'live_event_siege') return false;
       
       try {
         // Handle Firestore Timestamp objects and regular Date objects

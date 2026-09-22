@@ -404,7 +404,7 @@ const InvitationManager: React.FC = () => {
 
       {/* Invitations Modal */}
       {showInvitations && (
-        <div style={{
+        <div className="mst-popup-overlay" style={{
           position: 'fixed',
           top: 0,
           left: 0,
@@ -416,7 +416,7 @@ const InvitationManager: React.FC = () => {
           justifyContent: 'center',
           zIndex: 1001
         }}>
-          <div style={{
+          <div className="mst-popup-panel" style={{
             backgroundColor: 'white',
             borderRadius: '0.75rem',
             padding: '2rem',

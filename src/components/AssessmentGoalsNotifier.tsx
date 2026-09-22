@@ -109,7 +109,7 @@ const AssessmentGoalsNotifier: React.FC = () => {
   }
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       style={{
         position: 'fixed',
         top: 0,
@@ -125,7 +125,7 @@ const AssessmentGoalsNotifier: React.FC = () => {
       }}
       onClick={handleDismiss}
     >
-      <div
+      <div className="mst-popup-panel"
         style={{
           background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
           borderRadius: '1rem',

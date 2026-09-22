@@ -140,6 +140,8 @@ const InSessionCreate: React.FC = () => {
           powerPoints: 0,
           participationCount: 0,
           movesEarned: 5,
+          participationMode: 'online' as const,
+          liveEventStartingPP: 0,
           hp: 100,
           maxHp: 100,
           shield: 100,

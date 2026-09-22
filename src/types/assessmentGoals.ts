@@ -259,11 +259,27 @@ export interface HabitSubmission {
 // PP Ledger Collection
 // ============================================================================
 
+/** Sources that can appear on a player's PP change history (Profile). */
+export type PPLedgerSourceType =
+  | 'assessmentGoal'
+  | 'civicEconomy'
+  | 'scorekeeper'
+  | 'liveEvent'
+  | 'siege'
+  | 'marketplace'
+  | 'classroom'
+  | 'workBoard'
+  | 'vaultUpgrade'
+  | 'generator'
+  | 'skillUpgrade'
+  | 'battlePass'
+  | 'other';
+
 export interface PPLedgerEntry {
   id: string;
   studentId: string;
-  sourceType: 'assessmentGoal' | 'civicEconomy';
-  sourceId: string; // assessmentId or weekId / civic op id
+  sourceType: PPLedgerSourceType;
+  sourceId: string; // assessmentId, weekId, sessionId, requestId, etc.
   amount: number; // Positive or negative
   createdAt: Timestamp;
   notes?: string; // e.g., "Within 5 points tier", "Exact hit bonus"

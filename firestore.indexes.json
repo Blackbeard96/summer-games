@@ -1,11 +1,35 @@
 {
   "indexes": [
     {
+      "collectionGroup": "ppLedger",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "studentId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "liveEventPendingClaims",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "playerId", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "workItems",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "classId", "order": "ASCENDING" },
+        { "fieldPath": "periodId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "workCompletions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "studentId", "order": "ASCENDING" },
+        { "fieldPath": "classId", "order": "ASCENDING" }
       ]
     },
     {

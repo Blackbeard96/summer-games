@@ -118,7 +118,7 @@ const WaitingRoomModal: React.FC<WaitingRoomModalProps> = ({
   const isWaitingForOpponent = participantsCount < currentRoom.maxParticipants;
 
   return (
-    <div style={{
+    <div className="mst-popup-overlay" style={{
       position: 'fixed',
       top: 0,
       left: 0,
@@ -131,7 +131,7 @@ const WaitingRoomModal: React.FC<WaitingRoomModalProps> = ({
       zIndex: 10000,
       padding: '2rem'
     }}>
-      <div style={{
+      <div className="mst-popup-panel" style={{
         background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
         color: 'white',
         padding: '3rem',

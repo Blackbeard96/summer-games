@@ -1225,7 +1225,14 @@ const Marketplace = () => {
         );
 
         const { setPlayerPowerPoints } = await import('../utils/playerPowerPoints');
-        const nextPP = await setPlayerPowerPoints(currentUser.uid, powerPoints - item.price);
+        const nextPP = await setPlayerPowerPoints(currentUser.uid, powerPoints - item.price, {
+          previousAmount: powerPoints,
+          meta: {
+            sourceType: 'marketplace',
+            sourceId: item.id || 'marketplace',
+            notes: `Marketplace: ${item.name || 'purchase'}`,
+          },
+        });
         setPowerPoints(nextPP);
 
         const usersRef = doc(db, 'users', currentUser.uid);
@@ -1327,7 +1334,14 @@ const Marketplace = () => {
       );
 
       const { setPlayerPowerPoints } = await import('../utils/playerPowerPoints');
-      const nextPP = await setPlayerPowerPoints(currentUser.uid, powerPoints - item.price);
+      const nextPP = await setPlayerPowerPoints(currentUser.uid, powerPoints - item.price, {
+        previousAmount: powerPoints,
+        meta: {
+          sourceType: 'marketplace',
+          sourceId: item.id || 'marketplace',
+          notes: `Marketplace: ${item.name || 'purchase'}`,
+        },
+      });
 
       // Also update the users collection to keep both in sync
       const usersRef = doc(db, 'users', currentUser.uid);

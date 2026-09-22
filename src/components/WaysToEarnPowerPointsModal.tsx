@@ -32,7 +32,7 @@ const WaysToEarnPowerPointsModal: React.FC<Props> = ({ open, onClose }) => {
   };
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       role="dialog"
       aria-modal="true"
       aria-labelledby="earn-pp-modal-title"
@@ -50,8 +50,8 @@ const WaysToEarnPowerPointsModal: React.FC<Props> = ({ open, onClose }) => {
         padding: '2rem',
       }}
       onClick={onClose}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         style={{
           background: 'white',
           borderRadius: '1rem',

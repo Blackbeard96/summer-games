@@ -108,7 +108,7 @@ const PracticeWaitingRoomModal: React.FC<PracticeWaitingRoomModalProps> = ({
   const canStart = isHost && participantsCount >= 2 && currentRoom.status === 'waiting';
 
   return (
-    <div style={{
+    <div className="mst-popup-overlay" style={{
       position: 'fixed',
       top: 0,
       left: 0,
@@ -121,7 +121,7 @@ const PracticeWaitingRoomModal: React.FC<PracticeWaitingRoomModalProps> = ({
       zIndex: 10000,
       padding: '2rem'
     }}>
-      <div style={{
+      <div className="mst-popup-panel" style={{
         background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
         color: 'white',
         padding: '3rem',

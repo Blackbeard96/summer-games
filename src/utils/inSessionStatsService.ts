@@ -38,6 +38,7 @@ import { trackDailyChallengeProgress } from './liveEventDailyChallengeTracking';
 import { inferEnergyTypeForLiveEvent } from '../constants/energyTypes';
 import { buildSessionActivitySummary } from './liveEventSessionActivitySummary';
 import { skillUseDebug, truncateId } from './liveEventDebugLogging';
+import { computeSiegeProtectionFloor } from './liveEventGameTimeService';
 
 /** Base PP awarded per elimination in a live event (eliminator also receives the eliminated player's vault PP) */
 export const LIVE_EVENT_PP_BASE_PER_ELIMINATION = 500;
@@ -343,7 +344,7 @@ export async function trackElimination(
 
     // Grant PP to eliminator's account (students, users, vault) so they actually receive +500 (and vault PP)
     try {
-      await creditPPToStudentUserVault(eliminatorId, ppFromElimination);
+      await creditPPToStudentUserVault(eliminatorId, ppFromElimination, 'Live Event elimination bounty');
       await addVaultPpGrantedMidSessionStat(sessionId, eliminatorId, ppFromElimination);
 
       void trackPlayerAction(eliminatorId, 'EARN_PP', ppFromElimination).catch((err) =>
@@ -353,17 +354,39 @@ export async function trackElimination(
         console.error('[inSessionStats] defeat_enemies daily challenge after elimination:', err)
       );
 
-      // Update session players so eliminator's in-session PP display reflects the grant (transactional)
+      // Update session players: credit eliminator, strip eliminated down to siege floor (or 0).
       await runTransaction(db, async (tx) => {
         const sessionSnap = await tx.get(sessionRef);
         if (!sessionSnap.exists()) return;
         const players = [...(sessionSnap.data()?.players || [])] as Array<Record<string, unknown>>;
         const eliminatorIndex = players.findIndex((p) => p?.userId === eliminatorId);
+        const eliminatedIndex = players.findIndex((p) => p?.userId === eliminatedId);
         if (eliminatorIndex < 0) return;
+
+        let leftoverOnTarget = 0;
+        if (eliminatedIndex >= 0) {
+          const elimRow = { ...players[eliminatedIndex] };
+          const isSiege =
+            elimRow.participationMode === 'offline' || elimRow.joinedViaSiege === true;
+          const startPp = Math.max(
+            0,
+            Math.floor(Number(elimRow.liveEventStartingPP ?? elimRow.powerPoints) || 0)
+          );
+          const floor = isSiege ? computeSiegeProtectionFloor(startPp) : 0;
+          const before = Math.max(0, Math.floor(Number(elimRow.powerPoints) || 0));
+          leftoverOnTarget = Math.max(0, before - floor);
+          elimRow.powerPoints = floor;
+          elimRow.eliminated = true;
+          elimRow.eliminatedBy = eliminatorId;
+          players[eliminatedIndex] = elimRow;
+        }
+
         const currentPP = Number(players[eliminatorIndex].powerPoints) || 0;
+        // Session row: base elimination bounty + any leftover target PP not yet moved by applyInSessionMove.
+        // Full vault bounty is credited to the eliminator's account via creditPPToStudentUserVault above.
         players[eliminatorIndex] = {
           ...players[eliminatorIndex],
-          powerPoints: currentPP + ppFromElimination,
+          powerPoints: currentPP + LIVE_EVENT_PP_BASE_PER_ELIMINATION + leftoverOnTarget,
         };
         tx.update(sessionRef, { players, updatedAt: serverTimestamp() });
       });
@@ -514,6 +537,18 @@ async function deductPPFromStudentUserVault(userId: string, amount: number): Pro
       const cur = v?.currentPP ?? 0;
       await updateDoc(vaultRef, { currentPP: Math.max(0, cur - amount) });
     }
+    try {
+      const { recordPPChange } = await import('./ppLedgerService');
+      await recordPPChange({
+        studentId: userId,
+        amount: -amount,
+        sourceType: 'liveEvent',
+        sourceId: 'live-event-elimination',
+        notes: 'Live Event elimination PP loss',
+      });
+    } catch (_) {
+      /* non-fatal */
+    }
     debug('inSessionStats', `Elimination PP penalty: deducted ${amount} PP from accounts for ${userId}`);
   } catch (e) {
     debugError('inSessionStats', `deductPPFromStudentUserVault failed for ${userId}`, e);
@@ -521,7 +556,11 @@ async function deductPPFromStudentUserVault(userId: string, amount: number): Pro
 }
 
 /** Credits PP to students / users / vault (vault currentPP clamped to capacity). */
-export async function creditPPToStudentUserVault(userId: string, amount: number): Promise<void> {
+export async function creditPPToStudentUserVault(
+  userId: string,
+  amount: number,
+  notes?: string
+): Promise<void> {
   if (amount <= 0) return;
   const studentRef = doc(db, 'students', userId);
   const userRef = doc(db, 'users', userId);
@@ -558,6 +597,19 @@ export async function creditPPToStudentUserVault(userId: string, amount: number)
     }
   } catch (e) {
     debugError('inSessionStats', `creditPP vault failed for ${userId} (students already credited)`, e);
+  }
+
+  try {
+    const { recordPPChange } = await import('./ppLedgerService');
+    await recordPPChange({
+      studentId: userId,
+      amount,
+      sourceType: 'liveEvent',
+      sourceId: 'live-event-credit',
+      notes: notes || 'Live Event PP credit',
+    });
+  } catch (_) {
+    /* non-fatal */
   }
 
   debug('inSessionStats', `Credited ${amount} PP to accounts for ${userId}`);
@@ -1355,6 +1407,31 @@ export async function finalizeSessionStats(
       liveEventQuizRankByPlayer,
     });
 
+    let workSummary: SessionSummary['workSummary'];
+    try {
+      const { buildLiveEventWorkSummary } = await import('./workBoardService');
+      const roomPlayers = (sessionData.players || []) as Array<{
+        userId: string;
+        displayName?: string;
+        classId?: string | null;
+      }>;
+      const gameTime = sessionData.gameTime as { workPeriodId?: string | null } | undefined;
+      const built = await buildLiveEventWorkSummary({
+        sessionId,
+        classId: typeof sessionData.classId === 'string' ? sessionData.classId : null,
+        workPeriodId: gameTime?.workPeriodId ?? null,
+        players: roomPlayers.length
+          ? roomPlayers
+          : Object.values(statsMap).map((s) => ({
+              userId: s.playerId,
+              displayName: s.playerName,
+            })),
+      });
+      if (built) workSummary = built;
+    } catch (workErr) {
+      debugError('inSessionStats', 'Work summary build failed (non-fatal)', workErr);
+    }
+
     // Create session summary (include quiz awards if stored when a quiz completed)
     const summary: SessionSummary = {
       sessionId,
@@ -1377,6 +1454,7 @@ export async function finalizeSessionStats(
       ...(Object.keys(adjustedQuizPpByPlayer).length > 0 && { quizPpByPlayer: adjustedQuizPpByPlayer }),
       ...(liveEventQuizRankByPlayer && { liveEventQuizRankByPlayer }),
       sessionActivity,
+      ...(workSummary ? { workSummary } : {}),
     };
     debug('inSessionStats', 'placement calculated', {
       sessionId,
@@ -1568,7 +1646,7 @@ export async function claimLiveEventSessionEndPendingPp(sessionId: string, playe
   if (reserved <= 0) return false;
 
   try {
-    await creditPPToStudentUserVault(playerId, reserved);
+    await creditPPToStudentUserVault(playerId, reserved, 'Live Event session rewards');
     void trackPlayerAction(playerId, 'EARN_PP', reserved).catch((err) =>
       console.error('[inSessionStats] earn_pp after live event session-end claim:', err)
     );
@@ -1713,6 +1791,7 @@ export async function claimLiveEventSessionEndParticipateChallenge(
 /**
  * Run every session-end self-claim for this player (PP, Power/BP, win, participate).
  * Safe to call repeatedly — each claim is idempotent.
+ * Home reclaim index is only marked settled when no account PP / Power / BP remains owed.
  */
 export async function claimAllLiveEventSessionEndRewards(
   sessionId: string,
@@ -1723,10 +1802,43 @@ export async function claimAllLiveEventSessionEndRewards(
   await claimLiveEventSessionEndWinChallenge(sessionId, playerId);
   await claimLiveEventSessionEndParticipateChallenge(sessionId, playerId);
   try {
+    const stillOwed = await sessionEndRewardsStillPending(sessionId, playerId);
+    if (stillOwed) {
+      debug(
+        'inSessionStats',
+        `Leaving liveEventPendingClaims pending — rewards still owed for ${playerId} in ${sessionId}`
+      );
+      return;
+    }
     const { markLiveEventPendingClaimSettled } = await import('./liveEventPendingClaimsService');
     await markLiveEventPendingClaimSettled(sessionId, playerId);
   } catch {
     /* non-fatal */
+  }
+}
+
+/** True if account PP or Power/BP session-end fields still need a successful claim. */
+async function sessionEndRewardsStillPending(
+  sessionId: string,
+  playerId: string
+): Promise<boolean> {
+  try {
+    const snap = await getDoc(doc(db, 'inSessionRooms', sessionId, 'stats', playerId));
+    if (!snap.exists()) return false;
+    const d = snap.data() as SessionStats;
+    const ppPending =
+      !d.sessionEndAccountPpClaimedAt &&
+      typeof d.sessionEndAccountPpPending === 'number' &&
+      d.sessionEndAccountPpPending > 0;
+    const bpPending = Math.max(0, Math.floor(Number(d.sessionEndBattlePassXpPending) || 0)) > 0;
+    const powerPending = liveEventPowerGainHasPositiveAmount(
+      (d.sessionEndPowerGainPending || {}) as LiveEventPowerGain
+    );
+    const powerBpStillOwed = !d.sessionEndPowerBpClaimedAt && (bpPending || powerPending);
+    return ppPending || powerBpStillOwed;
+  } catch {
+    // If we cannot read stats, keep the Home reclaim index open.
+    return true;
   }
 }
 

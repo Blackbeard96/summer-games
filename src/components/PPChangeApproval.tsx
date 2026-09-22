@@ -174,10 +174,36 @@ const PPChangeApproval: React.FC = () => {
           storedNewPP: change.newPP
         });
         
-        await updateDoc(studentRef, {
-          powerPoints: finalPP,
-          lastUpdated: serverTimestamp()
-        });
+        // Mirror vault + students + users and record Profile PP history
+        try {
+          const { setPlayerPowerPoints } = await import('../utils/playerPowerPoints');
+          await setPlayerPowerPoints(change.studentId, finalPP, {
+            previousAmount: currentPPFromDB,
+            meta: {
+              sourceType: 'scorekeeper',
+              sourceId: request.id,
+              notes: `Scorekeeper (${request.scorekeeperEmail || 'staff'}) · ${request.className}`,
+            },
+          });
+        } catch (mirrorErr) {
+          logger.roster.error('PPChangeApproval: setPlayerPowerPoints failed, falling back to students update', mirrorErr);
+          await updateDoc(studentRef, {
+            powerPoints: finalPP,
+            lastUpdated: serverTimestamp()
+          });
+          try {
+            const { recordPPChange } = await import('../utils/ppLedgerService');
+            await recordPPChange({
+              studentId: change.studentId,
+              amount: changeAmountToApply,
+              sourceType: 'scorekeeper',
+              sourceId: request.id,
+              notes: `Scorekeeper (${request.scorekeeperEmail || 'staff'}) · ${request.className}`,
+            });
+          } catch (_) {
+            /* non-fatal */
+          }
+        }
       }
 
       // Update the change request status

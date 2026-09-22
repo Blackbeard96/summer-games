@@ -394,7 +394,7 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
     };
 
     return (
-      <div
+      <div className="mst-popup-overlay"
         style={{
           position: 'fixed',
           top: 0,
@@ -411,8 +411,8 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
           boxSizing: 'border-box',
         }}
         onClick={handleClosePreview}
-      >
-        <div
+      ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+        <div className="mst-popup-panel"
           style={{
             background: 'white',
             borderRadius: '0.5rem',
@@ -580,7 +580,7 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
   }
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       style={{
         position: 'fixed',
         top: 0,
@@ -597,8 +597,8 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
         boxSizing: 'border-box',
       }}
       onClick={onClose}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         style={{
           background: 'white',
           borderRadius: '0.5rem',

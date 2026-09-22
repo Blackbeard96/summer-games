@@ -36,6 +36,7 @@ import {
   hasElementSelected,
 } from '../utils/elementDisplay';
 import { parseWorkStatsFromDoc, workCompletionRatePct, WORK_ENERGY_ORDER } from '../utils/workStatsTracking';
+import StoryIdentityPanel from '../components/StoryIdentityPanel';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { updateProfile, getAuth } from 'firebase/auth';
 import PlayerCard from '../components/PlayerCard';
@@ -72,6 +73,8 @@ import {
   nextTaxCollectionMs,
   refreshShutdownIfExpired,
 } from '../utils/mstCivicEconomyService';
+import type { PPLedgerEntry } from '../types/assessmentGoals';
+import { formatPPLedgerSourceLabel, getRecentPPChanges } from '../utils/ppLedgerService';
 
 function formatCivicTaxCountdown(targetMs: number, nowMs: number): string {
   const ms = Math.max(0, targetMs - nowMs);
@@ -250,6 +253,8 @@ const Profile = () => {
   const [civicState, setCivicState] = useState<MstCivicPlayerState | null | undefined>(undefined);
   const [profileTaxPreview, setProfileTaxPreview] = useState<{ nextMs: number; owedPp: number } | null>(null);
   const [, setTaxCountdownTick] = useState(0);
+  const [recentPPChanges, setRecentPPChanges] = useState<PPLedgerEntry[]>([]);
+  const [recentPPChangesLoading, setRecentPPChangesLoading] = useState(false);
   const powerCardRowRef = useRef<HTMLDivElement>(null);
   const [powerCardHeight, setPowerCardHeight] = useState<number | null>(null);
 
@@ -569,6 +574,28 @@ const Profile = () => {
       clearInterval(id);
     };
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setRecentPPChanges([]);
+      return;
+    }
+    let cancelled = false;
+    setRecentPPChangesLoading(true);
+    void getRecentPPChanges(currentUser.uid, 10)
+      .then((rows) => {
+        if (!cancelled) setRecentPPChanges(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setRecentPPChanges([]);
+      })
+      .finally(() => {
+        if (!cancelled) setRecentPPChangesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser, userData?.powerPoints]);
 
   useEffect(() => {
     if (!currentUser || !profileTaxPreview) return;
@@ -1693,6 +1720,13 @@ const Profile = () => {
         </div>
 
 
+      {/* Story / Identity + Reputation */}
+      {currentUser && (
+        <div style={{ marginBottom: '1.25rem' }}>
+          <StoryIdentityPanel userId={currentUser.uid} />
+        </div>
+      )}
+
       {/* Productivity Stats — full width under Power Card + Profile Settings */}
       {productivityStats !== undefined && (
         <div className="mst-profile-panel mst-profile-panel--productivity">
@@ -2339,6 +2373,85 @@ const Profile = () => {
                 <div className="mst-profile-stat-value">{Object.values(userData?.challenges || {}).filter(Boolean).length}</div>
                 <div className="mst-profile-stat-label">Challenges Completed</div>
               </div>
+            </div>
+
+            <div className="mst-profile-panel" style={{ marginTop: '1.5rem', padding: '1.25rem' }}>
+              <h3 className="mst-profile-panel-title mst-profile-panel-title--sm">
+                Recent PP Changes
+              </h3>
+              <p style={{ fontSize: '0.75rem', color: 'var(--mst-text-muted)', margin: '0 0 0.85rem 0', lineHeight: 1.45 }}>
+                Last 10 things that raised or lowered your Power Points.
+              </p>
+              {recentPPChangesLoading ? (
+                <div style={{ fontSize: '0.78rem', color: 'var(--mst-text-muted)' }}>Loading PP history…</div>
+              ) : recentPPChanges.length === 0 ? (
+                <div style={{ fontSize: '0.78rem', color: 'var(--mst-text-muted)' }}>
+                  No PP changes recorded yet. New gains and losses will show up here.
+                </div>
+              ) : (
+                <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                  {recentPPChanges.map((entry) => {
+                    const amt = Math.trunc(Number(entry.amount) || 0);
+                    const positive = amt > 0;
+                    const when =
+                      entry.createdAt && typeof (entry.createdAt as { toDate?: () => Date }).toDate === 'function'
+                        ? (entry.createdAt as { toDate: () => Date }).toDate()
+                        : null;
+                    return (
+                      <li
+                        key={entry.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          justifyContent: 'space-between',
+                          gap: '0.75rem',
+                          padding: '0.55rem 0.7rem',
+                          borderRadius: '0.55rem',
+                          background: 'rgba(5, 7, 13, 0.45)',
+                          border: '1px solid var(--mst-border)',
+                        }}
+                      >
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--mst-text-secondary)' }}>
+                            {formatPPLedgerSourceLabel(entry.sourceType)}
+                          </div>
+                          {entry.notes ? (
+                            <div
+                              style={{
+                                fontSize: '0.7rem',
+                                color: 'var(--mst-text-muted)',
+                                marginTop: 2,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                              title={entry.notes}
+                            >
+                              {entry.notes}
+                            </div>
+                          ) : null}
+                          {when ? (
+                            <div style={{ fontSize: '0.65rem', color: 'var(--mst-text-muted)', marginTop: 2 }}>
+                              {when.toLocaleString()}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '0.9rem',
+                            fontWeight: 800,
+                            flexShrink: 0,
+                            color: positive ? '#34d399' : '#f87171',
+                          }}
+                        >
+                          {positive ? '+' : ''}
+                          {amt} PP
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
 
             <div className="mst-profile-panel" style={{ marginTop: '1.5rem', padding: '1.25rem' }}>

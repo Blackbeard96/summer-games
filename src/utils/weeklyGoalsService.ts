@@ -336,6 +336,16 @@ export async function adminSetWeeklyGoalVerification(input: {
       ...feedbackPatch,
       updatedAt: serverTimestamp(),
     });
+    try {
+      const { applyGoalOutcomeToReputation } = await import('./classroomOsIdentityService');
+      await applyGoalOutcomeToReputation({
+        studentId: input.playerId,
+        achieved: true,
+        declared: true,
+      });
+    } catch (e) {
+      console.warn('[weeklyGoals] reputation update failed', e);
+    }
   } else {
     await updateDoc(ref, {
       verificationStatus: 'rejected',
@@ -343,6 +353,16 @@ export async function adminSetWeeklyGoalVerification(input: {
       ...feedbackPatch,
       updatedAt: serverTimestamp(),
     });
+    try {
+      const { applyGoalOutcomeToReputation } = await import('./classroomOsIdentityService');
+      await applyGoalOutcomeToReputation({
+        studentId: input.playerId,
+        achieved: false,
+        declared: true,
+      });
+    } catch (e) {
+      console.warn('[weeklyGoals] reputation update failed', e);
+    }
   }
 }
 

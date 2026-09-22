@@ -73,7 +73,7 @@ const SquadCheckInReminderModal: React.FC<SquadCheckInReminderModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       style={{
         position: 'fixed',
         top: 0,
@@ -96,8 +96,8 @@ const SquadCheckInReminderModal: React.FC<SquadCheckInReminderModalProps> = ({
           e.stopPropagation();
         }
       }}
-    >
-      <div
+    ><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+      <div className="mst-popup-panel"
         style={{
           background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
           borderRadius: '1rem',

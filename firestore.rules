@@ -295,6 +295,21 @@ service cloud.firestore {
       );
     }
     
+    // Per-student PP change history (Profile "Recent PP Changes")
+    match /students/{userId}/ppHistory/{entryId} {
+      allow read: if request.auth != null && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isAppAdminUser()
+      );
+      // Any authenticated client may append (sieges, scorekeepers, live events)
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasAll(['studentId', 'sourceType', 'amount', 'createdAt'])
+        && request.resource.data.studentId == userId
+        && request.resource.data.amount is number;
+      allow update, delete: if false;
+    }
+
     // Profiles collection - allow users to read/write their own profile
     match /profiles/{userId} {
       allow read, write: if request.auth != null && 
@@ -614,23 +629,21 @@ service cloud.firestore {
       }
     }
     
-    // PP Ledger collection - students can read their own entries, admins can read all
+    // PP Ledger collection - students can read their own entries, admins can read all.
+    // Any authenticated client may append (sieges, marketplace, live events, scorekeepers).
     match /ppLedger/{entryId} {
-      // Students can read their own ledger entries
       allow read: if request.auth != null && (
-        // Admin access
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
         request.auth.token.email.matches('.*@mstgames\\.net$') ||
         request.auth.token.email.matches('.*@compscihigh\\.org$') ||
-        // Student can read their own entries
-        request.auth.uid == resource.data.studentId
+        request.auth.uid == resource.data.studentId ||
+        isAppAdminUser()
       );
-      // Civic economy + other tools: allow app admins (any email) and live-event / assessment staff.
-      allow create: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$') ||
-         isAppAdminUser());
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasAll(['studentId', 'sourceType', 'amount', 'createdAt'])
+        && request.resource.data.studentId is string
+        && request.resource.data.sourceType is string
+        && request.resource.data.amount is number;
       // No updates or deletes allowed (ledger is append-only)
       allow update, delete: if false;
     }
@@ -1577,6 +1590,79 @@ service cloud.firestore {
         isProductivityAdmin()
       );
       allow delete: if isProductivityAdmin();
+    }
+
+    // --- Classroom OS: Work Board (W) ---
+    match /workItems/{workId} {
+      allow read: if request.auth != null && (
+        isLiveEventStaff() ||
+        isAdmin() ||
+        isAppAdminUser() ||
+        (
+          exists(/databases/$(database)/documents/classrooms/$(resource.data.classId)) &&
+          request.auth.uid in get(/databases/$(database)/documents/classrooms/$(resource.data.classId)).data.students
+        )
+      );
+      allow create, update, delete: if request.auth != null && (
+        isLiveEventStaff() || isAdmin() || isAppAdminUser()
+      );
+    }
+
+    match /workPeriods/{periodId} {
+      allow read: if request.auth != null && (
+        isLiveEventStaff() ||
+        isAdmin() ||
+        isAppAdminUser() ||
+        (
+          exists(/databases/$(database)/documents/classrooms/$(resource.data.classId)) &&
+          request.auth.uid in get(/databases/$(database)/documents/classrooms/$(resource.data.classId)).data.students
+        )
+      );
+      allow create, update, delete: if request.auth != null && (
+        isLiveEventStaff() || isAdmin() || isAppAdminUser()
+      );
+    }
+
+    match /workDeclarations/{declarationId} {
+      allow read: if request.auth != null && (
+        isLiveEventStaff() ||
+        isAdmin() ||
+        isAppAdminUser() ||
+        resource.data.studentId == request.auth.uid
+      );
+      allow create: if request.auth != null && (
+        (
+          request.resource.data.studentId == request.auth.uid &&
+          request.resource.data.keys().hasAll(['periodId', 'studentId', 'classId', 'declaredW'])
+        ) ||
+        isLiveEventStaff() || isAdmin() || isAppAdminUser()
+      );
+      allow update: if request.auth != null && (
+        (
+          resource.data.studentId == request.auth.uid &&
+          request.resource.data.studentId == resource.data.studentId &&
+          request.resource.data.periodId == resource.data.periodId
+        ) ||
+        isLiveEventStaff() || isAdmin() || isAppAdminUser()
+      );
+      allow delete: if isLiveEventStaff() || isAdmin() || isAppAdminUser();
+    }
+
+    match /workCompletions/{completionId} {
+      allow read: if request.auth != null && (
+        isLiveEventStaff() ||
+        isAdmin() ||
+        isAppAdminUser() ||
+        resource.data.studentId == request.auth.uid
+      );
+      allow create, update: if request.auth != null && (
+        (
+          request.resource.data.studentId == request.auth.uid &&
+          request.resource.data.keys().hasAll(['workId', 'studentId', 'classId', 'status'])
+        ) ||
+        isLiveEventStaff() || isAdmin() || isAppAdminUser()
+      );
+      allow delete: if isLiveEventStaff() || isAdmin() || isAppAdminUser();
     }
 
     match /quizProductivityLogs/{logId} {

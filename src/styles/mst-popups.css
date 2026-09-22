@@ -1,0 +1,98 @@
+/**
+ * Keep popup actions inside the viewport.
+ * Tall dialogs (Generator Earnings, announcements, session summary) were
+ * centering a card taller than the screen, which clipped Collect / Close.
+ */
+
+.mst-popup-overlay {
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: max(0.75rem, env(safe-area-inset-top, 0px))
+    max(0.75rem, env(safe-area-inset-right, 0px))
+    max(0.75rem, env(safe-area-inset-bottom, 0px))
+    max(0.75rem, env(safe-area-inset-left, 0px)) !important;
+}
+
+.mst-popup-panel {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box !important;
+  max-height: calc(
+    100dvh - 1.5rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)
+  ) !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Header row that already has a dismiss control stays pinned while the body scrolls. */
+.mst-popup-panel > div:first-child:has(button) {
+  position: sticky;
+  top: 0;
+  z-index: 7;
+}
+
+/* Class-based dialogs that were clipping their call-to-action. */
+.mst-victory-modal,
+.mst-quiz-summary-modal,
+.mst-flow-boon-card {
+  max-height: calc(
+    100dvh - 1.5rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)
+  ) !important;
+  overflow-y: auto !important;
+}
+
+.mst-victory-cta,
+.mst-quiz-summary-close,
+.mst-flow-boon-confirm {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+}
+
+/* Always-visible dismiss, pinned to the viewport corner (not inside the scrolling card). */
+.mst-popup-close {
+  position: absolute;
+  top: max(0.55rem, env(safe-area-inset-top, 0px));
+  right: max(0.55rem, env(safe-area-inset-right, 0px));
+  z-index: 30;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  background: #0f172a;
+  color: #ffffff !important;
+  font-size: 1.65rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.mst-popup-close:hover,
+.mst-popup-close:focus-visible {
+  background: #1e293b;
+  outline: 2px solid #f8fafc;
+  outline-offset: 2px;
+}
+
+/* Pin the card's last action row so Collect / Close / Next stay on screen while content scrolls. */
+.mst-popup-panel > button:last-child,
+.mst-popup-panel > :last-child:has(button) {
+  position: sticky;
+  bottom: 0;
+  z-index: 6;
+}
+
+.mst-popup-panel > :last-child:has(button):not(button) {
+  padding-top: 0.65rem;
+  margin-top: 0.35rem;
+  backdrop-filter: blur(10px);
+}

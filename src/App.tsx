@@ -175,6 +175,7 @@ const InSessionCreate = withRouteSplitting(() => import('./components/InSessionC
 const InSessionBattleView = withRouteSplitting(() => import('./components/InSessionBattleView'));
 const AssessmentGoalsStudent = withRouteSplitting(() => import('./components/AssessmentGoalsStudent'));
 const WeeklyGoalsPage = withRouteSplitting(() => import('./pages/WeeklyGoalsPage'));
+const WorkBoardPage = withRouteSplitting(() => import('./pages/WorkBoardPage'));
 const TrainingGrounds = withRouteSplitting(() => import('./pages/TrainingGrounds'));
 const SkillLibraryAdmin = withRouteSplitting(() => import('./pages/admin/SkillLibraryAdmin'));
 const SkillAnalyticsAdmin = withRouteSplitting(() => import('./pages/admin/SkillAnalyticsAdmin'));
@@ -673,6 +674,11 @@ const AppContent = () => {
             <Route path="/weekly-goals" element={
               <ProtectedRoute user={true}>
                 <WeeklyGoalsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="/work-board" element={
+              <ProtectedRoute user={true}>
+                <WorkBoardPage />
               </ProtectedRoute>
             } />
             <Route path="/island-raid" element={

@@ -106,6 +106,7 @@ const TutorialReviewModal: React.FC<TutorialReviewModalProps> = ({
 
       {/* Modal */}
       <div 
+        className="mst-popup-panel"
         style={{
           position: 'fixed',
           top: '50%',

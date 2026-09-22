@@ -168,6 +168,34 @@ export interface SessionSummary {
   liveEventQuizRankByPlayer?: Record<string, number>;
   /** Sprints + quiz recap built at finalize (see `liveEventSessionActivitySummary.ts`). */
   sessionActivity?: SessionActivitySummary;
+  /**
+   * Work Board progress for the session’s class/period (Expected / available W vs completed).
+   * Built at finalize so summaries show Classroom OS work outcomes.
+   */
+  workSummary?: LiveEventWorkSummary;
+}
+
+/** Aggregated Work Board outcome for a Live Event summary. */
+export interface LiveEventWorkSummary {
+  periodId: string | null;
+  periodTitle: string | null;
+  /** Sum of available W across roster (what could be completed). */
+  availableW: number;
+  /** Sum of completed W across roster. */
+  completedW: number;
+  /** 0–100; completedW / availableW. */
+  completionPct: number;
+  requiredAvailableW: number;
+  requiredCompletedW: number;
+  requiredCompletionPct: number;
+  byPlayer: Array<{
+    playerId: string;
+    playerName: string;
+    availableW: number;
+    completedW: number;
+    declaredW: number;
+    completionPct: number;
+  }>;
 }
 
 

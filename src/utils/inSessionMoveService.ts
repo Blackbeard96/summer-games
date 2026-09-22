@@ -6,7 +6,7 @@
  */
 
 import { db } from '../firebase';
-import { doc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { doc, runTransaction, serverTimestamp, collection, addDoc } from 'firebase/firestore';
 import {
   computeLiveEventParticipationSkillCostServer,
   logLiveEventSkillCostAttempt,
@@ -31,6 +31,7 @@ import {
 } from './liveEventDebugLogging';
 import { isLiveEventPlayerEliminatedForRevive } from './liveEventRevive';
 import { isGlobalHost } from './inSessionService';
+import { computeSiegeProtectionFloor } from './liveEventGameTimeService';
 
 const DEBUG_IN_SESSION_MOVES = process.env.REACT_APP_DEBUG_IN_SESSION_MOVES === 'true' || 
                                  process.env.REACT_APP_DEBUG === 'true';
@@ -55,7 +56,11 @@ export interface InSessionMoveResult {
     targetShieldAfter?: number;
     actorPpBefore?: number;
     actorPpAfter?: number;
+    targetPpBefore?: number;
+    targetPpAfter?: number;
   };
+  /** Offline / not-in-event target — recorded in Battle History as a Live Event Siege. */
+  liveEventSiege?: boolean;
 }
 
 export interface ApplyMoveParams {
@@ -242,49 +247,90 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       }
 
       const sessionData = sessionDoc.data();
-      if (sessionData.liveEventFightNegated === true) {
-        // Host/staff can still act while Fight is paused for students
-        const isHostActor =
-          sessionData.hostUid === actorUid ||
-          sessionData.teacherId === actorUid ||
-          isGlobalHost(actorUid, actorEmail);
-        if (!isHostActor) {
-          throw new Error(
-            'The host has paused the Fight phase. Skills are locked until the host turns Fight back on.'
-          );
-        }
-      }
-
-      const players: any[] = sessionData.players || [];
+      const players: any[] = [...(sessionData.players || [])];
       const battleLog: string[] = sessionData.battleLog || [];
-      
-      // Find actor and target in players array
-      const actorIndex = players.findIndex(p => p.userId === actorUid);
-      const targetIndex = players.findIndex(p => p.userId === targetUid);
-      
-      // ALWAYS log what we read (critical for debugging) - concise
-      if (actorIndex === -1 || targetIndex === -1) {
-        console.error('❌ [applyInSessionMove] ⚠️ ACTOR OR TARGET NOT FOUND:', {
-          actorFound: actorIndex >= 0,
-          targetFound: targetIndex >= 0,
-          playersCount: players.length
-        });
-      }
-
-      if (actorIndex === -1) {
-        throw new Error(`Actor ${actorName} (${actorUid}) not found in session`);
-      }
-
-      if (targetIndex === -1) {
-        throw new Error(`Target ${targetName} (${targetUid}) not found in session`);
-      }
 
       // ALL Firestore reads must happen before ANY writes (session + vault updates below).
       const targetVaultRef = doc(db, 'vaults', targetUid);
       const targetVaultSnap = await transaction.get(targetVaultRef);
 
+      // Find actor and target in players array
+      const actorIndex = players.findIndex((p) => p.userId === actorUid);
+      let targetIndex = players.findIndex((p) => p.userId === targetUid);
+
+      if (actorIndex === -1) {
+        console.error('❌ [applyInSessionMove] ⚠️ ACTOR NOT FOUND:', {
+          playersCount: players.length,
+        });
+        throw new Error(`Actor ${actorName} (${actorUid}) not found in session`);
+      }
+
+      const actorRow = players[actorIndex];
+      const isHostActor =
+        sessionData.hostUid === actorUid ||
+        sessionData.teacherId === actorUid ||
+        actorRow?.isTeacher === true ||
+        isGlobalHost(actorUid, actorEmail);
+
+      if (sessionData.liveEventFightNegated === true && !isHostActor) {
+        throw new Error(
+          'The host has paused the Fight phase. Skills are locked until the host turns Fight back on.'
+        );
+      }
+
+      // Offline / not-joined classmates: inject a siege row from vault so Live Event skills can hit them.
+      let isLiveEventSiege = false;
+      if (targetIndex === -1) {
+        if (actorUid === targetUid) {
+          throw new Error(`Target ${targetName} (${targetUid}) not found in session`);
+        }
+        isLiveEventSiege = true;
+        const vd = targetVaultSnap.exists() ? targetVaultSnap.data() : {};
+        const capacity = Math.max(100, Math.floor(Number(vd.capacity) || 1000));
+        const currentPP = Math.max(0, Math.floor(Number(vd.currentPP) || 0));
+        const maxHp = Math.max(100, Math.floor(capacity * 0.1));
+        const hp =
+          vd.vaultHealth !== undefined && vd.vaultHealth !== null
+            ? Math.min(Math.max(0, Math.floor(Number(vd.vaultHealth) || 0)), maxHp)
+            : maxHp;
+        const maxShield = Math.max(100, Math.floor(Number(vd.maxShieldStrength) || 100));
+        const shield =
+          vd.shieldStrength !== undefined && vd.shieldStrength !== null
+            ? Math.min(Math.max(0, Math.floor(Number(vd.shieldStrength) || 0)), maxShield)
+            : maxShield;
+        players.push({
+          userId: targetUid,
+          displayName: targetName || 'Player',
+          level: 1,
+          powerPoints: currentPP,
+          participationCount: 0,
+          movesEarned: 0,
+          hp,
+          maxHp,
+          shield,
+          maxShield,
+          participationMode: 'offline',
+          liveEventStartingPP: currentPP,
+          joinedViaSiege: true,
+        });
+        targetIndex = players.length - 1;
+        console.log('🏰 [applyInSessionMove] Injected Offline Siege target into session:', {
+          targetUid: targetUid.substring(0, 8),
+          targetName,
+          hp,
+          shield,
+          currentPP,
+        });
+      }
+
       const actor = players[actorIndex];
       const target = players[targetIndex];
+      if (
+        target?.participationMode === 'offline' ||
+        target?.joinedViaSiege === true
+      ) {
+        isLiveEventSiege = true;
+      }
       
       // Log what we read (after variables are declared)
       console.log('📖 [applyInSessionMove] Read from Firestore | Target HP:', target.hp, '| Shield:', target.shield, '| Actor PP:', actor.powerPoints);
@@ -317,6 +363,47 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         const movesEarned = Math.max(0, Math.floor(Number(actorCopy.movesEarned) || 0));
 
         if (finalParticipationCost > movesEarned) {
+          if (isHostActor) {
+            // Admin hosts can always use Fight skills — waive participation cost when short.
+            participationPointsSpent = 0;
+            logLiveEventSkillCostAttempt({
+              actorId: actorUid,
+              skillId: move.id,
+              skillName: move.name,
+              energyType: getResolvedMoveEnergyType(move),
+              detectedCategory: costBreakdown.category,
+              detectedLevel: costBreakdown.elementalMoveTier,
+              baseCost: costBreakdown.baseCost,
+              reduction: costBreakdown.reductionFromArtifacts + costBreakdown.reductionFromEffects,
+              finalCost: 0,
+              playerCurrentPP: movesEarned,
+              validationResult: 'ok',
+              ppBefore: movesEarned,
+              ppAfter: movesEarned,
+            });
+          } else {
+            logLiveEventSkillCostAttempt({
+              actorId: actorUid,
+              skillId: move.id,
+              skillName: move.name,
+              energyType: getResolvedMoveEnergyType(move),
+              detectedCategory: costBreakdown.category,
+              detectedLevel: costBreakdown.elementalMoveTier,
+              baseCost: costBreakdown.baseCost,
+              reduction: costBreakdown.reductionFromArtifacts + costBreakdown.reductionFromEffects,
+              finalCost: finalParticipationCost,
+              playerCurrentPP: movesEarned,
+              validationResult: 'blocked_insufficient_pp',
+              ppBefore: movesEarned,
+              ppAfter: movesEarned,
+            });
+            throw new Error(
+              `Need ${finalParticipationCost} Participation Points to use this skill (have ${movesEarned})`
+            );
+          }
+        } else {
+          actorCopy.movesEarned = movesEarned - finalParticipationCost;
+          participationPointsSpent = finalParticipationCost;
           logLiveEventSkillCostAttempt({
             actorId: actorUid,
             skillId: move.id,
@@ -328,32 +415,11 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
             reduction: costBreakdown.reductionFromArtifacts + costBreakdown.reductionFromEffects,
             finalCost: finalParticipationCost,
             playerCurrentPP: movesEarned,
-            validationResult: 'blocked_insufficient_pp',
+            validationResult: 'ok',
             ppBefore: movesEarned,
-            ppAfter: movesEarned,
+            ppAfter: actorCopy.movesEarned,
           });
-          throw new Error(
-            `Need ${finalParticipationCost} Participation Points to use this skill (have ${movesEarned})`
-          );
         }
-
-        actorCopy.movesEarned = movesEarned - finalParticipationCost;
-        participationPointsSpent = finalParticipationCost;
-        logLiveEventSkillCostAttempt({
-          actorId: actorUid,
-          skillId: move.id,
-          skillName: move.name,
-          energyType: getResolvedMoveEnergyType(move),
-          detectedCategory: costBreakdown.category,
-          detectedLevel: costBreakdown.elementalMoveTier,
-          baseCost: costBreakdown.baseCost,
-          reduction: costBreakdown.reductionFromArtifacts + costBreakdown.reductionFromEffects,
-          finalCost: finalParticipationCost,
-          playerCurrentPP: movesEarned,
-          validationResult: 'ok',
-          ppBefore: movesEarned,
-          ppAfter: actorCopy.movesEarned,
-        });
       }
 
       // Initialize target vault data if missing (based on level if available)
@@ -426,8 +492,21 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
 
       // Apply PP steal (no-op when actor and target are the same row — would double-apply wallet math)
       if (ppStolen > 0 && actorUid !== targetUid) {
-        // Steal PP from target to actor
-        const actualSteal = Math.min(ppStolen, targetCopy.powerPoints || 0);
+        // Steal PP from target to actor (Offline Siege respects 1/9 protection floor)
+        const isSiegeTarget =
+          targetCopy.participationMode === 'offline' || targetCopy.joinedViaSiege === true;
+        let maxStealable = Math.max(0, Math.floor(Number(targetCopy.powerPoints) || 0));
+        if (isSiegeTarget) {
+          const startPp = Math.max(
+            0,
+            Math.floor(
+              Number(targetCopy.liveEventStartingPP ?? targetCopy.powerPoints) || 0
+            )
+          );
+          const floor = computeSiegeProtectionFloor(startPp);
+          maxStealable = Math.max(0, maxStealable - floor);
+        }
+        const actualSteal = Math.min(ppStolen, maxStealable);
         targetCopy.powerPoints = Math.max(0, (targetCopy.powerPoints || 0) - actualSteal);
         actorCopy.powerPoints = (actorCopy.powerPoints || 0) + actualSteal;
       }
@@ -443,6 +522,25 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         targetCopy.eliminated = true;
         if (actorUid !== targetUid) {
           targetCopy.eliminatedBy = actorUid;
+          // Transfer remaining session PP to eliminator (Offline Siege keeps the 1/9 floor).
+          const isSiegeTarget =
+            targetCopy.participationMode === 'offline' || targetCopy.joinedViaSiege === true;
+          let floor = 0;
+          if (isSiegeTarget) {
+            const startPp = Math.max(
+              0,
+              Math.floor(
+                Number(targetCopy.liveEventStartingPP ?? targetCopy.powerPoints) || 0
+              )
+            );
+            floor = computeSiegeProtectionFloor(startPp);
+          }
+          const beforePp = Math.max(0, Math.floor(Number(targetCopy.powerPoints) || 0));
+          const transferable = Math.max(0, beforePp - floor);
+          if (transferable > 0) {
+            targetCopy.powerPoints = floor;
+            actorCopy.powerPoints = (actorCopy.powerPoints || 0) + transferable;
+          }
         }
         if (DEBUG_IN_SESSION_MOVES) {
           debug('inSessionMove', `☠️ Target ${targetName} eliminated!`);
@@ -621,14 +719,18 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         success: true,
         message: 'Move applied successfully',
         damage,
-        shieldDamage,
+        shieldDamage: appliedShieldDamage || shieldDamage,
         healing,
         shieldBoost,
-        ppStolen,
+        ppStolen: Math.max(
+          0,
+          Math.floor(Number(target.powerPoints) || 0) - Math.floor(Number(targetCopy.powerPoints) || 0)
+        ),
         ppCost: vaultPpCostToDeduct,
         participationPointsSpent,
         participationCostDiscount,
         battleLogEntry: finalBattleLogMessage,
+        liveEventSiege: isLiveEventSiege && actorUid !== targetUid,
         // Include state changes for debug mirror
         stateChanges: {
           targetHpBefore: target.hp,
@@ -636,7 +738,9 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
           targetShieldBefore: target.shield,
           targetShieldAfter: targetCopy.shield,
           actorPpBefore: actor.powerPoints,
-          actorPpAfter: actorCopy.powerPoints
+          actorPpAfter: actorCopy.powerPoints,
+          targetPpBefore: target.powerPoints,
+          targetPpAfter: targetCopy.powerPoints,
         }
       };
     });
@@ -671,6 +775,69 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         shieldBoost: result.shieldBoost,
       });
       // Vault was updated inside the transaction (atomic with session players).
+
+      // Record Offline Siege hits in Battle History (vaultSiegeAttacks) so they show on Battle page.
+      if (result.liveEventSiege) {
+        try {
+          const ppTaken = Math.max(0, Math.floor(Number(result.ppStolen) || 0));
+          const shieldTaken = Math.max(
+            0,
+            Math.floor(
+              (Number(result.stateChanges?.targetShieldBefore) || 0) -
+                (Number(result.stateChanges?.targetShieldAfter) || 0)
+            )
+          );
+          const healthTaken = Math.max(
+            0,
+            Math.floor(
+              (Number(result.stateChanges?.targetHpBefore) || 0) -
+                (Number(result.stateChanges?.targetHpAfter) || 0)
+            )
+          );
+          const message =
+            result.battleLogEntry ||
+            `Live Event Siege: ${actorName} attacked ${targetName} with ${move.name}`;
+          await addDoc(collection(db, 'vaultSiegeAttacks'), {
+            attackerId: actorUid,
+            attackerName: actorName,
+            targetId: targetUid,
+            targetName,
+            moveId: move.id || null,
+            moveName: move.name || null,
+            damage: healthTaken || Math.max(0, Math.floor(Number(result.damage) || 0)),
+            ppStolen: ppTaken,
+            shieldDamage: shieldTaken || Math.max(0, Math.floor(Number(result.shieldDamage) || 0)),
+            message,
+            overshieldAbsorbed: false,
+            timestamp: serverTimestamp(),
+            targetVaultBefore: {
+              currentPP: Math.max(0, Math.floor(Number(result.stateChanges?.targetPpBefore) || 0)),
+              vaultHealth: Math.max(0, Math.floor(Number(result.stateChanges?.targetHpBefore) || 0)),
+              shieldStrength: Math.max(
+                0,
+                Math.floor(Number(result.stateChanges?.targetShieldBefore) || 0)
+              ),
+              overshield: 0,
+            },
+            targetVaultAfter: {
+              currentPP: Math.max(0, Math.floor(Number(result.stateChanges?.targetPpAfter) || 0)),
+              vaultHealth: Math.max(0, Math.floor(Number(result.stateChanges?.targetHpAfter) || 0)),
+              shieldStrength: Math.max(
+                0,
+                Math.floor(Number(result.stateChanges?.targetShieldAfter) || 0)
+              ),
+              overshield: 0,
+            },
+            ppStolenFromTarget: ppTaken,
+            ppStolenDate: serverTimestamp(),
+            liveEventSiege: true,
+            liveEventSessionId: sessionId,
+            source: 'live_event_siege',
+          });
+        } catch (histErr) {
+          console.warn('[applyInSessionMove] Live Event Siege battle history write failed (non-fatal)', histErr);
+        }
+      }
     } else {
       console.error('❌ [applyInSessionMove] ⚠️ FAILED', move.name, '→', targetName, '| Error:', result.message);
     }

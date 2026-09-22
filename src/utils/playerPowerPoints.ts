@@ -1,11 +1,17 @@
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { recordPPChange, type RecordPPChangeInput } from './ppLedgerService';
 
 /**
  * Player PP is mirrored across vaults.currentPP, students.powerPoints, and users.powerPoints.
  * Vault is the gameplay source of truth once a vault exists. Never reconcile with Math.max —
  * that undoes Marketplace / skill spends that only hit one store.
  */
+
+export type PPChangeMeta = Pick<
+  RecordPPChangeInput,
+  'sourceType' | 'sourceId' | 'notes' | 'assessmentId' | 'goalScore' | 'actualScore' | 'outcome'
+>;
 
 export function resolveCanonicalPP(args: {
   vaultPP: number | null | undefined;
@@ -23,7 +29,7 @@ export function resolveCanonicalPP(args: {
 export async function setPlayerPowerPoints(
   userId: string,
   amount: number,
-  options?: { skipVaultIfMissing?: boolean }
+  options?: { skipVaultIfMissing?: boolean; meta?: PPChangeMeta; previousAmount?: number }
 ): Promise<number> {
   if (!userId) throw new Error('setPlayerPowerPoints: missing userId');
   const next = Math.max(0, Math.floor(Number(amount) || 0));
@@ -31,7 +37,20 @@ export async function setPlayerPowerPoints(
   const studentRef = doc(db, 'students', userId);
   const userRef = doc(db, 'users', userId);
 
+  let previous =
+    typeof options?.previousAmount === 'number'
+      ? Math.max(0, Math.floor(options.previousAmount))
+      : null;
+
   const vaultSnap = await getDoc(vaultRef);
+  if (previous === null && options?.meta) {
+    previous = resolveCanonicalPP({
+      vaultExists: vaultSnap.exists(),
+      vaultPP: vaultSnap.exists() ? vaultSnap.data()?.currentPP : undefined,
+      studentPP: (await getDoc(studentRef)).data()?.powerPoints,
+    });
+  }
+
   const writes: Promise<unknown>[] = [
     setDoc(studentRef, { powerPoints: next }, { merge: true }),
     setDoc(userRef, { powerPoints: next }, { merge: true }),
@@ -44,6 +63,18 @@ export async function setPlayerPowerPoints(
   }
 
   await Promise.all(writes);
+
+  if (options?.meta && previous !== null) {
+    const delta = next - previous;
+    if (delta !== 0) {
+      void recordPPChange({
+        studentId: userId,
+        amount: delta,
+        ...options.meta,
+      });
+    }
+  }
+
   return next;
 }
 
@@ -63,8 +94,13 @@ export async function getPlayerPowerPoints(userId: string): Promise<number> {
 /** Apply a signed delta to the canonical balance and mirror all stores. */
 export async function adjustPlayerPowerPoints(
   userId: string,
-  delta: number
+  delta: number,
+  meta?: PPChangeMeta
 ): Promise<number> {
   const current = await getPlayerPowerPoints(userId);
-  return setPlayerPowerPoints(userId, current + delta);
+  const flooredDelta = Math.trunc(Number(delta) || 0);
+  return setPlayerPowerPoints(userId, current + flooredDelta, {
+    meta,
+    previousAmount: current,
+  });
 }

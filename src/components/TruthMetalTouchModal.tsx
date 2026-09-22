@@ -66,7 +66,7 @@ const TruthMetalTouchModal: React.FC<TruthMetalTouchModalProps> = ({ isOpen, onC
           }
         `}
       </style>
-      <div style={{
+      <div className="mst-popup-overlay" style={{
         position: 'fixed',
         top: 0,
         left: 0,
@@ -78,8 +78,8 @@ const TruthMetalTouchModal: React.FC<TruthMetalTouchModalProps> = ({ isOpen, onC
         justifyContent: 'center',
         zIndex: 1000,
         animation: 'fadeIn 0.3s ease-out'
-      }}>
-        <div style={{
+      }}><button type="button" className="mst-popup-close" aria-label="Close" onClick={(e) => { e.stopPropagation(); onClose?.(); }}>×</button>
+        <div className="mst-popup-panel" style={{
           backgroundColor: 'white',
           borderRadius: '1rem',
           padding: '2rem',

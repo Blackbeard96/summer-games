@@ -35,7 +35,7 @@ const CpuAwakeningSequenceModal: React.FC<CpuAwakeningSequenceModalProps> = ({
   };
 
   return (
-    <div
+    <div className="mst-popup-overlay"
       role="dialog"
       aria-modal="true"
       aria-labelledby="cpu-awakening-title"
@@ -51,7 +51,7 @@ const CpuAwakeningSequenceModal: React.FC<CpuAwakeningSequenceModalProps> = ({
         boxSizing: 'border-box',
       }}
     >
-      <div
+      <div className="mst-popup-panel"
         style={{
           width: '100%',
           maxWidth: 720,
