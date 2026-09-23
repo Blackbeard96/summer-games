@@ -1,5 +1,9 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from '../firebase';
 import type { ClassFlowSprintState } from '../types/season1';
+import type { InSessionRoom } from '../types/inSession';
+import type { WorkPeriodProgress } from '../types/workBoard';
 import { LIVE_EVENT_PP_PER_PARTICIPATION_POINT } from '../utils/inSessionStatsService';
 import {
   startClassFlowSprint,
@@ -10,6 +14,15 @@ import {
   applyClassFlowSprintIncompletePenalties,
 } from '../utils/liveEventSprintService';
 import { mergeSprintRosterForClassFlow, fetchClassroomStudentRoster } from '../utils/classFlowSprintRosterService';
+import {
+  buildGameTimeRoster,
+  setGameTimeStatus,
+  type GameTimeStatus,
+} from '../utils/liveEventGameTimeService';
+import {
+  getStudentPeriodProgress,
+  listWorkPeriodsForClass,
+} from '../utils/workBoardService';
 import LiveEventWeeklyDeliverableMarkPanel from './LiveEventWeeklyDeliverableMarkPanel';
 
 export interface LiveEventSprintPanelProps {
@@ -21,6 +34,8 @@ export interface LiveEventSprintPanelProps {
   /** Room host — excluded from incomplete PP penalties */
   sessionHostUid?: string;
   isSessionHost: boolean;
+  /** Host or admin: Open / Pause / End Game Time + roster columns */
+  showGameTimeControls?: boolean;
   currentUserId: string;
   userEmail?: string | null;
   userDisplayName?: string | null;
@@ -43,6 +58,7 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
   classStudentRoster = null,
   sessionHostUid = '',
   isSessionHost,
+  showGameTimeControls = false,
   currentUserId,
   userEmail,
   userDisplayName,
@@ -64,6 +80,74 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
     { userId: string; displayName: string }[] | null
   >(null);
   const [rosterLoading, setRosterLoading] = useState(false);
+  const [roomSnap, setRoomSnap] = useState<InSessionRoom | null>(null);
+  const [workProgressByUid, setWorkProgressByUid] = useState<Record<string, WorkPeriodProgress>>({});
+  const [gameTimeBusy, setGameTimeBusy] = useState(false);
+  const [showGameTimeRoster, setShowGameTimeRoster] = useState(true);
+
+  useEffect(() => {
+    if (!showGameTimeControls || !sessionId) return;
+    const unsub = onSnapshot(doc(db, 'inSessionRooms', sessionId), (snap) => {
+      if (snap.exists()) setRoomSnap({ id: snap.id, ...(snap.data() as Omit<InSessionRoom, 'id'>) });
+      else setRoomSnap(null);
+    });
+    return () => unsub();
+  }, [sessionId, showGameTimeControls]);
+
+  const gameTimeRoster = useMemo(
+    () => (roomSnap ? buildGameTimeRoster(roomSnap) : []),
+    [roomSnap]
+  );
+
+  useEffect(() => {
+    if (!showGameTimeControls || !roomSnap?.classId || !roomSnap.players?.length) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const periods = await listWorkPeriodsForClass(roomSnap.classId!);
+        const open = periods.find((p) => p.status === 'open') || periods[0];
+        if (!open) return;
+        const entries = await Promise.all(
+          roomSnap.players.map(async (p) => {
+            try {
+              const prog = await getStudentPeriodProgress({
+                periodId: open.id,
+                studentId: p.userId,
+                classId: roomSnap.classId!,
+              });
+              return [p.userId, prog] as const;
+            } catch {
+              return null;
+            }
+          })
+        );
+        if (cancelled) return;
+        const map: Record<string, WorkPeriodProgress> = {};
+        for (const e of entries) {
+          if (e) map[e[0]] = e[1];
+        }
+        setWorkProgressByUid(map);
+      } catch (e) {
+        console.warn('[LiveEventSprintPanel] work progress load failed', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showGameTimeControls, roomSnap]);
+
+  const onSetGameTimeStatus = async (status: GameTimeStatus) => {
+    if (!showGameTimeControls) return;
+    setGameTimeBusy(true);
+    try {
+      await setGameTimeStatus(sessionId, status);
+    } catch (e) {
+      console.error(e);
+      alert(e instanceof Error ? e.message : 'Failed to update Game Time');
+    } finally {
+      setGameTimeBusy(false);
+    }
+  };
 
   // Harden full-class tracking: if parent didn't pass roster, load classroom.students by classId
   // so paper / offline formative students still appear for host checkmarks.
@@ -295,6 +379,136 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
           </span>
         )}
       </div>
+
+      {showGameTimeControls && (
+        <div
+          style={{
+            marginTop: '0.75rem',
+            marginBottom: '0.35rem',
+            background: 'rgba(15, 23, 42, 0.45)',
+            border: '1px solid rgba(125, 211, 252, 0.35)',
+            borderRadius: 10,
+            padding: '0.65rem 0.75rem',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ fontSize: '0.85rem' }}>
+              <strong>Game Time</strong>{' '}
+              <span style={{ opacity: 0.9 }}>({roomSnap?.gameTime?.status || 'closed'})</span>
+              {' · '}
+              <span style={{ color: '#7dd3fc', fontWeight: 600 }}>
+                {(roomSnap?.liveEventMode || 'class_flow').replace(/_/g, ' ')}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <button
+                type="button"
+                disabled={gameTimeBusy}
+                onClick={() => void onSetGameTimeStatus('open')}
+                style={{
+                  padding: '0.3rem 0.55rem',
+                  borderRadius: 6,
+                  border: '1px solid rgba(255,255,255,0.35)',
+                  background: 'rgba(16,185,129,0.85)',
+                  color: '#022c22',
+                  fontWeight: 700,
+                  fontSize: '0.75rem',
+                  cursor: gameTimeBusy ? 'wait' : 'pointer',
+                }}
+              >
+                Open
+              </button>
+              <button
+                type="button"
+                disabled={gameTimeBusy}
+                onClick={() => void onSetGameTimeStatus('paused')}
+                style={{
+                  padding: '0.3rem 0.55rem',
+                  borderRadius: 6,
+                  border: '1px solid rgba(255,255,255,0.35)',
+                  background: 'rgba(251,191,36,0.9)',
+                  color: '#422006',
+                  fontWeight: 700,
+                  fontSize: '0.75rem',
+                  cursor: gameTimeBusy ? 'wait' : 'pointer',
+                }}
+              >
+                Pause
+              </button>
+              <button
+                type="button"
+                disabled={gameTimeBusy}
+                onClick={() => void onSetGameTimeStatus('ended')}
+                style={{
+                  padding: '0.3rem 0.55rem',
+                  borderRadius: 6,
+                  border: '1px solid rgba(255,255,255,0.35)',
+                  background: 'rgba(239,68,68,0.9)',
+                  color: '#fff',
+                  fontWeight: 700,
+                  fontSize: '0.75rem',
+                  cursor: gameTimeBusy ? 'wait' : 'pointer',
+                }}
+              >
+                End
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowGameTimeRoster((v) => !v)}
+                style={{
+                  padding: '0.3rem 0.55rem',
+                  borderRadius: 6,
+                  border: '1px solid rgba(255,255,255,0.35)',
+                  background: 'transparent',
+                  color: '#e2e8f0',
+                  fontSize: '0.75rem',
+                  cursor: 'pointer',
+                }}
+              >
+                {showGameTimeRoster ? 'Hide roster' : 'Show roster'}
+              </button>
+            </div>
+          </div>
+          {showGameTimeRoster && gameTimeRoster.length > 0 && (
+            <div style={{ overflowX: 'auto', marginTop: 8, maxHeight: 220, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(148,163,184,0.45)' }}>
+                    <th style={{ padding: '4px 6px' }}>Player</th>
+                    <th>Mode</th>
+                    <th>Declared W</th>
+                    <th>Done W</th>
+                    <th>Req %</th>
+                    <th>PP</th>
+                    <th>Floor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {gameTimeRoster.map((row) => {
+                    const prog = workProgressByUid[row.userId];
+                    const reqPct =
+                      prog?.requiredCompletionRate == null
+                        ? '—'
+                        : `${Math.round(prog.requiredCompletionRate * 100)}%`;
+                    return (
+                      <tr key={row.userId} style={{ borderBottom: '1px solid rgba(30,41,59,0.8)' }}>
+                        <td style={{ padding: '4px 6px' }}>{row.displayName}</td>
+                        <td>{row.participationMode}</td>
+                        <td>{prog?.declaredW ?? '—'}</td>
+                        <td>{prog?.completedW ?? '—'}</td>
+                        <td>{reqPct}</td>
+                        <td>{row.powerPoints}</td>
+                        <td>{row.protectionFloor}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       <p style={{ margin: '0.5rem 0 0.75rem', fontSize: '0.85rem', opacity: 0.92, lineHeight: 1.45 }}>
         Host sets a timed goal and checks off students who finish. The checklist includes the{' '}
         <strong>full class roster</strong> — students do <strong>not</strong> need to be logged into the Live Event

@@ -342,7 +342,7 @@ const InSessionCreate: React.FC = () => {
             Create Room
           </button>
           <button
-            onClick={() => navigate('/in-session')}
+            onClick={() => navigate('/live-events')}
             style={{
               background: '#ef4444',
               color: 'white',

@@ -150,7 +150,6 @@ import {
   tryCreditLiveEventPassiveParticipation,
 } from '../utils/liveEventPassiveParticipation';
 import PlayerBuildInspectModal from './PlayerBuildInspectModal';
-import GameTimeHostPanel from './liveEvent/GameTimeHostPanel';
 import { computeSiegeProtectionFloor } from '../utils/liveEventGameTimeService';
 import { finitePowerLevel } from '../utils/playerBuildInspect';
 import { truthMetalBalanceForHud } from '../utils/truthMetalPlayerBalance';
@@ -1028,10 +1027,17 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         setActiveViewers(activeViewersArray);
       }
       
-      // Check if current user is the session host
+      // Check if current user is the session host (hostUid, legacy teacherId, or global host)
       if (actorUid) {
-        const isHost = session.hostUid === actorUid ||
-                       isGlobalHost(actorUid, actorEmail, actorDisplayName);
+        const sessionHostUid =
+          typeof session.hostUid === 'string' && session.hostUid
+            ? session.hostUid
+            : typeof (session as { teacherId?: string }).teacherId === 'string'
+              ? (session as { teacherId: string }).teacherId
+              : '';
+        const isHost =
+          sessionHostUid === actorUid ||
+          isGlobalHost(actorUid, actorEmail, actorDisplayName);
         setIsSessionHost(isHost);
       }
       
@@ -3982,7 +3988,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     : '🎯 End Goal setting mode'}
               </button>
             )}
-          {isSessionHost && !quizSession && (
+          {permissionsChecked && (isSessionHost || isAdminUser) && !showSessionSummary && (
             <button
               onClick={() => {
                 setQuizModalOpen(true);
@@ -4007,8 +4013,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 fontWeight: '600',
                 cursor: 'pointer',
               }}
+              title={
+                quizSession
+                  ? 'Open Live Event Modes (a quiz/BR session may already be active)'
+                  : 'Launch Class Flow, Quiz, Battle Royale, Exam, Reflection, or Goal setting'
+              }
             >
-              📋 Start Live Event
+              📋 Live Event Modes
             </button>
           )}
           <button
@@ -4086,10 +4097,6 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         </div>
       </div>
 
-      {(isSessionHost || isAdminUser) && sessionId && (
-        <GameTimeHostPanel sessionId={sessionId} isHost={isSessionHost || isAdminUser} />
-      )}
-
       {!showSessionSummary &&
         mstMktOpen &&
         (roomSessionStatus === 'live' || roomSessionStatus === 'active') &&
@@ -4106,6 +4113,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               background: 'linear-gradient(90deg, #422006 0%, #713f12 50%, #1c1917 100%)',
               border: '1px solid rgba(251, 191, 36, 0.5)',
               color: '#fef3c7',
+              marginBottom: '0.75rem',
             }}
           >
             <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>
@@ -4135,10 +4143,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           </div>
         )}
 
-      {!quizSession &&
+      {(isSessionHost || isAdminUser || roomClassFlowSprint) &&
+        !quizSession &&
         roomReflectionMeta.liveEventMode !== 'reflection' &&
         !isExamLiveEventMode(roomReflectionMeta.liveEventMode) &&
-        (isSessionHost || roomClassFlowSprint) &&
         currentUser && (
         <LiveEventSprintPanel
           sessionId={sessionId}
@@ -4150,7 +4158,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               : null
           }
           sessionHostUid={sessionRoomHostUid}
-          isSessionHost={isSessionHost}
+          isSessionHost={isSessionHost || isAdminUser}
+          showGameTimeControls={isSessionHost || isAdminUser}
           currentUserId={currentUser.uid}
           userEmail={currentUser.email}
           userDisplayName={currentUser.displayName}
@@ -4187,7 +4196,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem', color: '#0f172a' }}>📋 Live Event</h3>
+            <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem', color: '#0f172a' }}>📋 Live Event Modes</h3>
             <p style={{ marginBottom: '1rem', color: '#0f172a', fontSize: '0.9rem' }}>
               Pick a mode for this session. <strong>Class Flow</strong> is for timed sprints and participation (use the Sprint panel in the room).
               <strong> Quiz</strong> and <strong>Battle Royale</strong> use a Training Grounds (CFUs) question bank.

@@ -3,10 +3,11 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { doc, getDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { joinSession } from '../utils/inSessionService';
+import { canHostSession, isGlobalHost, joinSession } from '../utils/inSessionService';
 import { getClassroomIdsForEnrolledStudent, getVisibleLiveEventsForUser } from '../utils/classroomQueries';
 import { canUserJoinLiveEvent, normalizeLiveEventEligibility } from '../utils/liveEventEligibility';
 import { battleEnergyDisplayLabel, inferEnergyTypeForLiveEvent } from '../constants/energyTypes';
+import { isUserAdmin } from '../utils/roleManagement';
 
 interface LiveEvent {
   id: string;
@@ -63,19 +64,37 @@ const LiveEvents: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [userClassrooms, setUserClassrooms] = useState<string[]>([]);
   const [joiningEventId, setJoiningEventId] = useState<string | null>(null);
-  /** Filter events by class name or any joined player's name / id */
   const [playerSearch, setPlayerSearch] = useState('');
+  const [canLaunchModes, setCanLaunchModes] = useState(false);
+  const [hostCheckDone, setHostCheckDone] = useState(false);
 
-  // Get user's classrooms
+  // Get user's classrooms + whether they can host / launch modes
   useEffect(() => {
     const fetchUserClassrooms = async () => {
-      if (!currentUser) return;
+      if (!currentUser) {
+        setHostCheckDone(true);
+        return;
+      }
 
       try {
         const userClassIds = await getClassroomIdsForEnrolledStudent(currentUser.uid);
         setUserClassrooms(userClassIds);
+        const admin = await isUserAdmin(currentUser.uid, currentUser.email);
+        const global = isGlobalHost(currentUser.uid, currentUser.email || undefined, currentUser.displayName || undefined);
+        let classHost = false;
+        if (!admin && !global && userClassIds[0]) {
+          classHost = await canHostSession(
+            currentUser.uid,
+            userClassIds[0],
+            currentUser.email || undefined,
+            currentUser.displayName || undefined
+          );
+        }
+        setCanLaunchModes(admin || global || classHost);
       } catch (error) {
         console.error('Error fetching user classrooms:', error);
+      } finally {
+        setHostCheckDone(true);
       }
     };
 
@@ -333,7 +352,7 @@ const LiveEvents: React.FC = () => {
     return matched;
   }, [liveEvents, playerSearch, currentUser]);
 
-  if (loading) {
+  if (loading || !hostCheckDone) {
     return (
       <div style={{ padding: '2rem', textAlign: 'center' }}>
         <div>Loading Live Events...</div>
@@ -341,7 +360,7 @@ const LiveEvents: React.FC = () => {
     );
   }
 
-  if (userClassrooms.length === 0) {
+  if (userClassrooms.length === 0 && !canLaunchModes) {
     return (
       <div style={{ padding: '2rem', maxWidth: '800px', margin: '0 auto', textAlign: 'center' }}>
         <div style={{
@@ -385,6 +404,79 @@ const LiveEvents: React.FC = () => {
           Join active classroom battles and compete with your classmates!
         </p>
       </div>
+
+      {canLaunchModes && (
+        <div
+          className="mst-light-surface"
+          style={{
+            marginBottom: '1.5rem',
+            background: 'linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%)',
+            border: '2px solid #818cf8',
+            borderRadius: '1rem',
+            padding: '1.25rem 1.5rem',
+            color: '#0f172a',
+            boxShadow: '0 4px 14px rgba(79, 70, 229, 0.12)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '1rem',
+            }}
+          >
+            <div style={{ flex: '1 1 240px', minWidth: 0 }}>
+              <h2 style={{ margin: '0 0 0.35rem', fontSize: '1.25rem', fontWeight: 800, color: '#312e81' }}>
+                Launch Live Event Modes
+              </h2>
+              <p style={{ margin: 0, fontSize: '0.9rem', color: '#334155', lineHeight: 1.45 }}>
+                Create a room and pick <strong>Class Flow</strong>, <strong>Quiz</strong>,{' '}
+                <strong>Battle Royale</strong>, <strong>Exam</strong>, <strong>Reflection</strong>, or{' '}
+                <strong>Goal setting</strong>. Inside an active room you can also open Modes from the host toolbar.
+              </p>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.65rem' }}>
+              <button
+                type="button"
+                onClick={() => navigate('/in-session/create')}
+                style={{
+                  background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.65rem',
+                  padding: '0.85rem 1.35rem',
+                  fontSize: '0.95rem',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  boxShadow: '0 2px 8px rgba(79, 70, 229, 0.35)',
+                }}
+              >
+                📋 Create with Modes
+              </button>
+              {userActiveEvent && (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/live-events/${userActiveEvent.id}`)}
+                  style={{
+                    background: 'white',
+                    color: '#4338ca',
+                    border: '2px solid #818cf8',
+                    borderRadius: '0.65rem',
+                    padding: '0.85rem 1.15rem',
+                    fontSize: '0.9rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Open active room → Modes
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Search: filter by player name, user id, or class name */}
       <div

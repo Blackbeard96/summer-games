@@ -31,6 +31,7 @@ interface Student {
   photoURL?: string;
   level?: number;
   xp?: number;
+  classId?: string;
 }
 
 
@@ -99,37 +100,35 @@ const ScorekeeperInterface: React.FC = () => {
           
           // Handle multi-class scorekeeper assignments
           if (finalRole === 'scorekeeper') {
-            if (classIds.length > 0) {
-              // Multi-class scorekeeper - use first class for now (could be enhanced to show class selector)
-              setAssignedClassId(classIds[0]);
-              try {
-                const classDoc = await getDoc(doc(db, 'classrooms', classIds[0]));
-                if (classDoc.exists()) {
-                  const classData = classDoc.data();
-                  const className = classData.name || `Class ${classIds[0]}`;
-                  setClassName(`${className} (${classIds.length} classes assigned)`);
-                } else {
-                  setClassName(`Class ${classIds[0]} (${classIds.length} classes assigned)`);
+            const scorekeeperClassIds = Array.from(
+              new Set(
+                [...(Array.isArray(classIds) ? classIds : []), ...(classId ? [classId] : [])].filter(
+                  (id): id is string => typeof id === 'string' && id.length > 0
+                )
+              )
+            );
+
+            if (scorekeeperClassIds.length > 0) {
+              const classOptions: Array<{ id: string; name: string }> = [];
+              for (const cid of scorekeeperClassIds) {
+                try {
+                  const classDoc = await getDoc(doc(db, 'classrooms', cid));
+                  if (classDoc.exists()) {
+                    const classData = classDoc.data();
+                    classOptions.push({
+                      id: cid,
+                      name: classData.name || `Class ${cid}`,
+                    });
+                  } else {
+                    classOptions.push({ id: cid, name: `Class ${cid}` });
+                  }
+                } catch {
+                  classOptions.push({ id: cid, name: `Class ${cid}` });
                 }
-              } catch (classError) {
-                logger.roles.warn('ScorekeeperInterface: Error loading class name:', classError);
-                setClassName(`Class ${classIds[0]} (${classIds.length} classes assigned)`);
               }
-            } else if (classId) {
-              // Legacy single class assignment
-              setAssignedClassId(classId);
-              try {
-                const classDoc = await getDoc(doc(db, 'classrooms', classId));
-                if (classDoc.exists()) {
-                  const classData = classDoc.data();
-                  setClassName(classData.name || `Class ${classId}`);
-                } else {
-                  setClassName(`Class ${classId}`);
-                }
-              } catch (classError) {
-                logger.roles.warn('ScorekeeperInterface: Error loading class name:', classError);
-                setClassName(`Class ${classId}`);
-              }
+              setAvailableClassrooms(classOptions);
+              setAssignedClassId(scorekeeperClassIds[0]);
+              setClassName(classOptions[0]?.name || `Class ${scorekeeperClassIds[0]}`);
             }
           } else if (finalRole === 'admin') {
             // For admins, load all classrooms
@@ -254,9 +253,12 @@ const ScorekeeperInterface: React.FC = () => {
   // Load students for the assigned class
   useEffect(() => {
     const loadStudents = async () => {
-      if ((userRole !== 'scorekeeper' && userRole !== 'admin') || 
-          (userRole === 'scorekeeper' && !assignedClassId)) {
+      if (
+        (userRole !== 'scorekeeper' && userRole !== 'admin') ||
+        !assignedClassId
+      ) {
         setStudents([]);
+        setFilteredStudents([]);
         return;
       }
       
@@ -311,10 +313,12 @@ const ScorekeeperInterface: React.FC = () => {
           allStudents.push(mergedStudent);
         });
 
-        // Get classroom to filter students (skip for admin access to all classes)
+        // Filter to the selected classroom roster only (never fail-open to every student).
         let finalStudents: Student[] = [];
-        if (assignedClassId === 'admin-all-classes') {
-          // Admin access to all students
+        if (!assignedClassId) {
+          logger.roster.warn('ScorekeeperInterface: No assignedClassId — showing empty list');
+          finalStudents = [];
+        } else if (assignedClassId === 'admin-all-classes') {
           logger.roster.info('ScorekeeperInterface: Admin access - showing all students:', {
             totalStudents: allStudents.length
           });
@@ -322,32 +326,43 @@ const ScorekeeperInterface: React.FC = () => {
         } else {
           try {
             const classDoc = await getDoc(doc(db, 'classrooms', assignedClassId));
-            if (classDoc.exists()) {
-              const classData = classDoc.data();
-              const classStudentIds = classData.students || [];
-              
-              // Filter students to only those in the assigned class
-              const classStudents = allStudents.filter(student => 
-                classStudentIds.includes(student.id)
+            if (!classDoc.exists()) {
+              logger.roster.warn(
+                'ScorekeeperInterface: Classroom not found — showing empty list (not all students)',
+                { classId: assignedClassId }
               );
-              
+              finalStudents = [];
+            } else {
+              const classData = classDoc.data();
+              const rawRoster = classData.students;
+              const classStudentIds = Array.isArray(rawRoster)
+                ? rawRoster.filter((id): id is string => typeof id === 'string' && id.length > 0)
+                : [];
+
+              // Prefer classroom.students roster; also include students whose classId matches
+              // (recovery when roster is stale) — still scoped to this class only.
+              const rosterSet = new Set(classStudentIds);
+              const classStudents = allStudents.filter(
+                (student) =>
+                  rosterSet.has(student.id) ||
+                  (typeof student.classId === 'string' && student.classId === assignedClassId)
+              );
+
               logger.roster.info('ScorekeeperInterface: Loaded students:', {
                 totalStudents: allStudents.length,
                 classStudents: classStudents.length,
                 classId: assignedClassId,
-                classStudentIds: classStudentIds
+                rosterCount: classStudentIds.length,
               });
-              
+
               finalStudents = classStudents;
-            } else {
-              // If no classroom found, show all students for now
-              logger.roster.warn('ScorekeeperInterface: No classroom found, showing all students');
-              finalStudents = allStudents;
             }
           } catch (classError) {
-            // If classroom access fails, show all students as fallback
-            logger.roster.warn('ScorekeeperInterface: Classroom access failed, showing all students:', classError);
-            finalStudents = allStudents;
+            logger.roster.warn(
+              'ScorekeeperInterface: Classroom access failed — showing empty list (not all students):',
+              classError
+            );
+            finalStudents = [];
           }
         }
         
@@ -787,7 +802,7 @@ const ScorekeeperInterface: React.FC = () => {
         }}>
           ⚡ Class Power Points Overview
         </h1>
-        {/* Class Dropdown for Admins - Always show for admins */}
+        {/* Class dropdown — admins see all classrooms; multi-class scorekeepers see their assigned classes */}
         {(userRole === 'admin' || isAdminByEmail) ? (
           <div style={{ 
             display: 'flex', 
@@ -832,7 +847,49 @@ const ScorekeeperInterface: React.FC = () => {
               fontSize: '1rem', 
               color: 'var(--mst-text-secondary)' 
             }}>
-              - Manage Power Points for all students
+              - Manage Power Points for this class only
+            </span>
+          </div>
+        ) : availableClassrooms.length > 1 ? (
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '0.75rem',
+            flexWrap: 'wrap',
+            marginBottom: '0.5rem'
+          }}>
+            <select
+              value={assignedClassId}
+              onChange={(e) => {
+                const selectedClassId = e.target.value;
+                setAssignedClassId(selectedClassId);
+                const selectedClass = availableClassrooms.find(c => c.id === selectedClassId);
+                setClassName(selectedClass ? selectedClass.name : selectedClassId);
+                setPendingChanges({});
+                setOriginalPendingChanges({});
+                setPPInputValues({});
+              }}
+              style={{
+                padding: '0.5rem 1rem',
+                fontSize: '1rem',
+                border: '2px solid #3b82f6',
+                borderRadius: '0.375rem',
+                backgroundColor: 'white',
+                color: '#1f2937',
+                cursor: 'pointer',
+                minWidth: '250px',
+                fontWeight: '500',
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
+              }}
+            >
+              {availableClassrooms.map((classroom) => (
+                <option key={classroom.id} value={classroom.id}>
+                  {classroom.name}
+                </option>
+              ))}
+            </select>
+            <span style={{ fontSize: '1rem', color: 'var(--mst-text-secondary)' }}>
+              - Students from the selected class only
             </span>
           </div>
         ) : (
@@ -842,7 +899,7 @@ const ScorekeeperInterface: React.FC = () => {
             margin: 0,
             marginBottom: '0.5rem'
           }}>
-            {className} - Manage Power Points for all students
+            {className} - Manage Power Points for this class only
           </p>
         )}
       </div>
