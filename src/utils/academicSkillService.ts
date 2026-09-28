@@ -19,7 +19,21 @@ export async function listAcademicSkills(options?: {
   category?: string;
 }): Promise<AcademicSkill[]> {
   const snapshot = await getDocs(collection(db, COLLECTION));
-  let skills = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as AcademicSkill));
+  // The collection has held non-skill docs (e.g. per-user progress keyed by uid); only named docs are skills.
+  let skills = snapshot.docs
+    .filter((d) => {
+      const name = d.data().name;
+      return typeof name === 'string' && name.trim().length > 0;
+    })
+    .map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ...data,
+        category: typeof data.category === 'string' ? data.category : '',
+        description: typeof data.description === 'string' ? data.description : '',
+      } as AcademicSkill;
+    });
   if (options?.activeOnly) {
     skills = skills.filter((s) => s.active !== false);
   }

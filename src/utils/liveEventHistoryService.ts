@@ -13,7 +13,9 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  Timestamp,
   updateDoc,
+  where,
   writeBatch,
   type DocumentData,
 } from 'firebase/firestore';
@@ -78,16 +80,28 @@ function toMs(value: unknown): number | null {
   return null;
 }
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  if (!v || typeof v !== 'object') return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
+
+function stripUndefinedValue(v: unknown): unknown {
+  if (Array.isArray(v)) {
+    return v.filter((item) => item !== undefined).map(stripUndefinedValue);
+  }
+  // Class instances (Timestamp, FieldValue sentinels like serverTimestamp(), Date) must pass through untouched.
+  if (isPlainObject(v)) return stripUndefined(v);
+  return v;
+}
+
 function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
     if (v === undefined) continue;
-    if (v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date) && typeof (v as { toMillis?: unknown }).toMillis !== 'function') {
-      const nested = stripUndefined(v as Record<string, unknown>);
-      if (Object.keys(nested).length > 0) out[k] = nested;
-    } else {
-      out[k] = v;
-    }
+    const cleaned = stripUndefinedValue(v);
+    if (isPlainObject(v) && Object.keys(cleaned as Record<string, unknown>).length === 0) continue;
+    out[k] = cleaned;
   }
   return out as T;
 }
@@ -693,12 +707,13 @@ export async function archiveLiveEventSession(
 
     const existing = await getDoc(sessionRef(sessionId));
     const alreadyMastery = existing.exists() && !!(existing.data() as LiveEventSessionRecord).masteryAppliedAt;
+    const existingCreatedAt = existing.exists() ? existing.data()?.createdAt : null;
 
     await setDoc(
       sessionRef(sessionId),
       stripUndefined({
         ...draft,
-        createdAt: existing.exists() ? existing.data()?.createdAt || serverTimestamp() : serverTimestamp(),
+        createdAt: toMs(existingCreatedAt) != null ? existingCreatedAt : serverTimestamp(),
       } as unknown as DocumentData),
       { merge: true }
     );
@@ -1041,14 +1056,127 @@ export function formatEventDate(value: unknown): string {
   });
 }
 
-/** Backfill history from an ended room that already has sessionSummary. */
+/**
+ * Rebuild a SessionSummary from an ended room's `stats/*` docs when finalize never saved one on the room.
+ */
+async function rebuildSummaryFromRoom(
+  sessionId: string,
+  room: Record<string, unknown>
+): Promise<SessionSummary | null> {
+  const statsSnap = await getDocs(collection(db, 'inSessionRooms', sessionId, 'stats'));
+  const stats: Record<string, SessionStats> = {};
+  statsSnap.docs.forEach((d) => {
+    stats[d.id] = { ...(d.data() as SessionStats), playerId: d.id };
+  });
+  if (Object.keys(stats).length === 0) return null;
+
+  const quizSession = await loadQuizSession(sessionId);
+  let liveEventQuizRankByPlayer: Record<string, number> | undefined;
+  const leaderboard = quizSession?.leaderboard || {};
+  if (Object.values(leaderboard).some((v) => Number(v) > 0)) {
+    liveEventQuizRankByPlayer = {};
+    Object.entries(leaderboard)
+      .sort(([, a], [, b]) => Number(b) - Number(a))
+      .forEach(([uid], idx) => {
+        liveEventQuizRankByPlayer![uid] = idx + 1;
+      });
+  }
+
+  let mvpPlayerId: string | undefined;
+  let best = -1;
+  for (const [uid, s] of Object.entries(stats)) {
+    const score = (s.eliminations || 0) * 1000 + (s.netPPGained || 0);
+    if (score > best) {
+      best = score;
+      mvpPlayerId = uid;
+    }
+  }
+
+  const startedAt = room.startedAt || room.createdAt;
+  const endedAt = room.endedAt || room.updatedAt;
+  const startMs = toMs(startedAt);
+  const endMs = toMs(endedAt);
+  const quizPp = room.lastQuizPpByPlayer as Record<string, number> | undefined;
+
+  return {
+    sessionId,
+    classId: String(room.classId ?? ''),
+    className: String(room.className ?? ''),
+    startedAt,
+    endedAt,
+    duration: startMs != null && endMs != null ? Math.max(0, Math.round((endMs - startMs) / 1000)) : 0,
+    totalPlayers: Object.keys(stats).length,
+    stats,
+    mvpPlayerId,
+    ...(quizPp && Object.keys(quizPp).length > 0 ? { quizPpByPlayer: quizPp } : {}),
+    ...(liveEventQuizRankByPlayer ? { liveEventQuizRankByPlayer } : {}),
+  };
+}
+
+/** Backfill history from an ended room (uses sessionSummary when present, otherwise rebuilds from stats). */
 export async function backfillLiveEventHistoryFromRoom(
   sessionId: string
 ): Promise<LiveEventSessionRecord | null> {
   const roomSnap = await getDoc(doc(db, 'inSessionRooms', sessionId));
   if (!roomSnap.exists()) return null;
   const room = roomSnap.data() as Record<string, unknown>;
-  const summary = room.sessionSummary as SessionSummary | undefined;
+  const summary =
+    (room.sessionSummary as SessionSummary | undefined) || (await rebuildSummaryFromRoom(sessionId, room));
   if (!summary) return null;
   return archiveLiveEventSession(sessionId, summary, room);
+}
+
+/**
+ * Archive every ended room (optionally ended after `sinceMs`) that has no completed history record.
+ */
+export async function backfillMissingLiveEventHistory(options: {
+  sinceMs?: number;
+  onProgress?: (done: number, total: number) => void;
+} = {}): Promise<{ checked: number; imported: number; skipped: number; failed: number }> {
+  const roomsQuery =
+    options.sinceMs != null
+      ? query(
+          collection(db, 'inSessionRooms'),
+          where('endedAt', '>=', Timestamp.fromMillis(options.sinceMs)),
+          orderBy('endedAt', 'desc')
+        )
+      : query(collection(db, 'inSessionRooms'), where('status', '==', 'ended'));
+  const [roomsSnap, historySnap] = await Promise.all([
+    getDocs(roomsQuery),
+    getDocs(collection(db, COLLECTION)),
+  ]);
+  const completed = new Set(
+    historySnap.docs
+      .filter((d) => {
+        const data = d.data();
+        return data.status === 'completed' || data.status === 'archived' || data.archived === true;
+      })
+      .map((d) => d.id)
+  );
+  const missing = roomsSnap.docs.filter((d) => d.data().status === 'ended' && !completed.has(d.id));
+
+  let imported = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (let i = 0; i < missing.length; i++) {
+    const roomDoc = missing[i];
+    try {
+      const room = roomDoc.data() as Record<string, unknown>;
+      const summary =
+        (room.sessionSummary as SessionSummary | undefined) ||
+        (await rebuildSummaryFromRoom(roomDoc.id, room));
+      if (!summary) {
+        skipped += 1;
+      } else if (await archiveLiveEventSession(roomDoc.id, summary, room)) {
+        imported += 1;
+      } else {
+        failed += 1;
+      }
+    } catch (e) {
+      failed += 1;
+      console.warn('[liveEventHistory] backfill failed for', roomDoc.id, e);
+    }
+    options.onProgress?.(i + 1, missing.length);
+  }
+  return { checked: roomsSnap.size, imported, skipped, failed };
 }

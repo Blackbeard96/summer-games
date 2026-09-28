@@ -20,12 +20,10 @@ service cloud.firestore {
         );
     }
 
-    // Staff who can manage any live session (matches inSessionRooms admin checks)
+    // Designated admin accounts only. Never widen this to an email domain: students share school domains.
     function isLiveEventStaff() {
       return request.auth != null && (
-        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$')
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']
       );
     }
 
@@ -84,6 +82,15 @@ service cloud.firestore {
         classId.size() > 0 &&
         exists(/databases/$(database)/documents/classrooms/$(classId)) &&
         request.auth.uid in get(/databases/$(database)/documents/classrooms/$(classId)).data.students;
+    }
+
+    function enrolledInAnyListedClass(classIds) {
+      return classIds is list && (
+        (classIds.size() > 0 && enrolledInClassroom(classIds[0])) ||
+        (classIds.size() > 1 && enrolledInClassroom(classIds[1])) ||
+        (classIds.size() > 2 && enrolledInClassroom(classIds[2])) ||
+        (classIds.size() > 3 && enrolledInClassroom(classIds[3]))
+      );
     }
 
     /**
@@ -164,9 +171,25 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if request.auth != null && 
         (request.auth.uid == userId || isAdmin());
-      // Allow write but note that PP updates should be done via transactions/Cloud Functions
-      allow write: if request.auth != null && 
-        (request.auth.uid == userId || isAdmin() || canSquadMateUpdateOtherUserPpOnly(userId));
+      // Allow write but note that PP updates should be done via transactions/Cloud Functions.
+      // Only designated admins may set role/roles (client admin checks read users.role).
+      allow create: if request.auth != null && (
+        isAdmin() || isLiveEventStaff() ||
+        (
+          request.auth.uid == userId &&
+          !(request.resource.data.get('role', 'student') in ['admin', 'scorekeeper']) &&
+          !request.resource.data.get('roles', []).hasAny(['admin', 'scorekeeper'])
+        )
+      );
+      allow update: if request.auth != null && (
+        isAdmin() || isLiveEventStaff() ||
+        (
+          request.auth.uid == userId &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'roles'])
+        ) ||
+        canSquadMateUpdateOtherUserPpOnly(userId)
+      );
+      allow delete: if request.auth != null && (request.auth.uid == userId || isAdmin());
       
       // Protect rewardClaims subcollection - prevent deletion (idempotency protection).
       // Admins write claims for test-account impersonation (auth.uid is admin, userId is the test player).
@@ -281,17 +304,13 @@ service cloud.firestore {
       allow create: if request.auth != null && (
         isAdmin() ||
         isLiveEventStaff() ||
-        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$')
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']
       );
       allow update, delete: if request.auth != null && (
         request.auth.uid == userId ||
         isAdmin() ||
         isLiveEventStaff() ||
-        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$')
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']
       );
     }
     
@@ -357,50 +376,38 @@ service cloud.firestore {
     match /challengeSubmissions/{submissionId} {
       allow read, write: if request.auth != null && 
         (resource.data.userId == request.auth.uid || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net']);
       
       // Allow creation of new submissions
       allow create: if request.auth != null && 
         (request.auth.uid != null ||
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net']);
     }
     
     // Chapter classroom mappings - allow admins to manage
     match /chapterClassroomMap/{mappingId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net']);
     }
     
     // Notifications - allow users to read their own notifications
     match /notifications/{notificationId} {
       allow read, write: if request.auth != null && 
         (resource.data.userId == request.auth.uid || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net']);
       
       // Allow creation of new notifications
       allow create: if request.auth != null && 
         (request.auth.uid != null ||
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net']);
     }
     
     // Student notifications subcollection - allow users to read their own notifications, anyone to create
     match /students/{userId}/notifications/{notificationId} {
       allow read, write: if request.auth != null && 
         (request.auth.uid == userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
       
       // Allow any authenticated user to create notifications (for battle notifications, etc.)
       allow create: if request.auth != null;
@@ -410,25 +417,17 @@ service cloud.firestore {
     match /userRoles/{userId} {
       allow read: if request.auth != null && 
         (request.auth.uid == userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net']);
       allow write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net']);
     }
     
     // Classrooms collection - allow admins to manage classrooms
     match /classrooms/{classroomId} {
       allow read: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
       allow write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net']);
     }
     
     // Classrooms collection - allow scorekeepers to read classrooms
@@ -466,9 +465,7 @@ service cloud.firestore {
     match /badges/{badgeId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net']);
     }
     
     // PP Change Requests collection - allow scorekeepers to create, admins to manage
@@ -479,9 +476,7 @@ service cloud.firestore {
          (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles != null && 
           get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles.hasAny(['scorekeeper'])));
       allow read, write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // PP Change Sessions collection - allow scorekeepers to create, admins to manage
@@ -492,9 +487,7 @@ service cloud.firestore {
          (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles != null && 
           get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles.hasAny(['scorekeeper'])));
       allow read, write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // Assessment Goals Collections
@@ -504,17 +497,13 @@ service cloud.firestore {
       allow read: if request.auth != null && (
         // Admin access
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$') ||
         // Student access - check if student is in the class
         (exists(/databases/$(database)/documents/classrooms/$(resource.data.classId)) &&
          request.auth.uid in get(/databases/$(database)/documents/classrooms/$(resource.data.classId)).data.students)
       );
       // Admins manage assessments (create / full update / delete)
       allow write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net']);
       // Enrolled students may bump goal counters only (habit submissions + set goal call increment numGoalsSet).
       // Without this, mission reflections and goal setup fail after writing habitSubmissions / assessmentGoals.
       allow update: if request.auth != null &&
@@ -528,8 +517,6 @@ service cloud.firestore {
     match /assessmentGoals/{goalId} {
       allow get: if request.auth != null && (
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$') ||
         request.auth.uid == resource.data.studentId
       );
       allow list: if isAssessmentDashboardStaff();
@@ -537,8 +524,6 @@ service cloud.firestore {
       // Create: admins/staff OR enrolled student when assessment is not locked
       allow create: if request.auth != null && (
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$') ||
         (request.auth.uid == request.resource.data.studentId &&
          exists(/databases/$(database)/documents/assessments/$(request.resource.data.assessmentId)) &&
          get(/databases/$(database)/documents/assessments/$(request.resource.data.assessmentId)).data.isLocked == false &&
@@ -548,8 +533,6 @@ service cloud.firestore {
       // Update: admins OR student (unlocked goals) OR student evidence-only when locked (Live Event → Assessment Goals)
       allow update: if request.auth != null && (
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$') ||
         (request.auth.uid == request.resource.data.studentId &&
          exists(/databases/$(database)/documents/assessments/$(request.resource.data.assessmentId)) &&
          get(/databases/$(database)/documents/assessments/$(request.resource.data.assessmentId)).data.isLocked == false &&
@@ -568,17 +551,13 @@ service cloud.firestore {
       );
       // Only admins can delete
       allow delete: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net']);
     }
     
     // Assessment Results collection - students can read their own results, admins can manage all
     match /assessmentResults/{resultId} {
       allow get: if request.auth != null && (
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$') ||
         request.auth.uid == resource.data.studentId
       );
       allow list: if isAssessmentDashboardStaff();
@@ -586,8 +565,6 @@ service cloud.firestore {
       // Only admins can create/update results (align cohort with assessment dashboard list + live-event staff).
       allow write: if request.auth != null && 
         (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$') ||
          isAssessmentDashboardStaff());
     }
 
@@ -634,8 +611,6 @@ service cloud.firestore {
     match /ppLedger/{entryId} {
       allow read: if request.auth != null && (
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$') ||
         request.auth.uid == resource.data.studentId ||
         isAppAdminUser()
       );
@@ -658,27 +633,21 @@ service cloud.firestore {
     match /battleMoves/{userId} {
       allow read, write: if request.auth != null && 
         (request.auth.uid == userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // Legacy moves/{userId} doc (same shape as battleMoves; used by older clients + power level recalc)
     match /moves/{userId} {
       allow read, write: if request.auth != null && 
         (request.auth.uid == userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // Battle Action Cards collection - allow users to read/write their own cards
     match /battleActionCards/{userId} {
       allow read, write: if request.auth != null && 
         (request.auth.uid == userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
 
     // Legacy Season 0 battle pass (claim tracking + premium flag). Doc ids: "{uid}_season0", "{uid}_season1", etc.
@@ -699,27 +668,21 @@ service cloud.firestore {
     match /manifestMilestones/{manifestType} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // Elemental Milestones collection - allow authenticated users to read
     match /elementalMilestones/{elementalType} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // Admin Notifications collection - allow authenticated users to create, admins to read/write
     match /adminNotifications/{notificationId} {
       allow create: if request.auth != null;
       allow read, write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // Offline Moves collection - allow authenticated users to create, users to read/write their own moves
@@ -727,9 +690,7 @@ service cloud.firestore {
       allow create: if request.auth != null;
       allow read, write: if request.auth != null && 
         (request.auth.uid == resource.data.userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // Vault Siege Attacks collection - allow authenticated users to create, users to read their own attacks
@@ -738,13 +699,9 @@ service cloud.firestore {
       allow read: if request.auth != null && 
         (request.auth.uid == resource.data.attackerId || 
          request.auth.uid == resource.data.targetId ||
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
       allow write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // Used Items collection - allow authenticated users to create, users to read their own items, admins to manage all
@@ -752,13 +709,9 @@ service cloud.firestore {
       allow create: if request.auth != null;
       allow read: if request.auth != null && 
         (request.auth.uid == resource.data.userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
       allow write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // Practice Battles collection - allow authenticated users to create, users to read their own battles, admins to manage all
@@ -766,13 +719,9 @@ service cloud.firestore {
       allow create: if request.auth != null;
       allow read: if request.auth != null && 
         (request.auth.uid == resource.data.userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
       allow write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
 
     // Practice multiplayer waiting rooms (create/join/start vs CPU)
@@ -822,9 +771,7 @@ service cloud.firestore {
     match /storyProgress/{userId} {
       allow read, write: if request.auth != null && 
         (request.auth.uid == userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // In Session Rooms collection - classroom battle sessions
@@ -833,8 +780,6 @@ service cloud.firestore {
       allow read: if request.auth != null && (
         // Admin/Yondaime can read all sessions
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$') ||
         isInSessionRoomHost(sessionId) ||
         isSessionPresenceParticipant(sessionId) ||
         // Student can read if they're invited via legacy classId, classIds, or inviteAllClasses
@@ -843,9 +788,7 @@ service cloud.firestore {
       
       // Allow create/update/delete only for admins/Yondaime or host
       allow create: if request.auth != null && (
-        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$')
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']
       );
       
       // Host/admin OR students in the session class (live event battle state, moves, revive potion, etc.)
@@ -854,16 +797,12 @@ service cloud.firestore {
         resource.data.hostUid == request.auth.uid ||
         resource.data.teacherId == request.auth.uid ||
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$') ||
         canAccessInSessionRoomByData(resource.data) ||
         isSessionPresenceParticipant(sessionId)
       );
       
       allow delete: if request.auth != null && (
-        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$')
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']
       );
       
       // Players subcollection - students can write their own presence doc
@@ -883,26 +822,31 @@ service cloud.firestore {
           // Already joined (presence doc)
           isSessionPresenceParticipant(sessionId) ||
           // Admin/Yondaime can create actions
-          request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-          request.auth.token.email.matches('.*@mstgames\\.net$') ||
-          request.auth.token.email.matches('.*@compscihigh\\.org$')
+          request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']
         );
         allow update: if request.auth != null && (
           // Host can resolve actions
           get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.hostUid == request.auth.uid ||
           // Admin/Yondaime can resolve actions
-          request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-          request.auth.token.email.matches('.*@mstgames\\.net$') ||
-          request.auth.token.email.matches('.*@compscihigh\\.org$')
+          request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']
         );
       }
 
       // Live quiz / battle royale state: quizSession/current (+ responses)
       match /quizSession/{quizDocId} {
         allow read: if canReadInSessionRoomSession(sessionId);
-        allow create, update, delete: if request.auth != null && (
+        allow create, delete: if request.auth != null && (
           isLiveEventStaff() ||
           get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.hostUid == request.auth.uid
+        );
+        // Players update Battle Royale streak/energy state when answering or using quick actions.
+        allow update: if request.auth != null && (
+          isLiveEventStaff() ||
+          get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.hostUid == request.auth.uid ||
+          (
+            canReadInSessionRoomSession(sessionId) &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['battleRoyaleState', 'updatedAt'])
+          )
         );
         match /responses/{responseUid} {
           allow read: if canReadInSessionRoomSession(sessionId);
@@ -921,10 +865,39 @@ service cloud.firestore {
       // Per-player session stats (skills used, PP, eliminations, etc.)
       match /stats/{playerId} {
         allow read: if canReadInSessionRoomSession(sessionId);
-        allow create, update: if request.auth != null && (
+        allow create: if request.auth != null && (
           isLiveEventStaff() ||
           isInSessionRoomHost(sessionId) ||
-          (request.auth.uid == playerId && canReadInSessionRoomSession(sessionId))
+          (request.auth.uid == playerId && canReadInSessionRoomSession(sessionId)) ||
+          // Attackers create a blank row for an opponent before recording damage / elimination.
+          (
+            canReadInSessionRoomSession(sessionId) &&
+            request.resource.data.keys().hasOnly([
+              'playerId', 'playerName', 'startingPP', 'endingPP', 'netPPGained', 'ppSpent', 'ppEarned',
+              'vaultPpGrantedMidSession', 'participationEarned', 'movesEarned', 'eliminations',
+              'isEliminated', 'eliminatedBy', 'damageDealt', 'damageTaken', 'healingGiven',
+              'healingReceived', 'skillsUsed', 'totalSkillsUsed', 'sessionId', 'sessionStartTime',
+              'sessionEndTime', 'sessionDuration', 'updatedAt'
+            ]) &&
+            request.resource.data.get('netPPGained', 0) == 0 &&
+            request.resource.data.get('ppEarned', 0) == 0 &&
+            request.resource.data.get('vaultPpGrantedMidSession', 0) == 0 &&
+            request.resource.data.get('participationEarned', 0) == 0 &&
+            request.resource.data.get('movesEarned', 0) == 0 &&
+            request.resource.data.get('eliminations', 0) == 0
+          )
+        );
+        allow update: if request.auth != null && (
+          isLiveEventStaff() ||
+          isInSessionRoomHost(sessionId) ||
+          (request.auth.uid == playerId && canReadInSessionRoomSession(sessionId)) ||
+          // Opponents / teammates may only record damage taken, elimination, or revive on another player's row.
+          (
+            canReadInSessionRoomSession(sessionId) &&
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['damageTaken', 'isEliminated', 'eliminatedBy', 'updatedAt']) &&
+            request.resource.data.get('damageTaken', 0) >= resource.data.get('damageTaken', 0)
+          )
         );
         allow delete: if isLiveEventStaff();
       }
@@ -962,32 +935,24 @@ service cloud.firestore {
     match /challengeCompletions/{completionId} {
       allow read, write: if request.auth != null && 
         (resource.data.userId == request.auth.uid || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
       
       // Allow creation of new completions
       allow create: if request.auth != null && 
         (request.auth.uid != null ||
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // Recent completions collection - allow users to read/write their own completions
     match /recentCompletions/{completionId} {
       allow read, write: if request.auth != null && 
         (resource.data.userId == request.auth.uid || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
       
       // Allow creation of new completions
       allow create: if request.auth != null && 
         (request.auth.uid != null ||
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // Chapter classroom assignments collection - allow authenticated users to read/write
@@ -1081,23 +1046,17 @@ service cloud.firestore {
         request.resource.data.userId == request.auth.uid;
       allow read: if request.auth != null && 
         (resource.data.userId == request.auth.uid ||
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
       allow update, delete: if request.auth != null && 
         (resource.data.userId == request.auth.uid ||
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // Mindforge questions collection - allow admins to manage, all users to read
     match /mindforgeQuestions/{questionId} {
       allow read: if request.auth != null;
       allow create, update, delete: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
     }
     
     // Admin Settings — admins read/write all.
@@ -1190,9 +1149,7 @@ service cloud.firestore {
       allow create, update, delete: if request.auth != null && (
         isAdmin() ||
         isAppAdminUser() ||
-        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-        request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$')
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']
       );
     }
     
@@ -1230,16 +1187,19 @@ service cloud.firestore {
 
     // Training Grounds — published quiz sets + questions (live event quiz launch, Training Grounds page).
     // Was missing: fell through to deny-all and caused permission errors on getQuizSet / getQuestions.
+    // Unpublished sets stay readable to students enrolled in an assigned class (Live Event quizzes).
     match /trainingQuizSets/{quizSetId} {
       allow read: if request.auth != null && (
         resource.data.isPublished == true ||
-        isLiveEventStaff()
+        isLiveEventStaff() ||
+        enrolledInAnyListedClass(resource.data.get('classIds', []))
       );
       allow create, update, delete: if isLiveEventStaff();
       match /questions/{questionId} {
         allow read: if request.auth != null && (
           get(/databases/$(database)/documents/trainingQuizSets/$(quizSetId)).data.isPublished == true ||
-          isLiveEventStaff()
+          isLiveEventStaff() ||
+          enrolledInAnyListedClass(get(/databases/$(database)/documents/trainingQuizSets/$(quizSetId)).data.get('classIds', []))
         );
         allow create, update, delete: if isLiveEventStaff();
       }

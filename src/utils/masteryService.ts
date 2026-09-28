@@ -7,6 +7,7 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  Timestamp,
   where,
   writeBatch,
 } from 'firebase/firestore';
@@ -269,6 +270,252 @@ export function buildSkillInsights(
   }
 
   return insights.slice(0, 4);
+}
+
+type HistoryEvidenceSample = {
+  correct: boolean;
+  partialCredit: number;
+  weight: number;
+  difficulty?: 'easy' | 'medium' | 'hard';
+  timestampMs: number;
+};
+
+type QuestionTag = { skillIds: string[]; difficulty?: 'easy' | 'medium' | 'hard' };
+
+export interface SkillHistorySyncResult {
+  studentsScanned: number;
+  attemptsScanned: number;
+  evidenceAdded: number;
+  skillsUpdated: number;
+  errors: number;
+}
+
+function anyToMillis(value: unknown): number {
+  if (!value) return 0;
+  if (typeof value === 'number') return value;
+  if (value instanceof Date) return value.getTime();
+  const t = value as { toMillis?: () => number; seconds?: number };
+  if (typeof t.toMillis === 'function') return t.toMillis();
+  if (typeof t.seconds === 'number') return t.seconds * 1000;
+  const n = new Date(value as string).getTime();
+  return Number.isFinite(n) ? n : 0;
+}
+
+function masteryWithReplayedTrend(
+  userId: string,
+  skillId: string,
+  samples: HistoryEvidenceSample[],
+  previous: PlayerSkillMastery | null
+): PlayerSkillMastery {
+  const sorted = [...samples].sort((a, b) => a.timestampMs - b.timestampMs);
+  const checkpoints = Array.from(new Set(sorted.map((s) => s.timestampMs))).slice(-8);
+  const trend = checkpoints.map(
+    (cp) =>
+      computeMasteryFromEvidence(
+        userId,
+        skillId,
+        sorted.filter((s) => s.timestampMs <= cp),
+        null
+      ).masteryScore
+  );
+  const next = computeMasteryFromEvidence(userId, skillId, sorted, previous);
+  next.trend = trend;
+  return next;
+}
+
+async function syncUserSkillHistory(
+  userId: string,
+  loadQuestionTags: (quizSetId: string) => Promise<Map<string, QuestionTag>>,
+  result: SkillHistorySyncResult
+): Promise<void> {
+  const attemptsSnap = await getDocs(
+    query(collection(db, 'trainingAttempts'), where('userId', '==', userId))
+  );
+  result.studentsScanned += 1;
+  if (attemptsSnap.empty) return;
+
+  const attempts = attemptsSnap.docs
+    .map((d) => {
+      const data = d.data();
+      const isLive = data.mode === 'live';
+      return {
+        quizSetId: typeof data.quizSetId === 'string' ? data.quizSetId : '',
+        completedMs: anyToMillis(data.completedAt) || anyToMillis(data.startedAt),
+        mode: (isLive ? 'live-event' : 'training-grounds') as SkillEvidenceMode,
+        // Must match the attemptId used by the live-event and solo evidence writers so re-syncs never duplicate.
+        evidenceAttemptId:
+          isLive && data.liveEventSourceSessionId
+            ? `live_${data.liveEventSourceSessionId}_${userId}`
+            : d.id,
+        answers: (Array.isArray(data.answers) ? data.answers : []) as Array<
+          TrainingAnswer & { skillIds?: string[]; difficulty?: 'easy' | 'medium' | 'hard' }
+        >,
+      };
+    })
+    .filter((a) => a.quizSetId)
+    .sort((a, b) => a.completedMs - b.completedMs);
+  result.attemptsScanned += attempts.length;
+
+  const samplesBySkill = new Map<string, HistoryEvidenceSample[]>();
+  const pushSample = (skillId: string, sample: HistoryEvidenceSample) => {
+    if (!samplesBySkill.has(skillId)) samplesBySkill.set(skillId, []);
+    samplesBySkill.get(skillId)!.push(sample);
+  };
+
+  const evidenceSnap = await getDocs(query(evidenceCol(), where('userId', '==', userId)));
+  const existingKeys = new Set<string>();
+  evidenceSnap.docs.forEach((d) => {
+    const e = d.data();
+    if (!e.skillId) return;
+    existingKeys.add(`${e.attemptId}|${e.questionId}|${e.skillId}`);
+    pushSample(e.skillId, {
+      correct: !!e.correct,
+      partialCredit: typeof e.partialCredit === 'number' ? e.partialCredit : e.correct ? 1 : 0,
+      weight: typeof e.weight === 'number' ? e.weight : 1,
+      difficulty: e.difficulty || undefined,
+      timestampMs: e.createdAtMs || anyToMillis(e.timestamp) || Date.now(),
+    });
+  });
+
+  const questionAttemptCount = new Map<string, number>();
+  const touched = new Set<string>();
+  const newEvidence: Array<{ id: string; data: Record<string, unknown> }> = [];
+
+  for (const attempt of attempts) {
+    const tags = await loadQuestionTags(attempt.quizSetId);
+    const ms = attempt.completedMs || Date.now();
+    for (const answer of attempt.answers) {
+      const questionId = answer?.questionId;
+      if (!questionId) continue;
+      const attemptNumber = (questionAttemptCount.get(questionId) || 0) + 1;
+      questionAttemptCount.set(questionId, attemptNumber);
+
+      const bank = tags.get(questionId);
+      const skillIds =
+        bank && bank.skillIds.length > 0
+          ? bank.skillIds
+          : Array.isArray(answer.skillIds)
+            ? answer.skillIds.filter((s) => typeof s === 'string' && s)
+            : [];
+      if (skillIds.length === 0) continue;
+
+      const weight = getAttemptWeight(attemptNumber);
+      const partial =
+        typeof answer.partialCredit === 'number' ? answer.partialCredit : answer.isCorrect ? 1 : 0;
+      const difficulty = bank?.difficulty || answer.difficulty;
+
+      for (const skillId of skillIds) {
+        const key = `${attempt.evidenceAttemptId}|${questionId}|${skillId}`;
+        if (existingKeys.has(key)) continue;
+        existingKeys.add(key);
+        newEvidence.push({
+          id: `hist_${attempt.evidenceAttemptId}_${questionId}_${skillId}`,
+          data: {
+            userId,
+            skillId,
+            cfuId: attempt.quizSetId,
+            questionId,
+            attemptId: attempt.evidenceAttemptId,
+            correct: !!answer.isCorrect,
+            partialCredit: partial,
+            weight,
+            difficulty: difficulty || null,
+            mode: attempt.mode,
+            attemptNumber,
+            responseTimeMs: Number(answer.timeSpentMs) || 0,
+            timestamp: Timestamp.fromMillis(ms),
+            createdAtMs: ms,
+            source: 'history-sync',
+          },
+        });
+        pushSample(skillId, { correct: !!answer.isCorrect, partialCredit: partial, weight, difficulty, timestampMs: ms });
+        touched.add(skillId);
+      }
+    }
+  }
+
+  for (let i = 0; i < newEvidence.length; i += 400) {
+    const batch = writeBatch(db);
+    newEvidence.slice(i, i + 400).forEach(({ id, data }) => batch.set(doc(evidenceCol(), id), data));
+    await batch.commit();
+  }
+  result.evidenceAdded += newEvidence.length;
+
+  const existingMastery = await getPlayerSkillMastery(userId);
+  const masteryById = new Map(existingMastery.map((m) => [m.skillId, m]));
+  samplesBySkill.forEach((_, skillId) => {
+    if (!masteryById.has(skillId)) touched.add(skillId);
+  });
+  if (touched.size === 0) return;
+
+  const batch = writeBatch(db);
+  touched.forEach((skillId) => {
+    const samples = samplesBySkill.get(skillId) || [];
+    if (samples.length === 0) return;
+    const next = masteryWithReplayedTrend(userId, skillId, samples, masteryById.get(skillId) || null);
+    const clean = Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined));
+    batch.set(masteryDocRef(userId, skillId), { ...clean, updatedAt: serverTimestamp() }, { merge: true });
+  });
+  await batch.commit();
+  result.skillsUpdated += touched.size;
+}
+
+/**
+ * Backfill skill evidence + mastery from saved CFU attempts (solo and Live Event) using the
+ * questions' current skill tags. Idempotent: only evidence not already recorded is added.
+ */
+export async function syncSkillMasteryFromAttemptHistory(
+  userIds: string[],
+  onProgress?: (done: number, total: number) => void
+): Promise<SkillHistorySyncResult> {
+  const result: SkillHistorySyncResult = {
+    studentsScanned: 0,
+    attemptsScanned: 0,
+    evidenceAdded: 0,
+    skillsUpdated: 0,
+    errors: 0,
+  };
+  const questionCache = new Map<string, Promise<Map<string, QuestionTag>>>();
+  const loadQuestionTags = (quizSetId: string) => {
+    if (!questionCache.has(quizSetId)) {
+      questionCache.set(
+        quizSetId,
+        getDocs(collection(db, 'trainingQuizSets', quizSetId, 'questions'))
+          .then(
+            (snap) =>
+              new Map(
+                snap.docs.map((d) => {
+                  const data = d.data();
+                  return [
+                    d.id,
+                    {
+                      skillIds: Array.isArray(data.skillIds)
+                        ? data.skillIds.filter((s: unknown) => typeof s === 'string' && s)
+                        : [],
+                      difficulty: data.difficulty,
+                    },
+                  ] as [string, QuestionTag];
+                })
+              )
+          )
+          .catch(() => new Map<string, QuestionTag>())
+      );
+    }
+    return questionCache.get(quizSetId)!;
+  };
+
+  let done = 0;
+  for (const userId of userIds) {
+    try {
+      await syncUserSkillHistory(userId, loadQuestionTags, result);
+    } catch (e) {
+      result.errors += 1;
+      console.warn('[mastery] history sync failed for', userId, e);
+    }
+    done += 1;
+    onProgress?.(done, userIds.length);
+  }
+  return result;
 }
 
 export async function getClassSkillAnalytics(params: {

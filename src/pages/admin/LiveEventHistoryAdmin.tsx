@@ -15,6 +15,7 @@ import type {
 import {
   archiveLiveEventHistorySession,
   backfillLiveEventHistoryFromRoom,
+  backfillMissingLiveEventHistory,
   downloadTextFile,
   exportParticipantsCsv,
   exportQuestionsCsv,
@@ -183,6 +184,49 @@ const LiveEventHistoryAdmin: React.FC = () => {
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [backfillId, setBackfillId] = useState('');
   const [busy, setBusy] = useState(false);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [recentSyncDone, setRecentSyncDone] = useState(false);
+
+  const runImport = useCallback(async (sinceMs?: number) => {
+    const scope = sinceMs != null ? 'recent' : 'past';
+    setImportStatus(`Checking for ${scope} Live Events missing from history…`);
+    const res = await backfillMissingLiveEventHistory({
+      sinceMs,
+      onProgress: (done, total) => setImportStatus(`Importing ${scope} Live Events… ${done}/${total}`),
+    });
+    setImportStatus(
+      res.imported + res.failed + res.skipped === 0
+        ? null
+        : `Imported ${res.imported} Live Event${res.imported === 1 ? '' : 's'} into history` +
+            (res.skipped ? ` · ${res.skipped} had no player stats` : '') +
+            (res.failed ? ` · ${res.failed} failed (see console)` : '')
+    );
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        await runImport(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      } catch (e) {
+        setImportStatus(`Auto-import failed: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setRecentSyncDone(true);
+      }
+    })();
+  }, [runImport]);
+
+  const onImportAll = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await runImport();
+      await loadList();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Import failed');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -219,7 +263,7 @@ const LiveEventHistoryAdmin: React.FC = () => {
 
   useEffect(() => {
     void loadList();
-  }, [loadList]);
+  }, [loadList, recentSyncDone]);
 
   const sortedRows = useMemo(() => {
     const copy = [...rows];
@@ -301,7 +345,7 @@ const LiveEventHistoryAdmin: React.FC = () => {
     try {
       const rec = await backfillLiveEventHistoryFromRoom(id);
       if (!rec) {
-        setError('Room not found or missing sessionSummary. End the Live Event first.');
+        setError('Room not found, has no player stats, or could not be archived. End the Live Event first.');
       } else {
         setBackfillId('');
         await loadList();
@@ -775,8 +819,17 @@ const LiveEventHistoryAdmin: React.FC = () => {
         <button type="button" style={styles.btn} disabled={busy} onClick={() => void onBackfill()}>
           Import from room
         </button>
+        <button
+          type="button"
+          style={styles.btn}
+          disabled={busy || !recentSyncDone}
+          onClick={() => void onImportAll()}
+        >
+          Import all past Live Events
+        </button>
       </div>
 
+      {importStatus ? <p style={{ color: '#9aa8c7', fontSize: '0.85rem' }}>{importStatus}</p> : null}
       {error ? <p style={{ color: '#f5a5a5' }}>{error}</p> : null}
       {loading ? <p style={{ color: '#9aa8c7' }}>Loading history…</p> : null}
 

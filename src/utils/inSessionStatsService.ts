@@ -17,6 +17,7 @@ import {
 } from 'firebase/firestore';
 import { SessionStats, SessionSummary } from '../types/inSessionStats';
 import { debug, debugError } from './inSessionDebug';
+import { stripUndefinedDeep } from './firestoreSanitize';
 import { applyParticipationStreakAward, breakParticipationStreakMessage } from './participationStreak';
 import { evaluateFlowStateAfterSuccess, mergeFlowClearIntoRow } from './liveEventFlowState';
 import {
@@ -1475,12 +1476,16 @@ export async function finalizeSessionStats(
       /* ignore */
     }
 
-    // Store summary in session document
-    await updateDoc(sessionRef, {
-      sessionSummary: summary,
-      status: 'ended',
-      endedAt: sessionEndTime
-    });
+    // Store summary in session document. Optional summary fields are often undefined, which Firestore rejects.
+    try {
+      await updateDoc(sessionRef, {
+        sessionSummary: stripUndefinedDeep(summary),
+        status: 'ended',
+        endedAt: sessionEndTime
+      });
+    } catch (summaryErr) {
+      debugError('inSessionStats', 'Failed to save sessionSummary on room (continuing to archive)', summaryErr);
+    }
     debug('inSessionStats', 'final score saved', {
       sessionId,
       totalPlayers: summary.totalPlayers,

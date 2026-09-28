@@ -56,11 +56,8 @@ const SkillPicker: React.FC<SkillPickerProps> = ({
     const q = queryText.trim().toLowerCase();
     const pool = skills.filter((s) => !selectedIds.includes(s.id));
     if (!q) return pool;
-    return pool.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        (s.category || '').toLowerCase().includes(q) ||
-        (s.description || '').toLowerCase().includes(q)
+    return pool.filter((s) =>
+      [s.name, s.category, s.description].some((v) => String(v ?? '').toLowerCase().includes(q))
     );
   }, [skills, selectedIds, queryText]);
 

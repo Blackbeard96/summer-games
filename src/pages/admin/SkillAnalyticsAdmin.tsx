@@ -2,7 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { listAcademicSkills } from '../../utils/academicSkillService';
-import { getClassSkillAnalytics } from '../../utils/masteryService';
+import {
+  getClassSkillAnalytics,
+  syncSkillMasteryFromAttemptHistory,
+  SkillHistorySyncResult,
+} from '../../utils/masteryService';
 import { AcademicSkill } from '../../types/academicSkills';
 import MasteryBadge from '../../components/skills/MasteryBadge';
 import { getMasteryBand } from '../../utils/masteryCalculations';
@@ -17,6 +21,9 @@ const SkillAnalyticsAdmin: React.FC = () => {
   >([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncProgress, setSyncProgress] = useState<{ done: number; total: number } | null>(null);
+  const [syncResult, setSyncResult] = useState<SkillHistorySyncResult | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -51,19 +58,29 @@ const SkillAnalyticsAdmin: React.FC = () => {
     (async () => {
       setLoading(true);
       setError(null);
+      setSyncResult(null);
       try {
+        const sync = await syncSkillMasteryFromAttemptHistory(classroom.students, (done, total) => {
+          if (!cancelled) setSyncProgress({ done, total });
+        });
+        if (cancelled) return;
+        setSyncResult(sync);
+        setSyncProgress(null);
         const analytics = await getClassSkillAnalytics({ classStudentIds: classroom.students });
         if (!cancelled) setRows(analytics);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Analytics failed');
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setSyncProgress(null);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [classId, classrooms]);
+  }, [classId, classrooms, refreshKey]);
 
   const skillName = useMemo(() => {
     const map: Record<string, AcademicSkill> = {};
@@ -114,14 +131,35 @@ const SkillAnalyticsAdmin: React.FC = () => {
             </option>
           ))}
         </select>
+        <button
+          type="button"
+          onClick={() => setRefreshKey((k) => k + 1)}
+          disabled={loading || !classId}
+          style={{ ...selectStyle, cursor: loading ? 'wait' : 'pointer', opacity: loading ? 0.6 : 1 }}
+        >
+          ↻ Re-sync CFU history
+        </button>
       </div>
 
+      {syncResult && !loading && (
+        <div style={{ color: '#9ca3af', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+          Scanned {syncResult.attemptsScanned} CFU attempt{syncResult.attemptsScanned === 1 ? '' : 's'} from{' '}
+          {syncResult.studentsScanned} student{syncResult.studentsScanned === 1 ? '' : 's'}
+          {syncResult.evidenceAdded > 0 ? ` · added ${syncResult.evidenceAdded} skill answers from history` : ''}
+          {syncResult.errors > 0 ? ` · ${syncResult.errors} student(s) could not be synced` : ''}
+        </div>
+      )}
       {error && <div style={{ color: '#fca5a5', marginBottom: '0.75rem' }}>{error}</div>}
       {loading ? (
-        <div style={{ color: '#9ca3af' }}>Calculating class mastery…</div>
+        <div style={{ color: '#9ca3af' }}>
+          {syncProgress
+            ? `Syncing CFU history into skill mastery… ${syncProgress.done}/${syncProgress.total} students`
+            : 'Calculating class mastery…'}
+        </div>
       ) : filtered.length === 0 ? (
         <div style={{ color: '#9ca3af' }}>
-          No skill mastery data yet for this class. Tag CFU questions and have students complete them.
+          No skill mastery data yet for this class. Students haven't answered any skill-tagged CFU questions
+          (solo or in a Live Event).
         </div>
       ) : (
         <div style={{ overflowX: 'auto', borderRadius: '0.75rem', border: '1px solid rgba(212,168,79,0.35)' }}>

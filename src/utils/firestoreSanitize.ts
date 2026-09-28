@@ -15,6 +15,9 @@ export function stripUndefinedDeep(value: unknown): unknown {
       .map((item) => stripUndefinedDeep(item))
       .filter((item) => item !== undefined);
   }
+  // Timestamp, GeoPoint, DocumentReference, etc. must keep their class identity.
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value;
   const obj = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {

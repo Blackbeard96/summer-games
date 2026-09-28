@@ -41,8 +41,14 @@ export async function getLiveSessionSnapshotsForClassIds(
     )
   );
 
-  const snaps = await Promise.all(queryPromises);
-  const docs = snaps.flatMap((s) => s.docs) as QueryDocumentSnapshot<DocumentData>[];
+  // One query shape being denied by rules (e.g. classIds array-contains) must not hide rooms found by the others.
+  const settled = await Promise.allSettled(queryPromises);
+  const failures = settled.filter((s): s is PromiseRejectedResult => s.status === 'rejected');
+  if (failures.length === settled.length && failures.length > 0) throw failures[0].reason;
+  failures.forEach((f) => console.warn('[classroomQueries] live room query failed', f.reason));
+  const docs = settled.flatMap((s) =>
+    s.status === 'fulfilled' ? s.value.docs : []
+  ) as QueryDocumentSnapshot<DocumentData>[];
   const statusSet = new Set(statuses);
   const unique = new Map<string, QueryDocumentSnapshot<DocumentData>>();
   for (const docSnap of docs) {

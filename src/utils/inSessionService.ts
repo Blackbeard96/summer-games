@@ -92,15 +92,10 @@ export interface InSessionRoom {
  * Check if user is Yondaime (global host)
  */
 export function isGlobalHost(uid: string, email?: string, displayName?: string): boolean {
-  // Yondaime UID or email/displayName check
-  const yondaimeEmail = 'edm21179@gmail.com';
-  const yondaimeDisplayName = 'Yondaime';
-  
-  return (
-    email === yondaimeEmail ||
-    displayName === yondaimeDisplayName ||
-    displayName?.toLowerCase() === yondaimeDisplayName.toLowerCase()
-  );
+  // Email only: display names are user-editable, so they must never grant host powers.
+  void uid;
+  void displayName;
+  return email === 'edm21179@gmail.com';
 }
 
 /**
