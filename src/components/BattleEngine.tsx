@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { Move, MOVE_DAMAGE_VALUES } from '../types/battle';
+import { Move, MOVE_DAMAGE_VALUES, Vault } from '../types/battle';
 import { getMoveDamage, getMoveName, getMoveNameSync } from '../utils/moveOverrides';
 import { trackMoveUsage } from '../utils/manifestTracking';
 import {
@@ -149,6 +149,8 @@ interface Opponent {
   enemyType?: ElementType | null;
   /** Embedded CPU moves (Island Raid / missions); may be swapped on awaken. */
   moves?: unknown[];
+  /** Story Mode opponents tuned for their chapter: skip admin CPU health/shield overrides. */
+  fixedStats?: boolean;
   /** Admin-configurable second phase for CPU opponents */
   awakenedModeEnabled?: boolean;
   awakenAtHealthPercent?: number;
@@ -616,7 +618,16 @@ interface BattleEngineProps {
   onSpacesModeStateUpdate?: (state: SpacesModeState) => void; // Callback to update spaces state in Firestore
   /** Optional Story Mode / tutorial loadout restrictions (e.g. Truth Metal Manifest-only). */
   storyBattleRestrictions?: StoryBattleRestrictions | null;
+  /**
+   * Story Mode: fight with a full-health copy of the player's vault health/shields. Damage taken in
+   * the battle never reaches the real vault, so a depleted vault can't cause an instant defeat and a
+   * loss doesn't start the vault-health cooldown. PP changes still persist.
+   */
+  isolatePlayerVault?: boolean;
 }
+
+const STORY_SANDBOXED_VAULT_FIELDS = ['vaultHealth', 'shieldStrength', 'overshield', 'vaultHealthCooldown'] as const;
+type StorySandboxedVaultField = (typeof STORY_SANDBOXED_VAULT_FIELDS)[number];
 
 interface BattleState {
   phase: 'selection' | 'execution' | 'opponent_turn' | 'victory' | 'defeat';
@@ -682,6 +693,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   spacesModeState: propSpacesModeState,
   onSpacesModeStateUpdate,
   storyBattleRestrictions = null,
+  isolatePlayerVault = false,
 }) => {
   const { currentUser, userProfile } = useAuth();
   /** Prefer Firestore profile name over Auth — Auth can be polluted by test-account switches */
@@ -690,7 +702,53 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     currentUser?.displayName?.trim() ||
     currentUser?.email?.split('@')[0] ||
     'Player';
-  const { vault, moves, updateVault, refreshVaultData } = useBattle();
+  const {
+    vault: contextVault,
+    moves,
+    updateVault: updateContextVault,
+    refreshVaultData,
+  } = useBattle();
+
+  const [storyCombatStats, setStoryCombatStats] = useState<Partial<Pick<Vault, StorySandboxedVaultField>> | null>(null);
+  const contextVaultLoaded = !!contextVault;
+  useEffect(() => {
+    if (!isolatePlayerVault || storyCombatStats || !contextVault) return;
+    const maxHealth = Math.floor((contextVault.capacity || 1000) * 0.1);
+    setStoryCombatStats({
+      vaultHealth: maxHealth,
+      shieldStrength: Math.max(contextVault.shieldStrength || 0, contextVault.maxShieldStrength || 0),
+      overshield: contextVault.overshield || 0,
+      vaultHealthCooldown: undefined,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isolatePlayerVault, contextVaultLoaded]);
+
+  const vault = useMemo<Vault | null>(
+    () =>
+      isolatePlayerVault && contextVault && storyCombatStats
+        ? { ...contextVault, ...storyCombatStats }
+        : contextVault,
+    [isolatePlayerVault, contextVault, storyCombatStats]
+  );
+
+  const updateVault = useCallback(
+    async (updates: Partial<Vault>) => {
+      if (!isolatePlayerVault) return updateContextVault(updates);
+      const sandboxed: Partial<Vault> = {};
+      const persisted: Partial<Vault> = {};
+      (Object.keys(updates) as (keyof Vault)[]).forEach((key) => {
+        const target = (STORY_SANDBOXED_VAULT_FIELDS as readonly string[]).includes(key) ? sandboxed : persisted;
+        (target as Record<string, unknown>)[key] = updates[key];
+      });
+      if (Object.keys(sandboxed).length > 0) {
+        setStoryCombatStats((prev) => ({ ...(prev || {}), ...sandboxed }));
+        if (vaultRef.current) vaultRef.current = { ...vaultRef.current, ...sandboxed };
+      }
+      if (Object.keys(persisted).length > 0) await updateContextVault(persisted);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isolatePlayerVault, updateContextVault]
+  );
   
   // ALWAYS log when BattleEngine mounts (critical for debugging)
   useEffect(() => {
@@ -1726,7 +1784,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         let changed = false;
         const next = prev.map(opp => {
           const key = `multi:${opp.id}`;
-          if (cpuStatsAppliedRef.current.has(key)) return opp;
+          if (opp.fixedStats || cpuStatsAppliedRef.current.has(key)) return opp;
           const cfg = getConfiguredCPUStats(opp);
           if (
             !cfg ||
@@ -1764,7 +1822,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
     setOpponent(prev => {
       const key = `single:${prev.id}`;
-      if (cpuStatsAppliedRef.current.has(key)) return prev;
+      if (prev.fixedStats || cpuStatsAppliedRef.current.has(key)) return prev;
       const cfg = getConfiguredCPUStats(prev);
       if (
         !cfg ||
@@ -1930,6 +1988,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           level: enemy.level || 1,
           image: enemy.image,
           moves: Array.isArray(enemy.moves) ? enemy.moves : [],
+          ...(enemy.fixedStats ? { fixedStats: true } : {}),
           isDefeated: false
         }));
         

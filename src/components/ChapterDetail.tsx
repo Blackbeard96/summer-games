@@ -1876,78 +1876,77 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
 
     try {
       const userRef = doc(db, 'users', currentUser.uid);
-      const currentData = await getDoc(userRef);
-      
-      if (currentData.exists()) {
-        // Determine which challenge to complete based on completingChallenge state
-        // If Ice Golems were defeated, complete Challenge 7 and unlock Challenge 8
-        const challengeId = completingChallenge === 'ep1-update-profile' 
-          ? 'ep1-update-profile' 
-          : 'ep1-portal-sequence';
-        
-        // If this is the Ice Golem battle, also mark that we've seen the cutscene
-        const iceGolemsDefeated = completingChallenge === 'ep1-update-profile';
-        
-        const updatedChapters = {
-          ...currentData.data().chapters,
-          [chapter.id]: {
-            ...currentData.data().chapters?.[chapter.id],
-            challenges: {
-              ...currentData.data().chapters?.[chapter.id]?.challenges,
-              [challengeId]: {
-                isCompleted: true,
-                status: 'approved',
-                completedAt: serverTimestamp(),
-                helaDefeated: true,
-                iceGolemsDefeated: iceGolemsDefeated,
-                giantGolemCutscene: iceGolemsDefeated // Mark that cutscene was shown
-              }
-            }
-          }
-        };
+      // Challenge 6 = Hela, Challenge 7 = Ice Golems (unlocks Challenge 8)
+      const challengeId = completingChallenge === 'ep1-update-profile'
+        ? 'ep1-update-profile'
+        : 'ep1-portal-sequence';
+      const iceGolemsDefeated = challengeId === 'ep1-update-profile';
+      const challenge = chapter.challenges.find(c => c.id === challengeId);
 
-        await updateDoc(userRef, {
-          chapters: updatedChapters
-        });
-
-        // Update local state
-        setRawUserProgress((prev: any) => ({
-          ...prev,
-          chapters: updatedChapters
-        }));
-
-        console.log(`${challengeId} challenge completed - ${completingChallenge === 'ep1-update-profile' ? 'Ice Golems' : 'Hela'} defeated!`);
-        
-        // If Ice Golems were defeated, mark the artifact requirement for Challenge 8
-        if (iceGolemsDefeated) {
-          // Also update the student's artifacts to mark the cutscene as seen
-          const studentRef = doc(db, 'students', currentUser.uid);
-          const studentDoc = await getDoc(studentRef);
-          
-          if (studentDoc.exists()) {
-            const studentData = studentDoc.data();
-            const currentArtifacts = studentData.artifacts || {};
-            
-            await updateDoc(studentRef, {
-              artifacts: {
-                ...currentArtifacts,
-                giant_ice_golem_cutscene_seen: true
-              }
-            });
-          }
-          
-          // Navigate to Challenge 8 after a short delay
-          setTimeout(() => {
-            // Scroll to Challenge 8 (Artifacts and Elements) or show it
-            const challenge8Element = document.getElementById(`challenge-ep1-view-power-card`);
-            if (challenge8Element) {
-              challenge8Element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-          }, 1000);
-        }
-        
-        // Modal will be closed by the Continue button in HelaBattle component
+      const { updateProgressOnChallengeComplete } = await import('../utils/chapterProgression');
+      const progressionResult = await updateProgressOnChallengeComplete(currentUser.uid, chapter.id, challengeId);
+      if (!progressionResult.success) {
+        throw new Error(progressionResult.error || `Failed to save ${challengeId}`);
       }
+
+      await updateDoc(userRef, {
+        [`chapters.${chapter.id}.challenges.${challengeId}.helaDefeated`]: true,
+        [`chapters.${chapter.id}.challenges.${challengeId}.iceGolemsDefeated`]: iceGolemsDefeated,
+        [`chapters.${chapter.id}.challenges.${challengeId}.giantGolemCutscene`]: iceGolemsDefeated,
+      });
+
+      const refreshedDoc = await getDoc(userRef);
+      if (refreshedDoc.exists()) {
+        setRawUserProgress(refreshedDoc.data());
+      }
+
+      console.log(`${challengeId} challenge completed - ${iceGolemsDefeated ? 'Ice Golems' : 'Hela'} defeated!`);
+
+      if (challenge) {
+        const { grantChallengeRewards } = await import('../utils/challengeRewards');
+        const rewardResult = await grantChallengeRewards(
+          currentUser.uid,
+          challenge.id,
+          challenge.rewards,
+          challenge.title
+        );
+        if (!rewardResult.success) {
+          console.error(`Failed to grant rewards for ${challengeId}:`, rewardResult.error);
+        } else if (!rewardResult.alreadyClaimed) {
+          const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+          const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+          await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+            type: 'challenge_completed',
+            message: `🎉 Challenge "${challenge.title}" completed! You earned ${xpReward} XP and ${ppReward} PP.`,
+            challengeId: challenge.id,
+            challengeName: challenge.title,
+            xpReward,
+            ppReward,
+            timestamp: serverTimestamp(),
+            read: false
+          });
+        }
+      }
+
+      if (iceGolemsDefeated) {
+        try {
+          await updateDoc(doc(db, 'students', currentUser.uid), {
+            'artifacts.giant_ice_golem_cutscene_seen': true
+          });
+        } catch (artifactError) {
+          // Challenge 8's requirement also accepts a completed Challenge 7
+          console.warn('Failed to record giant_ice_golem_cutscene_seen:', artifactError);
+        }
+
+        setTimeout(() => {
+          const challenge8Element = document.getElementById(`challenge-ep1-view-power-card`);
+          if (challenge8Element) {
+            challenge8Element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 1000);
+      }
+
+      // Modal will be closed by the Continue button in HelaBattle component
     } catch (error) {
       console.error('Error completing challenge:', error);
       alert('Failed to complete the challenge. Please try again.');
@@ -3197,7 +3196,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     }
   };
 
-  const handleSonidoTransmissionComplete = async () => {
+  const handleSonidoTransmissionComplete = async (battleRoomId?: string) => {
     if (!currentUser) {
       console.error('❌ ChapterDetail: handleSonidoTransmissionComplete called but currentUser is null');
       return;
@@ -3223,20 +3222,36 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         userId: currentUser.uid
       });
       
-      const battleRoomsRef = collection(db, 'islandRaidBattleRooms');
-      const battleRoomsQuery = query(
-        battleRoomsRef,
-        where('challengeId', '==', 'ep2-its-all-a-game'),
-        where('players', 'array-contains', currentUser.uid),
-        where('status', '==', 'victory')
-      );
-      const battleRoomsSnapshot = await getDocs(battleRoomsQuery);
+      // Students can read a room they played in, but list queries on this collection are denied
+      // by the rules, so read the room the modal just watched end in victory.
+      let candidateRooms: Array<{ id: string; data: () => any }> = [];
+      if (battleRoomId) {
+        const roomSnap = await getDoc(doc(db, 'islandRaidBattleRooms', battleRoomId));
+        const roomData = roomSnap.exists() ? roomSnap.data() : null;
+        if (
+          roomData &&
+          roomData.challengeId === 'ep2-its-all-a-game' &&
+          roomData.status === 'victory' &&
+          Array.isArray(roomData.players) &&
+          roomData.players.includes(currentUser.uid)
+        ) {
+          candidateRooms = [roomSnap];
+        }
+      } else {
+        const battleRoomsQuery = query(
+          collection(db, 'islandRaidBattleRooms'),
+          where('challengeId', '==', 'ep2-its-all-a-game'),
+          where('players', 'array-contains', currentUser.uid),
+          where('status', '==', 'victory')
+        );
+        candidateRooms = (await getDocs(battleRoomsQuery)).docs;
+      }
       
-      console.log('📊 ChapterDetail: Found battle rooms:', battleRoomsSnapshot.docs.length);
+      console.log('📊 ChapterDetail: Found battle rooms:', candidateRooms.length);
       
       // Check if there's a recent victory (within last 24 hours) with all 4 waves completed
       // AND all enemies in the final wave are actually defeated (final boss defeated)
-      const recentVictory = battleRoomsSnapshot.docs.find(doc => {
+      const recentVictory = candidateRooms.find(doc => {
         const data = doc.data();
         const waveNumber = data.waveNumber || 0;
         const maxWaves = data.maxWaves || 4;
@@ -3260,11 +3275,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         // The final boss must be defeated, not just Wave 4 started
         const enemies = data.enemies || [];
         const allEnemiesDefeated = enemies.length === 0 || enemies.every((enemy: any) => {
-          // Check health (vaultHealth for Island Raid, or health/currentPP as fallback)
-          const health = enemy.vaultHealth !== undefined 
-            ? Math.max(0, Number(enemy.vaultHealth))
-            : (enemy.health !== undefined 
-              ? Math.max(0, Number(enemy.health))
+          if (enemy.isDefeated === true) return true;
+          // IslandRaidBattle writes damage to `health`; spawned vaultHealth/currentPP are never updated.
+          const health = enemy.health !== undefined
+            ? Math.max(0, Number(enemy.health))
+            : (enemy.vaultHealth !== undefined
+              ? Math.max(0, Number(enemy.vaultHealth))
               : (enemy.currentPP !== undefined ? Math.max(0, Number(enemy.currentPP)) : 0));
           // Check shield
           const shield = enemy.shieldStrength !== undefined 
@@ -3289,8 +3305,8 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       // Only complete if there's a verified victory
       if (!recentVictory) {
         console.warn('⚠️ ChapterDetail: No verified battle victory found for ep2-its-all-a-game. Challenge will not be marked as complete.', {
-          totalBattleRooms: battleRoomsSnapshot.docs.length,
-          checkedRooms: battleRoomsSnapshot.docs.map(d => ({
+          totalBattleRooms: candidateRooms.length,
+          checkedRooms: candidateRooms.map(d => ({
             id: d.id,
             waveNumber: d.data().waveNumber,
             maxWaves: d.data().maxWaves,

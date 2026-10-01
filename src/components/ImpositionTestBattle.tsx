@@ -429,15 +429,11 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
         maxPP = vaultData.capacity || 1000;
         currentPP = vaultData.currentPP || 0;
         
-        // Max vault health is 10% of max PP (capacity is the max PP)
+        // Story battle: start at full health/shields (BattleEngine isolatePlayerVault keeps damage off the real vault)
         maxVaultHealth = Math.floor(maxPP * 0.1);
-        vaultHealth = vaultData.vaultHealth !== undefined 
-          ? Math.min(vaultData.vaultHealth, maxVaultHealth, currentPP)
-          : Math.min(currentPP, maxVaultHealth);
-        
-        // Shield stats from vault
-        shieldStrength = vaultData.shieldStrength || 0;
+        vaultHealth = maxVaultHealth;
         maxShieldStrength = vaultData.maxShieldStrength || 100;
+        shieldStrength = Math.max(vaultData.shieldStrength || 0, maxShieldStrength);
       } else {
         // Fallback to student data if no vault exists
         maxPP = 1000;
@@ -1484,6 +1480,7 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
             initialBattleLog={battleLog}
             onBattleLogUpdate={(log) => setBattleLog(log)}
             gameId={gameId || undefined}
+            isolatePlayerVault
           />
         </div>
       )}

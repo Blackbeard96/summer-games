@@ -10,7 +10,7 @@ import { getLevelFromXP } from '../utils/leveling';
 interface SonidoTransmissionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onComplete: () => void;
+  onComplete: (battleRoomId?: string) => void;
 }
 
 interface TransmissionScene {
@@ -18,6 +18,56 @@ interface TransmissionScene {
   image?: string; // Optional image path, defaults to Ch2-4_SonidoComms.png
   isChoice?: boolean; // If true, this scene shows candy choice buttons instead of dialogue
 }
+
+const POWERED_ZOMBIE_MOVES = [
+  { id: 'powered-punch', name: 'Powered Punch', type: 'attack', damageRange: { min: 2, max: 4 } },
+  { id: 'energy-flash', name: 'Energy Flash', type: 'attack', damageRange: { min: 2, max: 3 } },
+];
+const ZOMBIE_CAPTAIN_MOVES = [
+  { id: 'energy-strike', name: 'Energy Strike', type: 'attack', damageRange: { min: 2, max: 4 } },
+  { id: 'energy-wave', name: 'Energy Wave', type: 'attack', damageRange: { min: 3, max: 5 } },
+];
+const ZOMBIE_ELITE_MOVES = [
+  { id: 'elite-slam', name: 'Elite Slam', type: 'attack', damageRange: { min: 3, max: 4 } },
+  { id: 'elite-surge', name: 'Elite Surge', type: 'attack', damageRange: { min: 3, max: 5 } },
+];
+const UNVEILED_ELITE_MOVES = [
+  { id: 'unveiled-strike', name: 'Unveiled Strike', type: 'attack', damageRange: { min: 3, max: 5 } },
+  { id: 'reality-break', name: 'Reality Break', type: 'attack', damageRange: { min: 4, max: 6 } },
+];
+
+/** Island Raid enemy row (IslandRaidBattle reads health, currentPP, and vaultHealth). */
+const makeStoryEnemy = (e: {
+  id: string;
+  type: string;
+  name: string;
+  health: number;
+  shields: number;
+  level: number;
+  moves: unknown[];
+  waveNumber: number;
+  position: { x: number; y: number };
+  image: string;
+}) => ({
+  id: e.id,
+  type: e.type,
+  name: e.name,
+  health: e.health,
+  maxHealth: e.health,
+  currentPP: e.health,
+  maxPP: e.health,
+  vaultHealth: e.health,
+  maxVaultHealth: e.health,
+  shieldStrength: e.shields,
+  maxShieldStrength: e.shields,
+  level: e.level,
+  moves: e.moves,
+  fixedStats: true,
+  position: e.position,
+  spawnTime: new Date(),
+  waveNumber: e.waveNumber,
+  image: e.image,
+});
 
 const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpen, onClose, onComplete }) => {
   const { currentUser } = useAuth();
@@ -28,7 +78,7 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
   const battleWonRef = useRef(false); // Track if battle was actually won
 
   // Define handleComplete early so it can be used in useEffect dependencies
-  const handleComplete = useCallback(async () => {
+  const handleComplete = useCallback(async (battleRoomId?: string) => {
     console.log('✅ SonidoTransmissionModal: handleComplete called - marking chapter complete and closing modal');
     
     // Create Live Feed post for chapter completion (if privacy settings allow)
@@ -58,8 +108,7 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
       }
     }
     
-    // Pass the selected candy choice to the completion handler if needed
-    onComplete();
+    onComplete(battleRoomId);
     // Close the modal after completion handler is called
     // This ensures the chapter is marked complete before the modal closes
     setTimeout(() => {
@@ -111,11 +160,12 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
           // CRITICAL: Verify all enemies in final wave are actually defeated (final boss must be defeated)
           const enemies = battleRoom.enemies || [];
           const allDefeated = enemies.length === 0 || enemies.every((enemy: any) => {
-            // Check health (vaultHealth for Island Raid, or health/currentPP as fallback)
-            const health = enemy.vaultHealth !== undefined 
-              ? Math.max(0, Number(enemy.vaultHealth))
-              : (enemy.health !== undefined 
-                ? Math.max(0, Number(enemy.health))
+            if (enemy.isDefeated === true) return true;
+            // IslandRaidBattle writes damage to `health`; spawned vaultHealth/currentPP are never updated.
+            const health = enemy.health !== undefined
+              ? Math.max(0, Number(enemy.health))
+              : (enemy.vaultHealth !== undefined
+                ? Math.max(0, Number(enemy.vaultHealth))
                 : (enemy.currentPP !== undefined ? Math.max(0, Number(enemy.currentPP)) : 0));
             // Check shield
             const shield = enemy.shieldStrength !== undefined 
@@ -140,7 +190,7 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
             // Add a small delay to ensure Firestore write is fully propagated
             setTimeout(() => {
               console.log('✅ SonidoTransmissionModal: Calling handleComplete to mark chapter as complete');
-              handleComplete();
+              handleComplete(gameId);
             }, 100);
           }
         } else if (battleRoom.status === 'defeated' && showBattle) {
@@ -211,239 +261,52 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
   };
 
   const getUnveiledEliteForCandy = (candyType: string) => {
-    switch (candyType) {
-      case 'on-off':
-        return {
-          id: 'unveiled_elite_luz',
-          type: 'unveiled_elite',
-          name: 'Luz, Wielder of Light',
-          health: 2000, // IslandRaidBattle uses 'health' field
-          maxHealth: 2000,
-          currentPP: 2000, // Also include for display
-          maxPP: 2000,
-          vaultHealth: 2000, // Add vaultHealth for Island Raid detection
-          maxVaultHealth: 2000,
-          shieldStrength: 500,
-          maxShieldStrength: 500,
-          level: 20,
-          damage: 150,
-          moves: [],
-          position: { x: 50, y: 50 },
-          spawnTime: new Date(),
-          waveNumber: 4,
-          image: '/images/Luz, Wielder of Light.png' // Luz, Wielder of Light battle image
-        };
-      case 'up-down':
-        return {
-          id: 'unveiled_elite_varion',
-          type: 'unveiled_elite',
-          name: 'Varion, Elite of the Vertical',
-          health: 2000,
-          maxHealth: 2000,
-          currentPP: 2000,
-          maxPP: 2000,
-          vaultHealth: 2000,
-          maxVaultHealth: 2000,
-          shieldStrength: 500,
-          maxShieldStrength: 500,
-          level: 20,
-          damage: 150,
-          moves: [],
-          position: { x: 50, y: 50 },
-          spawnTime: new Date(),
-          waveNumber: 4,
-          image: '/images/Varion - Elite.png',
-        };
-      case 'config':
-        return {
-          id: 'unveiled_elite_kon',
-          type: 'unveiled_elite',
-          name: 'Kon, the Guardian for Config',
-          health: 2000, // IslandRaidBattle uses 'health' field
-          maxHealth: 2000,
-          currentPP: 2000, // Also include for display
-          maxPP: 2000,
-          vaultHealth: 2000, // Add vaultHealth for Island Raid detection
-          maxVaultHealth: 2000,
-          shieldStrength: 500,
-          maxShieldStrength: 500,
-          level: 20,
-          damage: 150,
-          moves: [],
-          position: { x: 50, y: 50 },
-          spawnTime: new Date(),
-          waveNumber: 4,
-          image: '/images/Kon.png' // Kon battle image
-        };
-      default:
-        return null;
-    }
+    const bosses: Record<string, { id: string; name: string; image: string }> = {
+      'on-off': { id: 'unveiled_elite_luz', name: 'Luz, Wielder of Light', image: '/images/Luz, Wielder of Light.png' },
+      'up-down': { id: 'unveiled_elite_varion', name: 'Varion, Elite of the Vertical', image: '/images/Varion - Elite.png' },
+      'config': { id: 'unveiled_elite_kon', name: 'Kon, the Guardian for Config', image: '/images/Kon.png' },
+    };
+    const boss = bosses[candyType];
+    if (!boss) return null;
+    return makeStoryEnemy({
+      ...boss,
+      type: 'unveiled_elite',
+      health: 60,
+      shields: 30,
+      level: 20,
+      moves: UNVEILED_ELITE_MOVES,
+      waveNumber: 4,
+      position: { x: 50, y: 50 },
+    });
   };
 
+  // Tuned so a solo player fresh out of Squad Up (~12 damage per turn, ~100 health + shields) can clear
+  // all four waves; squadmates make it easier. Embedded moves + fixedStats keep the admin CPU config
+  // (balanced for late-game raids) from overriding these enemies.
   const generateWavesForCandy = (candyType: string) => {
     const waves: any = {};
 
-    // Wave 1: 2 Powered Zombies and 2 Zombie Captains
-    waves[1] = [];
-    for (let i = 0; i < 2; i++) {
-      waves[1].push({
-        id: `enemy_w1_powered_${i}`,
-        type: 'powered_zombie',
-        name: `Powered Zombie ${i + 1}`,
-        health: 250, // IslandRaidBattle uses 'health' field
-        maxHealth: 250,
-        currentPP: 250, // Also include for display
-        maxPP: 250,
-        vaultHealth: 250, // Add vaultHealth for Island Raid detection
-        maxVaultHealth: 250,
-        shieldStrength: 250,
-        maxShieldStrength: 250,
-        level: 8,
-        damage: 50,
-        moves: [],
-        position: { x: 20 + i * 30, y: 40 },
-        spawnTime: new Date(),
-        waveNumber: 1,
-        image: '/images/Powered Zombie.png'
-      });
-    }
-    for (let i = 0; i < 2; i++) {
-      waves[1].push({
-        id: `enemy_w1_captain_${i}`,
-        type: 'zombie_captain',
-        name: `Zombie Captain ${i + 1}`,
-        health: 500, // IslandRaidBattle uses 'health' field
-        maxHealth: 500,
-        currentPP: 500, // Also include for display
-        maxPP: 500,
-        vaultHealth: 500, // Add vaultHealth for Island Raid detection
-        maxVaultHealth: 500,
-        shieldStrength: 200,
-        maxShieldStrength: 200,
-        level: 10,
-        damage: 80,
-        moves: [],
-        position: { x: 30 + i * 40, y: 60 },
-        spawnTime: new Date(),
-        waveNumber: 1,
-        image: '/images/Zombie Captain.png'
-      });
-    }
+    // Wave 1: a Powered Zombie and a Zombie Captain
+    waves[1] = [
+      makeStoryEnemy({ id: 'enemy_w1_powered_0', type: 'powered_zombie', name: 'Powered Zombie', health: 20, shields: 10, level: 8, moves: POWERED_ZOMBIE_MOVES, waveNumber: 1, position: { x: 30, y: 40 }, image: '/images/Powered Zombie.png' }),
+      makeStoryEnemy({ id: 'enemy_w1_captain_0', type: 'zombie_captain', name: 'Zombie Captain', health: 25, shields: 10, level: 10, moves: ZOMBIE_CAPTAIN_MOVES, waveNumber: 1, position: { x: 70, y: 60 }, image: '/images/Zombie Captain.png' }),
+    ];
 
-    // Wave 2: 3 Zombie Captains
-    waves[2] = [];
-    for (let i = 0; i < 3; i++) {
-      waves[2].push({
-        id: `enemy_w2_captain_${i}`,
-        type: 'zombie_captain',
-        name: `Zombie Captain ${i + 1}`,
-        health: 500, // IslandRaidBattle uses 'health' field
-        maxHealth: 500,
-        currentPP: 500, // Also include for display
-        maxPP: 500,
-        vaultHealth: 500, // Add vaultHealth for Island Raid detection
-        maxVaultHealth: 500,
-        shieldStrength: 200,
-        maxShieldStrength: 200,
-        level: 10,
-        damage: 80,
-        moves: [],
-        position: { x: 20 + i * 30, y: 50 },
-        spawnTime: new Date(),
-        waveNumber: 2,
-        image: '/images/Zombie Captain.png'
-      });
-    }
+    // Wave 2: 2 Zombie Captains
+    waves[2] = [0, 1].map((i) =>
+      makeStoryEnemy({ id: `enemy_w2_captain_${i}`, type: 'zombie_captain', name: `Zombie Captain ${i + 1}`, health: 25, shields: 10, level: 10, moves: ZOMBIE_CAPTAIN_MOVES, waveNumber: 2, position: { x: 30 + i * 40, y: 50 }, image: '/images/Zombie Captain.png' })
+    );
 
-    // Wave 3: 3 Zombie Captains and 1 Zombie Elite
-    waves[3] = [];
-    for (let i = 0; i < 3; i++) {
-      waves[3].push({
-        id: `enemy_w3_captain_${i}`,
-        type: 'zombie_captain',
-        name: `Zombie Captain ${i + 1}`,
-        health: 500, // IslandRaidBattle uses 'health' field
-        maxHealth: 500,
-        currentPP: 500, // Also include for display
-        maxPP: 500,
-        vaultHealth: 500, // Add vaultHealth for Island Raid detection
-        maxVaultHealth: 500,
-        shieldStrength: 200,
-        maxShieldStrength: 200,
-        level: 10,
-        damage: 80,
-        moves: [],
-        position: { x: 15 + i * 25, y: 45 },
-        spawnTime: new Date(),
-        waveNumber: 3,
-        image: '/images/Zombie Captain.png'
-      });
-    }
-    waves[3].push({
-      id: 'enemy_w3_elite',
-      type: 'zombie_elite',
-      name: 'Zombie Elite',
-      health: 1000, // IslandRaidBattle uses 'health' field
-      maxHealth: 1000,
-      currentPP: 1000, // Also include for display
-      maxPP: 1000,
-      vaultHealth: 1000, // Add vaultHealth for Island Raid detection
-      maxVaultHealth: 1000,
-      shieldStrength: 300,
-      maxShieldStrength: 300,
-      level: 15,
-      damage: 100,
-      moves: [],
-      position: { x: 50, y: 50 },
-      spawnTime: new Date(),
-      waveNumber: 3,
-      image: '/images/Zombie Elite.png'
-    });
+    // Wave 3: a Zombie Captain and a Zombie Elite
+    waves[3] = [
+      makeStoryEnemy({ id: 'enemy_w3_captain_0', type: 'zombie_captain', name: 'Zombie Captain', health: 25, shields: 10, level: 10, moves: ZOMBIE_CAPTAIN_MOVES, waveNumber: 3, position: { x: 30, y: 45 }, image: '/images/Zombie Captain.png' }),
+      makeStoryEnemy({ id: 'enemy_w3_elite', type: 'zombie_elite', name: 'Zombie Elite', health: 35, shields: 15, level: 15, moves: ZOMBIE_ELITE_MOVES, waveNumber: 3, position: { x: 70, y: 50 }, image: '/images/Zombie Elite.png' }),
+    ];
 
-    // Wave 4: 1 Zombie Captain, 2 Zombie Elites and an Unveiled Elite
-    waves[4] = [];
-    waves[4].push({
-      id: 'enemy_w4_captain',
-      type: 'zombie_captain',
-      name: 'Zombie Captain',
-      health: 500, // IslandRaidBattle uses 'health' field
-      maxHealth: 500,
-      currentPP: 500, // Also include for display
-      maxPP: 500,
-      vaultHealth: 500, // Add vaultHealth for Island Raid detection
-      maxVaultHealth: 500,
-      shieldStrength: 200,
-      maxShieldStrength: 200,
-      level: 10,
-      damage: 80,
-      moves: [],
-      position: { x: 30, y: 40 },
-      spawnTime: new Date(),
-      waveNumber: 4,
-      image: '/images/Zombie Captain.png'
-    });
-    for (let i = 0; i < 2; i++) {
-      waves[4].push({
-        id: `enemy_w4_elite_${i}`,
-        type: 'zombie_elite',
-        name: `Zombie Elite ${i + 1}`,
-        health: 1000, // IslandRaidBattle uses 'health' field
-        maxHealth: 1000,
-        currentPP: 1000, // Also include for display
-        maxPP: 1000,
-        vaultHealth: 1000, // Add vaultHealth for Island Raid detection
-        maxVaultHealth: 1000,
-        shieldStrength: 300,
-        maxShieldStrength: 300,
-        level: 15,
-        damage: 100,
-        moves: [],
-        position: { x: 20 + i * 60, y: 50 },
-        spawnTime: new Date(),
-        waveNumber: 4,
-        image: '/images/Zombie Elite.png'
-      });
-    }
+    // Wave 4: a Zombie Elite and the Unveiled Elite for the chosen candy
+    waves[4] = [
+      makeStoryEnemy({ id: 'enemy_w4_elite_0', type: 'zombie_elite', name: 'Zombie Elite', health: 35, shields: 15, level: 15, moves: ZOMBIE_ELITE_MOVES, waveNumber: 4, position: { x: 25, y: 50 }, image: '/images/Zombie Elite.png' }),
+    ];
     const unveiledElite = getUnveiledEliteForCandy(candyType);
     if (unveiledElite) {
       waves[4].push(unveiledElite);
@@ -830,7 +693,7 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
               </button>
             ) : (
               <button
-                onClick={handleComplete}
+                onClick={() => handleComplete()}
                 style={{
                   backgroundColor: '#3b82f6',
                   color: 'white',

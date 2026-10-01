@@ -42,6 +42,9 @@ const TimuIslandStoryModal: React.FC<TimuIslandStoryModalProps> = ({ isOpen, onC
   const { currentUser } = useAuth();
   const { vault, moves } = useBattle();
   const isUpdatingEnemiesRef = useRef(false);
+  const vaultRef = useRef(vault);
+  vaultRef.current = vault;
+  const alliesBuiltRef = useRef<Set<string>>(new Set());
 
   // Check if joining an existing battle from invitation
   useEffect(() => {
@@ -155,77 +158,50 @@ const TimuIslandStoryModal: React.FC<TimuIslandStoryModalProps> = ({ isOpen, onC
       // Generate a unique game ID
       const gameId = `ch2-2-battle-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-      // Create enemies for wave 1: 2 Unpowered Zombies
-      const wave1Enemies = [
-        {
-          id: 'enemy_w1_1',
-          type: 'zombie',
-          name: 'Unpowered Zombie 1',
-          health: 150,
-          maxHealth: 150,
-          shieldStrength: 0,
-          maxShieldStrength: 0,
-          level: 5,
-          damage: 25,
-          moves: [],
-          position: { x: 30, y: 50 },
-          spawnTime: new Date(),
-          waveNumber: 1,
-          image: '/images/Unpowered Zombie.png'
-        },
-        {
-          id: 'enemy_w1_2',
-          type: 'zombie',
-          name: 'Unpowered Zombie 2',
-          health: 150,
-          maxHealth: 150,
-          shieldStrength: 0,
-          maxShieldStrength: 0,
-          level: 5,
-          damage: 25,
-          moves: [],
-          position: { x: 70, y: 50 },
-          spawnTime: new Date(),
-          waveNumber: 1,
-          image: '/images/Unpowered Zombie.png'
-        }
+      // Tuned for a solo player fresh out of Chapter 1 (~12 damage per turn, ~100 health).
+      // Embedded moves + fixedStats keep the admin CPU config (balanced for raids) from overriding them.
+      const unpoweredZombieMoves = [
+        { id: 'mindless-strike', name: 'Mindless Strike', type: 'attack', damageRange: { min: 3, max: 3 } },
+        { id: 'zombie-bite', name: 'Zombie Bite', type: 'attack', damageRange: { min: 2, max: 5 } },
+      ];
+      const poweredZombieMoves = [
+        { id: 'powered-punch', name: 'Powered Punch', type: 'attack', damageRange: { min: 4, max: 6 } },
+        { id: 'energy-flash', name: 'Energy Flash', type: 'attack', damageRange: { min: 2, max: 4 } },
       ];
 
+      // Create enemies for wave 1: 2 Unpowered Zombies
+      const wave1Enemies = [1, 2].map((n) => ({
+        id: `enemy_w1_${n}`,
+        type: 'zombie',
+        name: `Unpowered Zombie ${n}`,
+        health: 40,
+        maxHealth: 40,
+        shieldStrength: 0,
+        maxShieldStrength: 0,
+        level: 5,
+        moves: unpoweredZombieMoves,
+        position: { x: n === 1 ? 30 : 70, y: 50 },
+        spawnTime: new Date(),
+        waveNumber: 1,
+        image: '/images/Unpowered Zombie.png'
+      }));
+
       // Create enemies for wave 2: 2 Powered Zombies
-      const wave2Enemies = [
-        {
-          id: 'enemy_w2_1',
-          type: 'powered_zombie',
-          name: 'Powered Zombie 1',
-          health: 250,
-          maxHealth: 250,
-          shieldStrength: 250,
-          maxShieldStrength: 250,
-          level: 8,
-          damage: 40,
-          moves: [],
-          position: { x: 30, y: 50 },
-          spawnTime: new Date(),
-          waveNumber: 2,
-          image: '/images/Powered Zombie.png'
-        },
-        {
-          id: 'enemy_w2_2',
-          type: 'powered_zombie',
-          name: 'Powered Zombie 2',
-          health: 250,
-          maxHealth: 250,
-          shieldStrength: 250,
-          maxShieldStrength: 250,
-          level: 8,
-          damage: 40,
-          moves: [],
-          position: { x: 70, y: 50 },
-          spawnTime: new Date(),
-          waveNumber: 2,
-          image: '/images/Powered Zombie.png'
-        }
-      ];
+      const wave2Enemies = [1, 2].map((n) => ({
+        id: `enemy_w2_${n}`,
+        type: 'powered_zombie',
+        name: `Powered Zombie ${n}`,
+        health: 40,
+        maxHealth: 40,
+        shieldStrength: 20,
+        maxShieldStrength: 20,
+        level: 8,
+        moves: poweredZombieMoves,
+        position: { x: n === 1 ? 30 : 70, y: 50 },
+        spawnTime: new Date(),
+        waveNumber: 2,
+        image: '/images/Powered Zombie.png'
+      }));
 
       // Store wave 2 enemies in a custom field that IslandRaidBattle can check
       const battleRoomData: any = {
@@ -267,6 +243,8 @@ const TimuIslandStoryModal: React.FC<TimuIslandStoryModalProps> = ({ isOpen, onC
   // Set up real-time listener when battle starts
   useEffect(() => {
     if (!showBattle || !gameId || !currentUser) return;
+    alliesBuiltRef.current = new Set();
+    setAllies([]);
     
     // Helper to check if error is a Firestore internal assertion error
     const isFirestoreInternalError = (error: any): boolean => {
@@ -302,35 +280,47 @@ const TimuIslandStoryModal: React.FC<TimuIslandStoryModalProps> = ({ isOpen, onC
         maxShieldStrength: enemy.maxShieldStrength || 0,
         level: enemy.level || 1,
         vaultHealth: enemy.health || 0,
-        maxVaultHealth: enemy.maxHealth || 0
+        maxVaultHealth: enemy.maxHealth || 0,
+        ...(Array.isArray(enemy.moves) && enemy.moves.length > 0
+          ? { moves: enemy.moves, fixedStats: true }
+          : {})
       })));
       
-      // Set up allies (all players in battle)
-      const players = data.players || [];
-      const alliesList = [];
-      
-      for (const playerId of players) {
+      // Set up allies (all players in battle). Only add players we don't have a row for yet —
+      // rebuilding existing rows on every enemy update would reset health/shields mid-battle.
+      const players: string[] = data.players || [];
+      const newPlayerIds = players.filter((id) => !alliesBuiltRef.current.has(id));
+      if (newPlayerIds.length === 0) return;
+      const newAllies: any[] = [];
+
+      for (const playerId of newPlayerIds) {
         const studentRef = doc(db, 'students', playerId);
         const studentDoc = await getDoc(studentRef);
         if (studentDoc.exists()) {
           const studentData = studentDoc.data();
           const playerLevel = getLevelFromXP(studentData.xp || 0);
-          alliesList.push({
+          const isLocalPlayer = playerId === currentUser.uid;
+          const localVault = isLocalPlayer ? vaultRef.current : null;
+          const maxVaultHealth = localVault ? Math.floor((localVault.capacity || 1000) * 0.1) : undefined;
+          const shields = localVault ? Math.max(localVault.shieldStrength || 0, localVault.maxShieldStrength || 0) : 0;
+          alliesBuiltRef.current.add(playerId);
+          newAllies.push({
             id: playerId,
             name: studentData.displayName || 'Player',
             avatar: studentData.photoURL || '👤',
             currentPP: studentData.powerPoints || 0,
-            maxPP: 1000,
-            shieldStrength: 0,
-            maxShieldStrength: 0,
+            maxPP: localVault?.capacity || 1000,
+            shieldStrength: shields,
+            maxShieldStrength: shields,
             level: playerLevel,
-            isPlayer: playerId === currentUser.uid,
-            photoURL: studentData.photoURL
+            isPlayer: isLocalPlayer,
+            photoURL: studentData.photoURL,
+            ...(maxVaultHealth !== undefined ? { vaultHealth: maxVaultHealth, maxVaultHealth } : {})
           });
         }
       }
-      
-      setAllies(alliesList);
+
+      setAllies((prev) => [...prev.filter((a) => !newPlayerIds.includes(a.id)), ...newAllies]);
       } catch (error) {
         if (isFirestoreInternalError(error)) {
           return; // Suppress Firestore internal errors
@@ -553,6 +543,7 @@ const TimuIslandStoryModal: React.FC<TimuIslandStoryModalProps> = ({ isOpen, onC
           onBattleLogUpdate={setBattleLog}
           initialBattleLog={battleLog}
           gameId={gameId}
+          isolatePlayerVault
         />
         
         {/* Video Modal - plays after battle victory */}

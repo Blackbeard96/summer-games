@@ -30,7 +30,11 @@ export const TRUTH_METAL_BATTLE_RESTRICTIONS: StoryBattleRestrictions = {
     'Your elemental affinity has not awakened yet. Use your Manifest—the power born from who you are.',
 };
 
-/** Soft Truth encounter for ~2–4 player actions (tutorial). */
+/**
+ * Soft Truth encounter for ~2–4 player actions (tutorial).
+ * fixedStats + embedded moves keep the admin CPU config entry named "Truth"
+ * (tuned for later fights, with a guaranteed Confuse) from overriding this tutorial.
+ */
 export const TRUTH_METAL_OPPONENT = {
   id: 'truth',
   name: 'Truth',
@@ -39,7 +43,12 @@ export const TRUTH_METAL_OPPONENT = {
   shieldStrength: 10,
   maxShieldStrength: 10,
   level: 1,
-} as const;
+  fixedStats: true,
+  moves: [
+    { id: 'truth-light', name: 'Light of Truth', type: 'attack', damageRange: { min: 1, max: 3 } },
+    { id: 'truth-wake-up-call', name: 'Wake Up Call', type: 'attack', damageRange: { min: 2, max: 4 } },
+  ],
+};
 
 export interface FilterableBattleMove {
   id?: string;

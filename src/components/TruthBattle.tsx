@@ -262,6 +262,7 @@ const TruthBattle: React.FC<TruthBattleProps> = ({ isOpen, onVictory, onDefeat, 
                 onBattleEnd={handleBattleEnd}
                 opponent={truthOpponent}
                 storyBattleRestrictions={TRUTH_METAL_BATTLE_RESTRICTIONS}
+                isolatePlayerVault
               />
             </div>
           )}

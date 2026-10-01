@@ -143,50 +143,49 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
     level: 3
   };
 
-  // Ice Golem opponents configuration (4 golems for Challenge 7)
+  // Ice Golem opponents configuration (4 golems for Challenge 7). Defeating the first golem triggers
+  // the Giant Ice Golem cutscene, so they're tuned for a Chapter 1 loadout rather than the admin
+  // CPU config (which is balanced for late-game raids).
   // Use useMemo to prevent recreation on every render, which would reset opponent health
-  const iceGolems = React.useMemo(() => [
-    {
-      id: 'ice-golem-1',
-      name: 'Ice Golem',
-      currentPP: 250,
-      maxPP: 250,
-      shieldStrength: 250,
-      maxShieldStrength: 250,
-      level: 2,
-      image: '/images/Ice Golem.png'
-    },
-    {
-      id: 'ice-golem-2',
-      name: 'Ice Golem',
-      currentPP: 250,
-      maxPP: 250,
-      shieldStrength: 250,
-      maxShieldStrength: 250,
-      level: 2,
-      image: '/images/Ice Golem.png'
-    },
-    {
-      id: 'ice-golem-3',
-      name: 'Ice Golem',
-      currentPP: 250,
-      maxPP: 250,
-      shieldStrength: 250,
-      maxShieldStrength: 250,
-      level: 2,
-      image: '/images/Ice Golem.png'
-    },
-    {
-      id: 'ice-golem-4',
-      name: 'Ice Golem',
-      currentPP: 250,
-      maxPP: 250,
-      shieldStrength: 250,
-      maxShieldStrength: 250,
-      level: 2,
-      image: '/images/Ice Golem.png'
-    }
-  ], []); // Empty dependency array - only create once
+  const iceGolems = React.useMemo(
+    () =>
+      [1, 2, 3, 4].map((n) => ({
+        id: `ice-golem-${n}`,
+        name: 'Ice Golem',
+        currentPP: 40,
+        maxPP: 40,
+        shieldStrength: 20,
+        maxShieldStrength: 20,
+        level: 2,
+        image: '/images/Ice Golem.png',
+        fixedStats: true,
+        moves: [
+          { id: 'ice-shard', name: 'Ice Shard', type: 'attack', damageRange: { min: 2, max: 3 } },
+          { id: 'ice-punch', name: 'Ice Punch', type: 'attack', damageRange: { min: 2, max: 4 } },
+        ],
+      })),
+    []
+  );
+
+  // Story battles use a full-health copy of the player's vault (see BattleEngine isolatePlayerVault)
+  const storyPlayerAlly = React.useMemo(() => {
+    if (!vault || !currentUser) return undefined;
+    const maxVaultHealth = Math.floor((vault.capacity || 1000) * 0.1);
+    const shields = Math.max(vault.shieldStrength || 0, vault.maxShieldStrength || 0);
+    return [{
+      id: currentUser.uid,
+      name: currentUser.displayName || 'Player',
+      currentPP: vault.currentPP,
+      maxPP: vault.capacity,
+      shieldStrength: shields,
+      maxShieldStrength: shields,
+      level: 1,
+      vaultHealth: maxVaultHealth,
+      maxVaultHealth,
+    }];
+    // Snapshot once per battle so the ally row isn't re-seeded mid-fight
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showBattleEngine, !!vault, currentUser?.uid]);
 
   if (!isOpen) return null;
 
@@ -659,19 +658,10 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
               onBattleEnd={handleBattleEnd}
               opponent={propIsIceGolemBattle ? undefined : helaOpponent}
               opponents={propIsIceGolemBattle ? iceGolems : undefined}
-              allies={propIsIceGolemBattle && vault && currentUser ? [{
-                id: currentUser.uid,
-                name: currentUser.displayName || 'Player',
-                currentPP: vault.currentPP,
-                maxPP: vault.capacity,
-                shieldStrength: vault.shieldStrength,
-                maxShieldStrength: vault.maxShieldStrength,
-                level: 1,
-                vaultHealth: vault.vaultHealth,
-                maxVaultHealth: Math.floor((vault.capacity || 1000) * 0.1) // Always 10% of max PP
-              }] : undefined}
+              allies={propIsIceGolemBattle ? storyPlayerAlly : undefined}
               isMultiplayer={propIsIceGolemBattle}
               onIceGolemDefeated={propIsIceGolemBattle ? handleIceGolemDefeated : undefined}
+              isolatePlayerVault
             />
           </div>
         )}

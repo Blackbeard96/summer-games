@@ -445,15 +445,32 @@ const SquadUpStoryModal: React.FC<SquadUpStoryModalProps> = ({ isOpen, onClose, 
         name: studentData.displayName || currentUser.displayName || 'Player',
         currentPP: vault.currentPP || 0,
         maxPP: vault.capacity || 1000,
-        shieldStrength: vault.shieldStrength || 0,
-        maxShieldStrength: vault.maxShieldStrength || 0,
+        // Story battle: full health/shields (BattleEngine isolatePlayerVault keeps damage off the real vault)
+        shieldStrength: Math.max(vault.shieldStrength || 0, vault.maxShieldStrength || 0),
+        maxShieldStrength: Math.max(vault.shieldStrength || 0, vault.maxShieldStrength || 0),
         level: playerLevel,
-        currentVaultHealth: vault.vaultHealth || 0,
+        currentVaultHealth: Math.floor((vault.capacity || 1000) * 0.1),
         maxVaultHealth: Math.floor((vault.capacity || 1000) * 0.1),
         isPlayer: true,
         avatar: studentData.photoURL || currentUser.photoURL || '👤',
         photoURL: studentData.photoURL || currentUser.photoURL
       };
+
+      // Enemies are tuned so a solo Chapter 2 player (~12 damage per turn, ~100 health + shields) can win;
+      // squadmates make it easier. Embedded moves + fixedStats keep the admin CPU config (balanced for
+      // raids) from overriding them.
+      const unpoweredZombieMoves = [
+        { id: 'mindless-strike', name: 'Mindless Strike', type: 'attack', damageRange: { min: 2, max: 3 } },
+        { id: 'zombie-bite', name: 'Zombie Bite', type: 'attack', damageRange: { min: 2, max: 4 } },
+      ];
+      const poweredZombieMoves = [
+        { id: 'powered-punch', name: 'Powered Punch', type: 'attack', damageRange: { min: 3, max: 5 } },
+        { id: 'energy-flash', name: 'Energy Flash', type: 'attack', damageRange: { min: 2, max: 4 } },
+      ];
+      const zombieCaptainMoves = [
+        { id: 'energy-strike', name: 'Energy Strike', type: 'attack', damageRange: { min: 4, max: 6 } },
+        { id: 'energy-wave', name: 'Energy Wave', type: 'attack', damageRange: { min: 3, max: 7 } },
+      ];
 
       // Define Wave 1: 3 Unpowered Zombies
       const wave1Enemies: BattleCombatant[] = [];
@@ -462,12 +479,13 @@ const SquadUpStoryModal: React.FC<SquadUpStoryModalProps> = ({ isOpen, onClose, 
           id: `enemy_1_${i}`,
           type: 'zombie',
           name: `Unpowered Zombie ${i + 1}`,
-          currentPP: 150,
-          maxPP: 150,
+          currentPP: 30,
+          maxPP: 30,
           shieldStrength: 0,
           maxShieldStrength: 0,
           level: 5,
-          damage: 30,
+          moves: unpoweredZombieMoves,
+          fixedStats: true,
           position: { x: Math.random() * 100, y: Math.random() * 100 },
           // Note: spawnTime removed - Firestore doesn't accept Date objects directly
           waveNumber: 1,
@@ -484,12 +502,13 @@ const SquadUpStoryModal: React.FC<SquadUpStoryModalProps> = ({ isOpen, onClose, 
           id: `enemy_2_${i}`,
           type: 'powered_zombie',
           name: `Powered Zombie ${i + 1}`,
-          currentPP: 250,
-          maxPP: 250,
-          shieldStrength: 250,
-          maxShieldStrength: 250,
+          currentPP: 30,
+          maxPP: 30,
+          shieldStrength: 10,
+          maxShieldStrength: 10,
           level: 8,
-          damage: 50,
+          moves: poweredZombieMoves,
+          fixedStats: true,
           position: { x: Math.random() * 100, y: Math.random() * 100 },
           // Note: spawnTime removed - Firestore doesn't accept Date objects directly
           waveNumber: 2,
@@ -502,12 +521,13 @@ const SquadUpStoryModal: React.FC<SquadUpStoryModalProps> = ({ isOpen, onClose, 
         id: 'enemy_2_captain',
         type: 'zombie_captain',
         name: 'Zombie Captain',
-        currentPP: 500,
-        maxPP: 500,
-        shieldStrength: 200,
-        maxShieldStrength: 200,
+        currentPP: 50,
+        maxPP: 50,
+        shieldStrength: 30,
+        maxShieldStrength: 30,
         level: 10,
-        damage: 80,
+        moves: zombieCaptainMoves,
+        fixedStats: true,
         position: { x: 50, y: 50 }, // Center position for boss
         // Note: spawnTime removed - Firestore doesn't accept Date objects directly
         waveNumber: 2,
@@ -659,7 +679,10 @@ const SquadUpStoryModal: React.FC<SquadUpStoryModalProps> = ({ isOpen, onClose, 
           vaultHealth: health,
           maxVaultHealth: enemy.maxPP || 0,
           isDefeated: isDefeated, // Explicitly set isDefeated based on health/shield
-          defeatedAt: isDefeated ? new Date() : undefined
+          defeatedAt: isDefeated ? new Date() : undefined,
+          ...(Array.isArray(enemy.moves) && enemy.moves.length > 0
+            ? { moves: enemy.moves, fixedStats: true }
+            : {})
         };
       });
       
@@ -1491,6 +1514,7 @@ const SquadUpStoryModal: React.FC<SquadUpStoryModalProps> = ({ isOpen, onClose, 
             isMultiplayer={true}
             initialBattleLog={battleLog}
             battleName="Jungle Battle"
+            isolatePlayerVault
             onInviteClick={() => {
               console.log('Invite button clicked, opening invite modal');
               setShowInviteModal(true);

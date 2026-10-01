@@ -232,8 +232,9 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
   // Keep the local player's ally row in sync with BattleContext vault (Shield ON, heals, etc.) without
   // waiting for the next islandRaidBattleRooms snapshot (which can race with getDoc vault reads).
   const prevVaultShieldRef = useRef<number | null>(null);
+  const isStoryChapterBattle = (battleRoom as { isChapter2Battle?: boolean } | null)?.isChapter2Battle === true;
   useEffect(() => {
-    if (!vault || !currentUser?.uid) return;
+    if (!vault || !currentUser?.uid || isStoryChapterBattle) return;
     const vShSnapshot = Math.max(0, Math.floor(Number(vault.shieldStrength) || 0));
     const prevVSh = prevVaultShieldRef.current;
     const vaultShieldIncreased = prevVSh != null && vShSnapshot > prevVSh;
@@ -306,7 +307,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
       });
       return changed ? next : prev;
     });
-  }, [vault, currentUser?.uid]);
+  }, [vault, currentUser?.uid, isStoryChapterBattle]);
 
   // Join the battle room when component mounts
   useEffect(() => {
@@ -689,6 +690,13 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                       shieldStrength = Math.min(shieldStrength, maxShieldStrength);
                     }
                   }
+
+                  // Story Mode chapter battles: the local player fights at full health/shields
+                  // (BattleEngine isolatePlayerVault keeps the damage off the real vault).
+                  if ((room as { isChapter2Battle?: boolean }).isChapter2Battle === true && userId === currentUser?.uid) {
+                    vaultHealth = maxVaultHealth;
+                    shieldStrength = maxShieldStrength;
+                  }
                   
                   return {
                     id: userId,
@@ -753,7 +761,18 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 if (a.isDefeated === true) return false;
                 return true;
               });
-              return [...validPlayers, ...npcRows, ...keptSummons];
+              // Story battles don't write damage to the vault, so keep the in-battle health/shields
+              // instead of re-seeding the local player at full on every room snapshot.
+              const isStoryRoom = (room as { isChapter2Battle?: boolean }).isChapter2Battle === true;
+              const playerRows = isStoryRoom
+                ? validPlayers.map((p: any) => {
+                    const existing = p.id === currentUser?.uid ? prev.find((a: any) => a.id === p.id) : null;
+                    return existing
+                      ? { ...p, shieldStrength: existing.shieldStrength, vaultHealth: existing.vaultHealth, health: existing.vaultHealth }
+                      : p;
+                  })
+                : validPlayers;
+              return [...playerRows, ...npcRows, ...keptSummons];
             });
 
             const evs = Array.isArray((data as { battleEventLog?: string[] }).battleEventLog)
@@ -1106,6 +1125,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                       Number(awakenFields.maxVaultHealth) || enemy.maxHealth || 100,
                     waveNumber: enemyWave, // CRITICAL: Set waveNumber for filtering
                     moves: embeddedMoves,
+                    ...((enemy as { fixedStats?: boolean }).fixedStats ? { fixedStats: true } : {}),
                     enemyType:
                       Object.prototype.hasOwnProperty.call(enemy, 'enemyType')
                         ? enemy.enemyType
@@ -1846,6 +1866,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           maxVaultHealth: mh,
           waveNumber: enemyWaveNumber,
           moves: Array.isArray((enemy as any).moves) ? (enemy as any).moves : [],
+          ...((enemy as { fixedStats?: boolean }).fixedStats ? { fixedStats: true } : {}),
           enemyType: Object.prototype.hasOwnProperty.call(enemy, 'enemyType')
             ? enemy.enemyType
             : undefined,
@@ -3450,6 +3471,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
             gameId={gameId}
             candyChoice={(battleRoom as any)?.candyChoice}
             customBackgroundUrl={battleRoom?.battleBackgroundUrl || undefined}
+            isolatePlayerVault={isStoryChapterBattle}
           />
         );
       })()}

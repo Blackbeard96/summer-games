@@ -40,6 +40,10 @@ export interface BattleCombatant {
   position?: { x: number; y: number };
   spawnTime?: Date;
   waveNumber?: number;
+  /** Embedded CPU moves; used instead of the admin CPU config when present. */
+  moves?: unknown[];
+  /** Story Mode enemy tuned for its chapter: skip admin CPU health/shield overrides. */
+  fixedStats?: boolean;
 }
 
 export interface PendingMove {
