@@ -202,16 +202,19 @@ const StoryMissionsSection: React.FC<StoryMissionsSectionProps> = ({
     <div style={{
       marginBottom: '2rem',
       padding: '1.5rem',
-      background: 'rgba(31, 41, 55, 0.9)',
-      borderRadius: '1rem',
-      border: '2px solid rgba(251, 191, 36, 0.3)'
+      background: 'rgba(8, 13, 23, 0.94)',
+      borderRadius: 'var(--mst-radius-md)',
+      border: '1px solid var(--mst-border-gold)',
+      boxShadow: 'var(--mst-shadow-panel)'
     }}>
       {/* Header */}
       <div style={{ marginBottom: '1.5rem' }}>
         <h2 style={{ 
-          color: '#fbbf24', 
+          color: 'var(--mst-gold-bright)', 
           margin: 0, 
-          fontSize: '1.5rem',
+          fontFamily: 'var(--mst-font-display)',
+          letterSpacing: '0.05em',
+          fontSize: '1.35rem',
           marginBottom: '0.5rem'
         }}>
           📜 Story Missions — {chapterTitle}

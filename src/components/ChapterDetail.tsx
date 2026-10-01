@@ -3808,40 +3808,17 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           chapterTitle={chapter.title}
         />
         
-        <h2 style={{ 
-          fontSize: '2rem', 
-          fontWeight: 'bold', 
-          color: '#1f2937',
-          marginBottom: '1rem'
-        }}>
-          Chapter {chapter.id} Challenges
-        </h2>
-        
-        <div style={{
-          marginBottom: '2rem',
-          padding: '1rem',
-          backgroundColor: '#f9fafb',
-          borderRadius: '0.5rem',
-          border: '1px solid #e5e7eb'
-        }}>
-          <h3 style={{ 
-            fontSize: '1rem', 
-            fontWeight: '600',
-            color: '#4b5563',
-            marginBottom: '0.5rem'
-          }}>
-            Description
-          </h3>
-          <p style={{ 
-            fontSize: '0.875rem', 
-            color: '#1f2937',
-            lineHeight: '1.6'
-          }}>
-            {chapter.description}
-          </p>
+        <div className="mst-journey-section">
+          <h3 className="mst-journey-section-title">Chapter {chapter.id} Challenges</h3>
+          <div className="mst-journey-section-divider" aria-hidden="true" />
         </div>
         
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div className="mst-chapter-desc">
+          <p className="mst-chapter-desc-label">Description</p>
+          <p className="mst-chapter-desc-text">{chapter.description}</p>
+        </div>
+        
+        <div className="mst-chapter-challenges">
           {chapter.challenges.map((challenge, index) => {
             const status = getChallengeStatus(challenge);
             const challengeNumber = index + 1;
@@ -3857,214 +3834,80 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
               <div
                 key={challenge.id}
                 id={`challenge-${challenge.id}`}
-                style={{
-                  background: isLocked ? '#f3f4f6' : isCompleted ? '#f0fdf4' : '#ffffff',
-                  border: `2px solid ${isLocked ? '#d1d5db' : isCompleted ? '#86efac' : '#e5e7eb'}`,
-                  borderRadius: '0.5rem',
-                  padding: '1rem',
-                  boxShadow: isCompleted ? '0 2px 8px rgba(16, 185, 129, 0.15)' : '0 2px 4px rgba(0,0,0,0.05)',
-                  transition: 'all 0.2s ease',
-                  cursor: isLocked ? 'not-allowed' : 'pointer',
-                  position: 'relative'
-                }}
+                className={`mst-chapter-challenge mst-chapter-challenge--${status}`}
                 onClick={() => !isLocked && toggleChallenge(challenge.id)}
               >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: 1 }}>
-                    <h4 style={{ 
-                      fontSize: '1.125rem', 
-                      fontWeight: 'bold', 
-                      color: isLocked ? '#9ca3af' : isCompleted ? '#047857' : '#1f2937',
-                      margin: 0,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem'
-                    }}>
-                      {isCompleted && (
-                        <span style={{
-                          fontSize: '1rem',
-                          color: '#10b981'
-                        }}>
-                          ✓
+                <div className="mst-chapter-challenge-head">
+                  <h4 className="mst-chapter-challenge-title">
+                    <span className="mst-chapter-challenge-num">
+                      {isCompleted ? '✓ ' : ''}{chapter.id}-{challengeNumber}
+                    </span>
+                    {challenge.title}
+                  </h4>
+                  <div className="mst-chapter-challenge-meta">
+                    {isLocked ? (
+                      <span className="mst-chapter-locked-label">🔒 Locked</span>
+                    ) : (
+                      <>
+                        {xpReward > 0 && <span className="mst-chapter-chip mst-chapter-chip--xp">{xpReward} XP</span>}
+                        {ppReward > 0 && <span className="mst-chapter-chip mst-chapter-chip--pp">{ppReward} PP</span>}
+                        <span
+                          className={`mst-chapter-chevron${isExpanded ? ' mst-chapter-chevron--open' : ''}`}
+                          aria-hidden="true"
+                        >
+                          ▼
                         </span>
-                      )}
-                      Chapter {chapter.id}-{challengeNumber}: {challenge.title}
-                    </h4>
-                    {isLocked && (
-                      <span style={{
-                        fontSize: '0.875rem',
-                        color: '#9ca3af',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.25rem'
-                      }}>
-                        🔒 Locked
-                      </span>
+                      </>
                     )}
                   </div>
-                  {!isLocked && (
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '1rem'
-                    }}>
-                      {/* Rewards Preview */}
-                      {xpReward > 0 && (
-                        <div style={{
-                          padding: '0.25rem 0.5rem',
-                          backgroundColor: '#dbeafe',
-                          borderRadius: '0.25rem',
-                          fontSize: '0.75rem',
-                          fontWeight: '600',
-                          color: '#1e40af'
-                        }}>
-                          {xpReward}XP
-                        </div>
-                      )}
-                      {ppReward > 0 && (
-                        <div style={{
-                          padding: '0.25rem 0.5rem',
-                          backgroundColor: '#fef3c7',
-                          borderRadius: '0.25rem',
-                          fontSize: '0.75rem',
-                          fontWeight: '600',
-                          color: '#92400e'
-                        }}>
-                          {ppReward}PP
-                        </div>
-                      )}
-                      <span style={{
-                        fontSize: '1.25rem',
-                        transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                        transition: 'transform 0.2s ease'
-                      }}>
-                        ▼
-                      </span>
-                    </div>
-                  )}
                 </div>
                 
-                {/* Completion Status Bar */}
                 {isCompleted && (
-                  <div style={{
-                    marginTop: '0.5rem',
-                    padding: '0.5rem',
-                    backgroundColor: '#d1fae5',
-                    borderRadius: '0.25rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                    fontSize: '0.875rem',
-                    color: '#047857',
-                    fontWeight: '500'
-                  }}>
-                    <span style={{ fontSize: '1rem' }}>✓</span>
+                  <div className="mst-chapter-completed-bar">
+                    <span aria-hidden="true">✓</span>
                     <span>Completed</span>
                     {(() => {
                       const chapterProgress = getChapterProgress(userProgress, chapter.id);
                       const challengeProgress = chapterProgress?.challenges?.[challenge.id];
                       const dateLabel = formatMissionCompletionDate(challengeProgress?.completedAt);
                       if (dateLabel) {
-                        return (
-                          <span style={{ marginLeft: 'auto', fontSize: '0.75rem', opacity: 0.8 }}>
-                            on {dateLabel}
-                          </span>
-                        );
+                        return <span className="mst-chapter-completed-date">on {dateLabel}</span>;
                       }
                       return null;
                     })()}
                   </div>
                 )}
                 
-                {/* Expanded Content */}
                 {isExpanded && !isLocked && (
-                  <div style={{
-                    marginTop: '1rem',
-                    paddingTop: '1rem',
-                    borderTop: '1px solid #e5e7eb',
-                    display: 'flex',
-                    gap: '1.5rem'
-                  }}>
-                    {/* Challenge Details */}
-                    <div style={{ flex: 1 }}>
-                      <p style={{ 
-                        fontSize: '0.875rem', 
-                        color: '#1f2937',
-                        lineHeight: '1.6',
-                        marginBottom: '1rem'
-                      }}>
-                        {challenge.description}
-                      </p>
+                  <div className="mst-chapter-challenge-body">
+                    <div className="mst-chapter-challenge-details">
+                      <p className="mst-chapter-challenge-text">{challenge.description}</p>
                       
-                      {/* All Rewards */}
                       {challenge.rewards && challenge.rewards.length > 0 && (
-                        <div style={{
-                          marginTop: '1rem',
-                          padding: '0.75rem',
-                          backgroundColor: '#f0f9ff',
-                          border: '1px solid #0ea5e9',
-                          borderRadius: '0.5rem'
-                        }}>
-                          <div style={{
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold',
-                            color: '#0c4a6e',
-                            marginBottom: '0.5rem'
-                          }}>
-                            Rewards:
-                          </div>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div className="mst-chapter-rewards">
+                          <p className="mst-chapter-rewards-label">Rewards</p>
+                          <div className="mst-chapter-rewards-list">
                             {challenge.rewards.map((reward, rewardIndex) => {
                               if (reward.type === 'xp') {
                                 return (
-                                  <div key={rewardIndex} style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.25rem',
-                                    padding: '0.25rem 0.5rem',
-                                    backgroundColor: '#dbeafe',
-                                    borderRadius: '0.25rem',
-                                    fontSize: '0.75rem',
-                                    fontWeight: '600',
-                                    color: '#1e40af'
-                                  }}>
-                                    <span>⭐</span>
-                                    <span>{reward.value} XP</span>
-                                  </div>
+                                  <span key={rewardIndex} className="mst-chapter-chip mst-chapter-chip--xp">
+                                    <span aria-hidden="true">⭐</span>
+                                    {reward.value} XP
+                                  </span>
                                 );
                               } else if (reward.type === 'pp') {
                                 return (
-                                  <div key={rewardIndex} style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.25rem',
-                                    padding: '0.25rem 0.5rem',
-                                    backgroundColor: '#fef3c7',
-                                    borderRadius: '0.25rem',
-                                    fontSize: '0.75rem',
-                                    fontWeight: '600',
-                                    color: '#92400e'
-                                  }}>
-                                    <span>💰</span>
-                                    <span>{reward.value} PP</span>
-                                  </div>
+                                  <span key={rewardIndex} className="mst-chapter-chip mst-chapter-chip--pp">
+                                    <span aria-hidden="true">💰</span>
+                                    {reward.value} PP
+                                  </span>
                                 );
                               } else if (reward.type === 'truthMetal') {
                                 return (
-                                  <div key={rewardIndex} style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.25rem',
-                                    padding: '0.25rem 0.5rem',
-                                    backgroundColor: '#fef2f2',
-                                    borderRadius: '0.25rem',
-                                    fontSize: '0.75rem',
-                                    fontWeight: '600',
-                                    color: '#991b1b'
-                                  }}>
-                                    <span>💎</span>
-                                    <span>{reward.value} Truth Metal</span>
-                                  </div>
+                                  <span key={rewardIndex} className="mst-chapter-chip mst-chapter-chip--truth">
+                                    <span aria-hidden="true">💎</span>
+                                    {reward.value} Truth Metal
+                                  </span>
                                 );
                               } else if (reward.type === 'artifact') {
                                 const artifactName = reward.description || reward.value;
@@ -4075,20 +3918,10 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                                                      artifactNameLower.includes('captain') || artifactNameLower.includes('helmet')) 
                                                      ? '🪖' : '💍';
                                 return (
-                                  <div key={rewardIndex} style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.25rem',
-                                    padding: '0.25rem 0.5rem',
-                                    backgroundColor: '#f3e8ff',
-                                    borderRadius: '0.25rem',
-                                    fontSize: '0.75rem',
-                                    fontWeight: '600',
-                                    color: '#7c3aed'
-                                  }}>
-                                    <span>{artifactIcon}</span>
-                                    <span>{artifactName}</span>
-                                  </div>
+                                  <span key={rewardIndex} className="mst-chapter-chip mst-chapter-chip--artifact">
+                                    <span aria-hidden="true">{artifactIcon}</span>
+                                    {artifactName}
+                                  </span>
                                 );
                               }
                               return null;
@@ -4767,30 +4600,14 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                         
                         {/* Team challenge auto-complete message */}
                         {status === 'available' && challenge.type === 'team' && challenge.requirements.length === 0 && (
-                          <div style={{
-                            background: 'rgba(59, 130, 246, 0.1)',
-                            border: '1px solid #3b82f6',
-                            borderRadius: '0.5rem',
-                            padding: '0.75rem',
-                            color: '#1e40af',
-                            fontSize: '0.875rem',
-                            fontWeight: 'bold'
-                          }}>
+                          <div className="mst-chapter-status mst-chapter-status--info">
                             📹 This challenge will be completed automatically after watching the video.
                           </div>
                         )}
                         
                         {/* Pending status */}
                         {status === 'pending' && (
-                          <div style={{
-                            background: 'rgba(245, 158, 11, 0.1)',
-                            border: '1px solid #f59e0b',
-                            borderRadius: '0.5rem',
-                            padding: '0.75rem',
-                            color: '#92400e',
-                            fontSize: '0.875rem',
-                            fontWeight: 'bold'
-                          }}>
+                          <div className="mst-chapter-status mst-chapter-status--pending">
                             ⏳ Submitted for admin approval. You'll be notified when it's reviewed.
                           </div>
                         )}
@@ -4798,16 +4615,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                         {/* Completed status */}
                         {status === 'completed' && (
                           <>
-                            <div style={{
-                              background: 'rgba(34, 197, 94, 0.1)',
-                              border: '1px solid #22c55e',
-                              borderRadius: '0.5rem',
-                              padding: '0.75rem',
-                              color: '#166534',
-                              fontSize: '0.875rem',
-                              fontWeight: 'bold',
-                              marginBottom: chapter.id === 1 && isAdminUser ? '0.5rem' : '0'
-                            }}>
+                            <div className="mst-chapter-status mst-chapter-status--done">
                               ✅ Completed on {userProgress?.chapters?.[chapter.id]?.challenges?.[challenge.id]?.completedAt?.toDate?.()?.toLocaleDateString() || 'Unknown date'}
                             </div>
                             {/* Admin Reset Button for Chapter 1 Challenges */}
@@ -4844,19 +4652,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                       </div>
                     </div>
                     
-                    {/* Image Preview */}
-                    <div style={{
-                      width: '200px',
-                      height: '150px',
-                      backgroundColor: '#f3f4f6',
-                      border: '2px dashed #d1d5db',
-                      borderRadius: '0.5rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0,
-                      overflow: 'hidden'
-                    }}>
+                    <div className="mst-chapter-preview">
                       {(() => {
                         const src = resolveJourneyChallengePreviewUrl(
                           challenge.id,
@@ -4870,20 +4666,10 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                               onError={(e) => {
                                 (e.target as HTMLImageElement).style.display = 'none';
                               }}
-                              style={{
-                                width: '100%',
-                                height: '100%',
-                                objectFit: 'cover',
-                                borderRadius: '0.5rem'
-                              }}
                             />
                           );
                         }
-                        return (
-                          <span style={{ color: '#9ca3af', fontSize: '0.875rem' }}>
-                            Image Preview
-                          </span>
-                        );
+                        return <span>Image Preview</span>;
                       })()}
                     </div>
                   </div>
@@ -4996,12 +4782,15 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
 
   const renderEthicsSection = () => (
     <div className="space-y-4">
-      <h3 className="text-lg font-semibold text-white mb-4">The Ethics of Life</h3>
+      <div className="mst-journey-section">
+        <h3 className="mst-journey-section-title">The Ethics of Life</h3>
+        <div className="mst-journey-section-divider" aria-hidden="true" />
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {['Believe', 'Listen', 'Speak', 'Grow', 'Let Go', 'Give'].map((ethic) => (
-          <div key={ethic} className="bg-white p-4 rounded-lg border">
-            <h4 className="font-semibold mb-2" style={{ color: '#111827' }}>{ethic}</h4>
-            <p className="text-sm mb-3" style={{ color: '#4b5563' }}>
+          <div key={ethic} className="mst-chapter-panel">
+            <h4 className="mst-chapter-panel-title">{ethic}</h4>
+            <p className="text-sm mb-3">
               {ethic === 'Believe' && 'Blind Devotion vs. Discernment'}
               {ethic === 'Listen' && 'Silencing vs. Hearing Truth'}
               {ethic === 'Speak' && 'Lies vs. Responsibility'}
@@ -5480,159 +5269,52 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
 
   if (loading) {
     return (
-      <div className="bg-white rounded-xl shadow-xl p-8">
-        <div className="flex flex-col items-center justify-center py-12">
-          <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-blue-600 rounded-full flex items-center justify-center mb-4">
-            <div className="animate-spin rounded-full h-8 w-8 border-2 border-white border-t-transparent"></div>
-          </div>
-          <h3 className="text-lg font-semibold text-gray-700 mb-2">Loading Chapter Details</h3>
-          <p className="text-gray-500 text-center">Preparing your chapter information...</p>
-        </div>
+      <div className="mst-journey-loading">
+        <div className="mst-journey-loading-spinner" />
+        <h3 className="mst-journey-loading-title">Loading Chapter Details</h3>
+        <p className="mst-journey-loading-copy">Preparing your chapter information...</p>
       </div>
     );
   }
 
   return (
-    <div className="bg-white rounded-xl shadow-xl p-8">
-      {/* Header */}
-      <div style={{ marginBottom: '2rem' }}>
-        <button
-          onClick={onBack}
-          style={{
-            color: '#3b82f6',
-            marginBottom: '1rem',
-            display: 'flex',
-            alignItems: 'center',
-            fontWeight: '500',
-            fontSize: '1rem',
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            transition: 'color 0.2s ease'
-          }}
-          onMouseOver={(e) => e.currentTarget.style.color = '#1d4ed8'}
-          onMouseOut={(e) => e.currentTarget.style.color = '#3b82f6'}
-        >
-          <span style={{ marginRight: '0.5rem', fontSize: '1.25rem' }}>←</span>
-          Back to Player's Journey
-        </button>
-        
-        <div style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'space-between',
-          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-          padding: '2rem',
-          borderRadius: '1rem',
-          color: 'white',
-          boxShadow: '0 10px 25px rgba(0,0,0,0.1)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <div style={{
-              width: '4rem',
-              height: '4rem',
-              background: 'rgba(255,255,255,0.2)',
-              borderRadius: '50%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              border: '3px solid rgba(255,255,255,0.3)'
-            }}>
-              <span style={{ 
-                color: 'white', 
-                fontSize: '1.5rem', 
-                fontWeight: 'bold' 
-              }}>
-                {chapter.id}
-              </span>
-            </div>
-            <div>
-              <h2 style={{ 
-                fontSize: '2rem', 
-                fontWeight: 'bold',
-                marginBottom: '0.5rem',
-                textShadow: '0 2px 4px rgba(0,0,0,0.1)'
-              }}>
-                Chapter {chapter.id}: {chapter.title}
-              </h2>
-              <p style={{ 
-                fontSize: '1.125rem', 
-                fontStyle: 'italic',
-                opacity: 0.9
-              }}>
-                {chapter.subtitle}
-              </p>
-            </div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ 
-              fontSize: '0.875rem', 
-              opacity: 0.8, 
-              marginBottom: '0.25rem' 
-            }}>
-              Story Arc
-            </div>
-            <div style={{
-              fontWeight: 'bold',
-              background: 'rgba(255,255,255,0.2)',
-              padding: '0.5rem 1rem',
-              borderRadius: '9999px',
-              border: '1px solid rgba(255,255,255,0.3)'
-            }}>
-              {chapter.storyArc}
-            </div>
+    <div className="mst-journey-page">
+      <button type="button" className="mst-chapter-back" onClick={onBack}>
+        <span aria-hidden="true">←</span>
+        Back to Player's Journey
+      </button>
+
+      <header className="mst-chapter-hero">
+        <div className="mst-chapter-hero-main">
+          <div className="mst-chapter-medallion" aria-hidden="true">{chapter.id}</div>
+          <div>
+            <p className="mst-chapter-eyebrow">Chapter {chapter.id}</p>
+            <h2 className="mst-chapter-title">{chapter.title}</h2>
+            <p className="mst-chapter-subtitle">{chapter.subtitle}</p>
           </div>
         </div>
-      </div>
+        <div className="mst-chapter-arc">
+          <p className="mst-chapter-arc-label">Story Arc</p>
+          <span className="mst-chapter-arc-value">{chapter.storyArc}</span>
+        </div>
+      </header>
 
-      {/* Tabs */}
-      <div style={{ 
-        borderBottom: '2px solid #e5e7eb', 
-        marginBottom: '2rem',
-        background: '#f9fafb',
-        borderRadius: '0.75rem 0.75rem 0 0',
-        padding: '0.5rem 0.5rem 0 0.5rem'
-      }}>
-        <nav style={{ display: 'flex', gap: '0.5rem' }}>
-          {[
-            { id: 'challenges', label: 'Challenges', icon: '⚔️' },
-            ...(chapter.id === 8 ? [{ id: 'ethics', label: 'Ethics', icon: '⚖️' }] : [])
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
-              style={{
-                padding: '0.75rem 1rem',
-                borderBottom: `3px solid ${activeTab === tab.id ? '#3b82f6' : 'transparent'}`,
-                fontWeight: '500',
-                fontSize: '0.875rem',
-                borderRadius: '0.5rem 0.5rem 0 0',
-                transition: 'all 0.2s ease',
-                background: activeTab === tab.id ? 'white' : 'transparent',
-                color: activeTab === tab.id ? '#3b82f6' : '#6b7280',
-                border: 'none',
-                cursor: 'pointer',
-                boxShadow: activeTab === tab.id ? '0 -2px 4px rgba(0,0,0,0.1)' : 'none'
-              }}
-              onMouseOver={(e) => {
-                if (activeTab !== tab.id) {
-                  e.currentTarget.style.color = '#374151';
-                  e.currentTarget.style.background = 'rgba(255,255,255,0.5)';
-                }
-              }}
-              onMouseOut={(e) => {
-                if (activeTab !== tab.id) {
-                  e.currentTarget.style.color = '#6b7280';
-                  e.currentTarget.style.background = 'transparent';
-                }
-              }}
-            >
-              <span style={{ marginRight: '0.5rem' }}>{tab.icon}</span>
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-      </div>
+      <nav className="mst-chapter-tabs">
+        {[
+          { id: 'challenges', label: 'Challenges', icon: '⚔️' },
+          ...(chapter.id === 8 ? [{ id: 'ethics', label: 'Ethics', icon: '⚖️' }] : [])
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id as any)}
+            className={`mst-chapter-tab${activeTab === tab.id ? ' mst-chapter-tab--active' : ''}`}
+          >
+            <span aria-hidden="true">{tab.icon}</span>
+            {tab.label}
+          </button>
+        ))}
+      </nav>
 
       {/* Tab Content */}
       <div className="min-h-[400px]">
