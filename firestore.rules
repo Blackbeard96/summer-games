@@ -658,8 +658,7 @@ service cloud.firestore {
     // Legacy Season 0 battle pass (claim tracking + premium flag). Doc ids: "{uid}_season0", "{uid}_season1", etc.
     match /battlePass/{docId} {
       allow read, write: if request.auth != null && (
-        (docId.size() >= request.auth.uid.size() + 7 &&
-          docId.substring(0, request.auth.uid.size() + 7) == request.auth.uid + '_season') ||
+        docId.matches('^' + request.auth.uid + '_season[0-9]+$') ||
         isAdmin()
       );
     }
@@ -938,6 +937,8 @@ service cloud.firestore {
     
     // Challenge completions collection - allow users to read/write their own completions
     match /challengeCompletions/{completionId} {
+      // Dashboard "Recent Completions" feed: everyone's latest few completions.
+      allow list: if request.auth != null && request.query.limit <= 10;
       allow read, write: if request.auth != null && 
         (resource.data.userId == request.auth.uid || 
          request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
@@ -1541,9 +1542,12 @@ service cloud.firestore {
       allow delete: if isProductivityAdmin();
     }
 
+    // Productivity log writers run a transaction that reads the log doc first; resource == null lets
+    // students confirm a new log does not exist yet.
     match /sprintProductivityLogs/{logId} {
       allow read: if request.auth != null && (
         isAssessmentDashboardStaff() ||
+        resource == null ||
         resource.data.userId == request.auth.uid
       );
       allow create, update: if productivitySprintWritable();
@@ -1595,10 +1599,12 @@ service cloud.firestore {
     }
 
     match /workDeclarations/{declarationId} {
+      // resource == null: students check for their declaration before the first save.
       allow read: if request.auth != null && (
         isLiveEventStaff() ||
         isAdmin() ||
         isAppAdminUser() ||
+        resource == null ||
         resource.data.studentId == request.auth.uid
       );
       allow create: if request.auth != null && (
@@ -1624,6 +1630,7 @@ service cloud.firestore {
         isLiveEventStaff() ||
         isAdmin() ||
         isAppAdminUser() ||
+        resource == null ||
         resource.data.studentId == request.auth.uid
       );
       allow create, update: if request.auth != null && (
@@ -1639,6 +1646,7 @@ service cloud.firestore {
     match /quizProductivityLogs/{logId} {
       allow read: if request.auth != null && (
         isAssessmentDashboardStaff() ||
+        resource == null ||
         resource.data.userId == request.auth.uid
       );
       allow create, update: if productivityQuizWritable();
@@ -1648,6 +1656,7 @@ service cloud.firestore {
     match /examProductivityLogs/{logId} {
       allow read: if request.auth != null && (
         isAssessmentDashboardStaff() ||
+        resource == null ||
         resource.data.userId == request.auth.uid
       );
       allow create, update: if productivityQuizWritable();
