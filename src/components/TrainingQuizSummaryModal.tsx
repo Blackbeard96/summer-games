@@ -1,5 +1,6 @@
 import React from 'react';
 import { TrainingAttempt } from '../types/trainingGrounds';
+import { attemptScoreLine } from '../utils/quizMatching';
 
 interface TrainingQuizSummaryModalProps {
   isOpen: boolean;
@@ -101,7 +102,7 @@ const TrainingQuizSummaryModal: React.FC<TrainingQuizSummaryModalProps> = ({
               <div className="mst-quiz-summary-stat-label">Score</div>
               <div className="mst-quiz-summary-stat-value">{percent}%</div>
               <div className="mst-quiz-summary-stat-note">
-                {scoreCorrect} / {scoreTotal} correct
+                {attemptScoreLine({ scoreCorrect, scoreTotal, percent })}
               </div>
             </div>
 

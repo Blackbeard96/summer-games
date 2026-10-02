@@ -170,6 +170,63 @@ export function pointsPossibleForOrder(
 }
 
 /**
+ * "X out of Y correct" for a saved attempt. The percent gives partial credit on multi-answer
+ * questions but X only counts fully correct answers, so say so when the two disagree.
+ */
+export function attemptScoreLine(attempt: { scoreCorrect: number; scoreTotal: number; percent: number }): string {
+  const correct = Number(attempt.scoreCorrect) || 0;
+  const total = Number(attempt.scoreTotal) || 0;
+  const base = `${correct} out of ${total} correct`;
+  const creditFromPercent = ((Number(attempt.percent) || 0) / 100) * total;
+  return total > 0 && creditFromPercent - correct >= 0.25 ? `${base} + partial credit` : base;
+}
+
+export function isLiveEventAttempt(attempt: { mode?: string; liveEventSourceSessionId?: string | null }): boolean {
+  return attempt.mode === 'live' || !!attempt.liveEventSourceSessionId;
+}
+
+export interface LiveSessionServedLike {
+  questionOrder?: string[] | null;
+  quizRoundIndex?: number | null;
+  perQuestionResults?: Record<string, Array<LiveResultRowLike & { questionId: string; quizRoundIndex?: number }>> | null;
+}
+
+/**
+ * Points available across every question actually served in a Live Event quiz, the same for every
+ * player, so unanswered questions count as missed. Battle Royale auto-repeat can serve more rounds
+ * than the quiz has questions. The final round only counts if it was scored: ending a quiz early
+ * skips scoring the question that was live.
+ */
+export function liveSessionServedPointsPossible(
+  session: LiveSessionServedLike,
+  questionsById: Map<string, TrainingQuestion>
+): number {
+  const order = session.questionOrder || [];
+  const questionByRound = new Map<number, string>();
+  let maxScoredRound = 0;
+  for (const rows of Object.values(session.perQuestionResults || {})) {
+    for (const row of rows || []) {
+      const round = Number(row.quizRoundIndex);
+      if (!Number.isFinite(round) || round <= 0) continue;
+      if (!questionByRound.has(round)) questionByRound.set(round, row.questionId);
+      maxScoredRound = Math.max(maxScoredRound, round);
+    }
+  }
+
+  const lastRound = Math.max(0, Math.floor(Number(session.quizRoundIndex) || 0));
+  if (lastRound === 0) return pointsPossibleForOrder(order, questionsById);
+
+  const servedRounds = maxScoredRound >= lastRound ? lastRound : Math.max(maxScoredRound, lastRound - 1);
+  const reshuffled = lastRound > order.length;
+  let total = 0;
+  for (let round = 1; round <= servedRounds; round++) {
+    const id = questionByRound.get(round) ?? (reshuffled ? undefined : order[round - 1]);
+    total += questionPointsPossible(id ? questionsById.get(id) : undefined);
+  }
+  return total;
+}
+
+/**
  * Live Event timer for one question. A per-question override wins; matching questions otherwise get
  * the quiz timer plus 10s per pair, and never less than double the quiz timer.
  */

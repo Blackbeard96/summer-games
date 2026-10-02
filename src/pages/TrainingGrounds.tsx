@@ -8,6 +8,7 @@ import {
 } from '../utils/trainingGroundsService';
 import { TrainingQuizSet, TrainingAttempt } from '../types/trainingGrounds';
 import { getClassesByStudent } from '../utils/assessmentGoalsFirestore';
+import { attemptScoreLine, isLiveEventAttempt } from '../utils/quizMatching';
 
 const TrainingGrounds: React.FC = () => {
   const { currentUser, isAdmin } = useAuth();
@@ -169,7 +170,9 @@ const TrainingGrounds: React.FC = () => {
 
                   {lastAttempt && (
                     <div className="mst-quiz-card-last">
-                      <div className="mst-quiz-reward-label">Last attempt</div>
+                      <div className="mst-quiz-reward-label">
+                        Last attempt{isLiveEventAttempt(lastAttempt) ? ' · Live Event' : ''}
+                      </div>
                       <div
                         className={`mst-quiz-score-value ${scoreClass}`}
                         style={{ fontSize: '1.75rem', margin: '0.15rem 0' }}
@@ -177,7 +180,7 @@ const TrainingGrounds: React.FC = () => {
                         {lastAttempt.percent}%
                       </div>
                       <div style={{ fontSize: '0.8125rem', color: 'var(--mst-text-muted)' }}>
-                        {lastAttempt.scoreCorrect} out of {lastAttempt.scoreTotal} correct
+                        {attemptScoreLine(lastAttempt)}
                       </div>
                       {lastAttempt.rewards &&
                         (lastAttempt.rewards.ppGained > 0 || lastAttempt.rewards.xpGained > 0) && (

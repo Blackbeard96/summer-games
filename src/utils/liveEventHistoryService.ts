@@ -37,7 +37,12 @@ import { getQuestions } from './trainingGroundsService';
 import { enrichAnswersWithSkills, recordSkillEvidenceFromAttempt } from './masteryService';
 import { listAcademicSkills } from './academicSkillService';
 import type { TrainingAnswer } from '../types/trainingGrounds';
-import { liveRowPartialCredit, liveRowPointsEarned, liveRowPointsPossible } from './quizMatching';
+import {
+  liveRowPartialCredit,
+  liveRowPointsEarned,
+  liveRowPointsPossible,
+  liveSessionServedPointsPossible,
+} from './quizMatching';
 
 const COLLECTION = 'liveEventSessions';
 const HIGH_MISS_MIN_RESPONSES = 8;
@@ -236,7 +241,8 @@ async function loadQuizSession(sessionId: string): Promise<LiveQuizSession | nul
 
 async function buildQuestionAndSkillAnalytics(
   quizSession: LiveQuizSession | null,
-  participantCount: number
+  participantCount: number,
+  preloadedBank?: Awaited<ReturnType<typeof getQuestions>>
 ): Promise<{
   questions: LiveEventQuestionRecord[];
   skills: LiveEventSkillAggregate[];
@@ -247,12 +253,14 @@ async function buildQuestionAndSkillAnalytics(
     return empty;
   }
 
-  let bankQuestions: Awaited<ReturnType<typeof getQuestions>> = [];
+  let bankQuestions: Awaited<ReturnType<typeof getQuestions>> = preloadedBank ?? [];
   let skillNameById: Record<string, string> = {};
-  try {
-    bankQuestions = await getQuestions(quizSession.quizId);
-  } catch {
-    bankQuestions = [];
+  if (!preloadedBank) {
+    try {
+      bankQuestions = await getQuestions(quizSession.quizId);
+    } catch {
+      bankQuestions = [];
+    }
   }
   try {
     const skills = await listAcademicSkills({ activeOnly: false });
@@ -337,7 +345,8 @@ function buildParticipantRecords(
   summary: SessionSummary,
   quizSession: LiveQuizSession | null,
   room: Record<string, unknown>,
-  eventType: string
+  eventType: string,
+  questionTotal: number
 ): LiveEventParticipantRecord[] {
   const players = (Array.isArray(room.players) ? room.players : []) as Array<{
     userId?: string;
@@ -354,7 +363,6 @@ function buildParticipantRecords(
   const correctCount = quizSession?.correctCount || {};
   const leaderboard = quizSession?.leaderboard || {};
   const perQ = quizSession?.perQuestionResults || {};
-  const questionTotal = quizSession?.questionOrder?.length || 0;
   const battle = isBattleEventType(eventType) || Object.values(summary.stats).some((s) => (s.eliminations || 0) > 0 || (s.damageDealt || 0) > 0);
 
   return Object.entries(summary.stats).map(([userId, stats]) => {
@@ -645,10 +653,15 @@ export async function archiveLiveEventSession(
       assignedCount = 0;
     }
 
-    const participants = buildParticipantRecords(summary, quizSession, room, eventType);
+    const bank = quizSession?.quizId ? await getQuestions(quizSession.quizId).catch(() => []) : [];
+    const questionTotal = quizSession
+      ? liveSessionServedPointsPossible(quizSession, new Map(bank.map((q) => [q.id, q])))
+      : 0;
+    const participants = buildParticipantRecords(summary, quizSession, room, eventType, questionTotal);
     const { questions, skills } = await buildQuestionAndSkillAnalytics(
       quizSession,
-      participants.length
+      participants.length,
+      quizSession?.quizId ? bank : undefined
     );
 
     const overview = buildOverview(participants, summary, skills, eventType, assignedCount);

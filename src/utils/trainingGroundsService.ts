@@ -31,7 +31,12 @@ import {
 } from '../types/trainingGrounds';
 import type { LiveQuizSession } from '../types/liveQuiz';
 import { enrichAnswersWithSkills } from './masteryService';
-import { liveRowPartialCredit, liveRowPointsEarned, liveRowPointsPossible } from './quizMatching';
+import {
+  liveRowPartialCredit,
+  liveRowPointsEarned,
+  liveRowPointsPossible,
+  liveSessionServedPointsPossible,
+} from './quizMatching';
 
 // ============================================================================
 // Quiz Sets
@@ -515,12 +520,12 @@ export async function syncLiveEventQuizToTrainingAttempt(
     const per = session.perQuestionResults || {};
     const rows = per[userId] ?? [];
     const correctFromRows = rows.reduce((sum, r) => sum + liveRowPointsEarned(r), 0);
-    let scoreCorrect = session.correctCount?.[userId] ?? correctFromRows;
+    let scoreCorrect = rows.length > 0 ? correctFromRows : session.correctCount?.[userId] ?? 0;
 
-    let scoreTotal = rows.reduce((sum, r) => sum + liveRowPointsPossible(r), 0);
-    if (scoreTotal === 0 && Array.isArray(session.questionOrder) && session.questionOrder.length > 0) {
-      scoreTotal = session.questionOrder.length;
-    }
+    const bank = await getQuestions(quizSetId).catch(() => [] as TrainingQuestion[]);
+    const bankById = new Map(bank.map((q) => [q.id, q]));
+    const answeredPossible = rows.reduce((sum, r) => sum + liveRowPointsPossible(r), 0);
+    const scoreTotal = Math.max(answeredPossible, liveSessionServedPointsPossible(session, bankById));
 
     const lb = session.leaderboard?.[userId] ?? 0;
     const hasParticipation =
@@ -574,7 +579,6 @@ export async function syncLiveEventQuizToTrainingAttempt(
 
     // Skill Mastery from Live Event answers (student self-write; centralized mastery path)
     try {
-      const bank = await getQuestions(quizSetId);
       const enriched = enrichAnswersWithSkills(answers, bank);
       if (enriched.some((a) => a.skillIds?.length)) {
         const { recordSkillEvidenceFromAttempt } = await import('./masteryService');

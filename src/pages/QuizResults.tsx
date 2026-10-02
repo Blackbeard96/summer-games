@@ -5,7 +5,12 @@ import { getAttempt, getQuizSet, getQuestions, isTrainingQuizAcceptingSoloComple
 import { TrainingAttempt, TrainingQuestion, TrainingQuizSet } from '../types/trainingGrounds';
 import TrainingQuizSummaryModal from '../components/TrainingQuizSummaryModal';
 import MatchingQuestionBoard from '../components/quiz/MatchingQuestionBoard';
-import { answerPointsEarned, isMatchingQuestion, questionPointsPossible } from '../utils/quizMatching';
+import {
+  answerPointsEarned,
+  attemptScoreLine,
+  isMatchingQuestion,
+  questionPointsPossible,
+} from '../utils/quizMatching';
 
 const QuizResults: React.FC = () => {
   const { attemptId } = useParams<{ attemptId: string }>();
@@ -108,9 +113,7 @@ const QuizResults: React.FC = () => {
 
             <div className="mst-quiz-score">
               <div className={`mst-quiz-score-value ${scoreTier}`}>{attempt.percent}%</div>
-              <p className="mst-quiz-score-meta">
-                {attempt.scoreCorrect} out of {attempt.scoreTotal} correct
-              </p>
+              <p className="mst-quiz-score-meta">{attemptScoreLine(attempt)}</p>
             </div>
 
             <div className="mst-mission-block mst-mission-block--accent">

@@ -145,7 +145,7 @@ import { isSelfDirectedBattleMove, isValidLiveEventRosterTarget } from '../utils
 import { computeLiveEventParticipationSkillCost } from '../utils/liveEventSkillCost';
 import { FLOW_STATE_SUCCESS_THRESHOLD } from '../utils/liveEventFlowState';
 import MatchingQuestionBoard from './quiz/MatchingQuestionBoard';
-import { isMatchingQuestion, matchPairsOf, pointsPossibleForOrder } from '../utils/quizMatching';
+import { isMatchingQuestion, liveSessionServedPointsPossible, matchPairsOf } from '../utils/quizMatching';
 import {
   getPassiveParticipationUi,
   formatPassiveParticipationCountdown,
@@ -6078,7 +6078,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   {/* Host only: how every player did — per-player breakdown */}
                   {isSessionHost && (() => {
                     const questionMap = new Map(quizQuestions.map((q) => [q.id, q]));
-                    const totalQuestions = pointsPossibleForOrder(quizSession.questionOrder, questionMap);
+                    const totalQuestions = liveSessionServedPointsPossible(quizSession, questionMap);
                     return (
                       <div style={{
                         marginTop: '1.25rem',
@@ -6158,11 +6158,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   {currentUser && (() => {
                     const uid = currentUser.uid;
                     const myCorrect = quizSession.correctCount?.[uid] ?? 0;
-                    const totalQuestions = pointsPossibleForOrder(
-                      quizSession.questionOrder,
+                    const totalQuestions = liveSessionServedPointsPossible(
+                      quizSession,
                       new Map(quizQuestions.map((q) => [q.id, q]))
                     );
-                    const myWrong = totalQuestions - myCorrect;
+                    const myWrong = Math.max(0, totalQuestions - myCorrect);
                     const passPct = totalQuestions > 0 ? Math.round((myCorrect / totalQuestions) * 100) : 0;
                     const myEntry = entriesWithPP.find((e) => e.uid === uid);
                     const placementPP = myEntry?.ppEarned ?? 0;

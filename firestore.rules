@@ -515,8 +515,10 @@ service cloud.firestore {
     
     // Assessment Goals collection - students can create/update their own goals if assessment is not locked
     match /assessmentGoals/{goalId} {
+      // resource == null: students check whether their goal exists before the first save.
       allow get: if request.auth != null && (
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+        resource == null ||
         request.auth.uid == resource.data.studentId
       );
       allow list: if isAssessmentDashboardStaff();
@@ -556,8 +558,10 @@ service cloud.firestore {
     
     // Assessment Results collection - students can read their own results, admins can manage all
     match /assessmentResults/{resultId} {
+      // resource == null: ungraded assessments have no result doc yet.
       allow get: if request.auth != null && (
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+        resource == null ||
         request.auth.uid == resource.data.studentId
       );
       allow list: if isAssessmentDashboardStaff();
@@ -573,6 +577,7 @@ service cloud.firestore {
       allow get: if request.auth != null && (
         isLiveEventStaff() ||
         isAdmin() || isAppAdminUser() ||
+        resource == null ||
         resource.data.studentId == request.auth.uid ||
         (exists(/databases/$(database)/documents/classrooms/$(resource.data.classId)) &&
          request.auth.uid in get(/databases/$(database)/documents/classrooms/$(resource.data.classId)).data.students)

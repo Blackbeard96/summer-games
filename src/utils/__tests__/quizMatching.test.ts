@@ -1,7 +1,9 @@
 import type { TrainingAnswer, TrainingQuestion } from '../../types/trainingGrounds';
 import {
+  attemptScoreLine,
   buildMatchingAnswer,
   liveQuestionTimeLimitSeconds,
+  liveSessionServedPointsPossible,
   liveRowPartialCredit,
   liveRowPointsEarned,
   liveRowPointsPossible,
@@ -100,6 +102,59 @@ describe('live result rows', () => {
       [matching.id, matching],
     ]);
     expect(pointsPossibleForOrder(['q1', 'm1', 'missing'], byId)).toBe(6);
+  });
+});
+
+describe('live session served points', () => {
+  const byId = new Map([
+    [mc.id, mc],
+    [matching.id, matching],
+  ]);
+  const row = (questionId: string, quizRoundIndex: number, isCorrect = true) => ({
+    questionId,
+    quizRoundIndex,
+    isCorrect,
+  });
+
+  it('counts questions a player skipped as missed', () => {
+    const session = {
+      questionOrder: ['q1', 'q2', 'q3'],
+      quizRoundIndex: 3,
+      perQuestionResults: { late: [row('q3', 3)], early: [row('q1', 1), row('q2', 2), row('q3', 3)] },
+    };
+    expect(liveSessionServedPointsPossible(session, byId)).toBe(3);
+  });
+
+  it('counts every round Battle Royale auto-repeat served', () => {
+    const session = {
+      questionOrder: ['q1', 'm1'],
+      quizRoundIndex: 5,
+      perQuestionResults: { p: [row('q1', 1), row('m1', 2), row('m1', 3), row('q1', 4), row('q1', 5)] },
+    };
+    expect(liveSessionServedPointsPossible(session, byId)).toBe(1 + 4 + 4 + 1 + 1);
+  });
+
+  it('skips the live question when the host ends a quiz early', () => {
+    const session = {
+      questionOrder: ['q1', 'q2', 'q3', 'q4'],
+      quizRoundIndex: 2,
+      perQuestionResults: { p: [row('q1', 1)] },
+    };
+    expect(liveSessionServedPointsPossible(session, byId)).toBe(1);
+  });
+
+  it('falls back to the question order for sessions without round numbers', () => {
+    expect(liveSessionServedPointsPossible({ questionOrder: ['q1', 'm1'] }, byId)).toBe(5);
+  });
+});
+
+describe('attempt score line', () => {
+  it('flags partial credit only when the percent includes it', () => {
+    expect(attemptScoreLine({ scoreCorrect: 7, scoreTotal: 8, percent: 88 })).toBe('7 out of 8 correct');
+    expect(attemptScoreLine({ scoreCorrect: 3, scoreTotal: 5, percent: 70 })).toBe(
+      '3 out of 5 correct + partial credit'
+    );
+    expect(attemptScoreLine({ scoreCorrect: 0, scoreTotal: 0, percent: 0 })).toBe('0 out of 0 correct');
   });
 });
 
