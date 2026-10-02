@@ -15,6 +15,14 @@ import { calculateQuizRewards, grantQuizRewards } from '../utils/trainingGrounds
 import { TrainingQuizSet, TrainingQuestion, TrainingAnswer, TrainingAttempt } from '../types/trainingGrounds';
 import { recordQuizProductivityAttempt } from '../utils/productivityTracking';
 import { enrichAnswersWithSkills, recordSkillEvidenceFromAttempt } from '../utils/masteryService';
+import {
+  buildMatchingAnswer,
+  isMatchingQuestion,
+  matchPairsOf,
+  questionPointsPossible,
+  quizPointTotals,
+} from '../utils/quizMatching';
+import MatchingQuestionBoard from '../components/quiz/MatchingQuestionBoard';
 
 const QuizPlayer: React.FC = () => {
   const { quizSetId } = useParams<{ quizSetId: string }>();
@@ -34,6 +42,7 @@ const QuizPlayer: React.FC = () => {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null); // For backwards compatibility
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set()); // For multi-select
+  const [matchSelections, setMatchSelections] = useState<Record<string, string>>({});
   const [answers, setAnswers] = useState<TrainingAnswer[]>([]);
   const [showFeedback, setShowFeedback] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -129,6 +138,24 @@ const QuizPlayer: React.FC = () => {
 
   const handleSubmitAnswer = () => {
     const currentQuestion = questions[currentQuestionIndex];
+    if (isMatchingQuestion(currentQuestion)) {
+      const pairCount = matchPairsOf(currentQuestion).length;
+      const placed = Object.keys(matchSelections).length;
+      if (placed === 0) {
+        alert('Drag at least one card onto its match first.');
+        return;
+      }
+      if (
+        placed < pairCount &&
+        !window.confirm(`You matched ${placed} of ${pairCount} cards. Submit anyway? Unmatched cards score 0.`)
+      ) {
+        return;
+      }
+      const answer = buildMatchingAnswer(currentQuestion, matchSelections, Date.now() - questionStartTime);
+      setAnswers([...answers, answer]);
+      setShowFeedback(true);
+      return;
+    }
     const correctIndices = currentQuestion.correctIndices || 
       (currentQuestion.correctIndex !== undefined ? [currentQuestion.correctIndex] : []);
     
@@ -191,6 +218,8 @@ const QuizPlayer: React.FC = () => {
     if (currentQuestionIndex < questions.length - 1) {
       setCurrentQuestionIndex(currentQuestionIndex + 1);
       setSelectedAnswer(null);
+      setSelectedIndices(new Set());
+      setMatchSelections({});
       setShowFeedback(false);
       setQuestionStartTime(Date.now());
     } else {
@@ -206,17 +235,11 @@ const QuizPlayer: React.FC = () => {
       // Calculate rewards
       const rewardResult = calculateQuizRewards(questions, answers);
       
-      // Calculate score with partial credit
-      let totalScore = 0;
-      answers.forEach(answer => {
-        const partialCredit = answer.partialCredit !== undefined ? answer.partialCredit : (answer.isCorrect ? 1.0 : 0.0);
-        totalScore += partialCredit;
-      });
-      const totalQuestions = questions.length;
-      const percent = totalQuestions > 0 ? Math.round((totalScore / totalQuestions) * 100) : 0;
-      
-      // For display, count fully correct answers
-      const correctCount = answers.filter(a => a.isCorrect).length;
+      // Score in points: 1 per multiple-choice question (partial credit for the percent) + 1 per match
+      const totals = quizPointTotals(questions, answers);
+      const totalQuestions = totals.possible;
+      const percent = totals.percent;
+      const correctCount = totals.earnedWhole;
       
       // Clean answers to remove undefined values (Firestore doesn't allow undefined)
       const enriched = enrichAnswersWithSkills(answers, questions);
@@ -230,6 +253,9 @@ const QuizPlayer: React.FC = () => {
           skillIds: Array.isArray(answer.skillIds) ? answer.skillIds : [],
         };
         if (answer.difficulty) cleaned.difficulty = answer.difficulty;
+        if (answer.matchSelections) cleaned.matchSelections = answer.matchSelections;
+        if (typeof answer.pointsEarned === 'number') cleaned.pointsEarned = answer.pointsEarned;
+        if (typeof answer.pointsPossible === 'number') cleaned.pointsPossible = answer.pointsPossible;
         // Only include selectedIndex if it exists (for backwards compatibility)
         if (answer.selectedIndex !== undefined) {
           cleaned.selectedIndex = answer.selectedIndex;
@@ -337,6 +363,8 @@ const QuizPlayer: React.FC = () => {
 
   const currentQuestion = questions[currentQuestionIndex];
   const progress = ((currentQuestionIndex + 1) / questions.length) * 100;
+  const isMatching = isMatchingQuestion(currentQuestion);
+  const currentAnswer = showFeedback ? answers[currentQuestionIndex] : undefined;
   
   // Get correct indices (support both old and new format)
   const correctIndices = currentQuestion.correctIndices || 
@@ -357,7 +385,9 @@ const QuizPlayer: React.FC = () => {
     isCorrect = allCorrect && noIncorrect && correctIndices.length === selectedIndices.size;
   }
 
-  const canSubmit = selectedIndices.size > 0 || selectedAnswer !== null;
+  const canSubmit = isMatching
+    ? Object.keys(matchSelections).length > 0
+    : selectedIndices.size > 0 || selectedAnswer !== null;
 
   return (
     <div className="mst-mission-shell">
@@ -378,6 +408,7 @@ const QuizPlayer: React.FC = () => {
             <h1 className="mst-mission-title">{quizSet.title}</h1>
             <p className="mst-mission-step-meta">
               Question {currentQuestionIndex + 1} of {questions.length}
+              {isMatching ? ` · Matching (${questionPointsPossible(currentQuestion)} points)` : ''}
               {' · '}
               {Math.round(progress)}%
             </p>
@@ -414,7 +445,17 @@ const QuizPlayer: React.FC = () => {
             </div>
           )}
 
-          {!showFeedback && (
+          {isMatching && (
+            <MatchingQuestionBoard
+              question={currentQuestion}
+              selections={showFeedback ? currentAnswer?.matchSelections || {} : matchSelections}
+              onChange={setMatchSelections}
+              reveal={showFeedback}
+              seed={`${currentQuestion.id}:${currentUser?.uid || ''}`}
+            />
+          )}
+
+          {!showFeedback && !isMatching && (
             <p className={`mst-quiz-hint${isMultiSelect ? ' mst-quiz-hint--multi' : ''}`}>
               {isMultiSelect ? (
                 <>
@@ -426,6 +467,7 @@ const QuizPlayer: React.FC = () => {
             </p>
           )}
 
+          {!isMatching && (
           <div className="mst-quiz-options">
             {currentQuestion.options.map((option, index) => {
               const isSelected = isMultiSelect ? selectedIndices.has(index) : selectedAnswer === index;
@@ -460,11 +502,18 @@ const QuizPlayer: React.FC = () => {
               );
             })}
           </div>
+          )}
 
           {showFeedback && (
             <div className={`mst-quiz-feedback ${isCorrect ? 'mst-quiz-feedback--ok' : 'mst-quiz-feedback--bad'}`}>
               <p className="mst-quiz-feedback-title">
-                {isCorrect ? '✓ Correct' : '✗ Incorrect'}
+                {isMatching
+                  ? `${isCorrect ? '✓' : '✗'} ${currentAnswer?.pointsEarned ?? 0} of ${
+                      currentAnswer?.pointsPossible ?? questionPointsPossible(currentQuestion)
+                    } matches correct`
+                  : isCorrect
+                    ? '✓ Correct'
+                    : '✗ Incorrect'}
               </p>
               {currentQuestion.explanation && (
                 <p className="mst-quiz-feedback-copy">{currentQuestion.explanation}</p>

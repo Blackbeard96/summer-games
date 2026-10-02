@@ -97,6 +97,24 @@ function rankSortKey(label: ProductivityRankLabel): number {
   return idx >= 0 ? idx : 99;
 }
 
+const stickyHeadCell: React.CSSProperties = {
+  position: 'sticky',
+  top: 0,
+  zIndex: 2,
+  padding: '0.6rem',
+  background: '#f3f4f6',
+  boxShadow: 'inset 0 -1px 0 #e5e7eb',
+  whiteSpace: 'nowrap',
+};
+
+const stickyNameCell: React.CSSProperties = {
+  position: 'sticky',
+  left: 0,
+  zIndex: 1,
+  background: 'white',
+  boxShadow: 'inset -1px 0 0 #e5e7eb',
+};
+
 function MiniBar({ pct, color }: { pct: number; color: string }) {
   const p = Math.max(0, Math.min(100, pct));
   return (
@@ -927,41 +945,57 @@ const ProductivityDashboardAdmin: React.FC<{
             </label>
           </div>
 
-          <div style={{ marginTop: '1rem', overflowX: 'auto', background: 'white', borderRadius: 12, border: '1px solid #e5e7eb' }}>
+          <div
+            style={{
+              marginTop: '1rem',
+              overflow: 'auto',
+              maxHeight: 'calc(100vh - 140px)',
+              background: 'white',
+              borderRadius: 12,
+              border: '1px solid #e5e7eb',
+            }}
+          >
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
-                <tr style={{ background: '#f3f4f6', textAlign: 'left' }}>
-                  <th style={{ padding: '0.6rem', cursor: 'pointer' }} onClick={() => toggleSort('name')}>
+                <tr style={{ textAlign: 'left' }}>
+                  <th style={{
+                      ...stickyHeadCell,
+                      ...stickyNameCell,
+                      zIndex: 4,
+                      background: '#f3f4f6',
+                      boxShadow: 'inset -1px -1px 0 #e5e7eb',
+                      cursor: 'pointer',
+                    }} onClick={() => toggleSort('name')}>
                     Student
                   </th>
-                  <th style={{ padding: '0.6rem' }}>Class</th>
-                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Physical</th>
-                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Mental</th>
-                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Emotional</th>
-                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Spiritual</th>
-                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Σ Done</th>
-                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Work %</th>
-                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Last work</th>
-                  <th style={{ padding: '0.6rem' }}>Rank</th>
-                  <th style={{ padding: '0.6rem', cursor: 'pointer' }} onClick={() => toggleSort('sprintRate')}>
+                  <th style={stickyHeadCell}>Class</th>
+                  <th style={{ ...stickyHeadCell, fontSize: 12 }}>Physical</th>
+                  <th style={{ ...stickyHeadCell, fontSize: 12 }}>Mental</th>
+                  <th style={{ ...stickyHeadCell, fontSize: 12 }}>Emotional</th>
+                  <th style={{ ...stickyHeadCell, fontSize: 12 }}>Spiritual</th>
+                  <th style={{ ...stickyHeadCell, fontSize: 12 }}>Σ Done</th>
+                  <th style={{ ...stickyHeadCell, fontSize: 12 }}>Work %</th>
+                  <th style={{ ...stickyHeadCell, fontSize: 12 }}>Last work</th>
+                  <th style={stickyHeadCell}>Rank</th>
+                  <th style={{ ...stickyHeadCell, cursor: 'pointer' }} onClick={() => toggleSort('sprintRate')}>
                     Sprints J / C
                   </th>
-                  <th style={{ padding: '0.6rem' }}>% Sprint</th>
-                  <th style={{ padding: '0.6rem', cursor: 'pointer' }} onClick={() => toggleSort('quiz')}>
+                  <th style={stickyHeadCell}>% Sprint</th>
+                  <th style={{ ...stickyHeadCell, cursor: 'pointer' }} onClick={() => toggleSort('quiz')}>
                     Quiz avg
                   </th>
-                  <th style={{ padding: '0.6rem' }}># Quiz</th>
-                  <th style={{ padding: '0.6rem', cursor: 'pointer' }} onClick={() => toggleSort('exam')}>
+                  <th style={stickyHeadCell}># Quiz</th>
+                  <th style={{ ...stickyHeadCell, cursor: 'pointer' }} onClick={() => toggleSort('exam')}>
                     Exam avg
                   </th>
-                  <th style={{ padding: '0.6rem' }}># Exam</th>
-                  <th style={{ padding: '0.6rem', cursor: 'pointer' }} onClick={() => toggleSort('streak')}>
+                  <th style={stickyHeadCell}># Exam</th>
+                  <th style={{ ...stickyHeadCell, cursor: 'pointer' }} onClick={() => toggleSort('streak')}>
                     Streak
                   </th>
-                  <th style={{ padding: '0.6rem', cursor: 'pointer' }} onClick={() => toggleSort('overall')}>
+                  <th style={{ ...stickyHeadCell, cursor: 'pointer' }} onClick={() => toggleSort('overall')}>
                     Weekly / Overall
                   </th>
-                  <th style={{ padding: '0.6rem' }}>Badge</th>
+                  <th style={stickyHeadCell}>Badge</th>
                 </tr>
               </thead>
               <tbody>
@@ -978,7 +1012,7 @@ const ProductivityDashboardAdmin: React.FC<{
                         cursor: 'pointer',
                       }}
                     >
-                      <td style={{ padding: '0.6rem', fontWeight: 600 }}>
+                      <td style={{ ...stickyNameCell, padding: '0.6rem', fontWeight: 600 }}>
                         {r.displayName || r.email || r.id.slice(0, 8)}
                       </td>
                       <td style={{ padding: '0.6rem', color: '#4b5563' }}>{studentClassLabel(r.id)}</td>

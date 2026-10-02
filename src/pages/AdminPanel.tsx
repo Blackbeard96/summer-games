@@ -2258,10 +2258,10 @@ const AdminPanel: React.FC = () => {
         // Import progression engine and reward system
         const { updateProgressOnChallengeComplete } = await import('../utils/chapterProgression');
         const { grantChallengeRewards } = await import('../utils/challengeRewards');
+        const { getEffectiveJourneyChallenge } = await import('../utils/journeyChallengeConfigStore');
         
         // Get challenge definition for rewards
-        const currentChapter = CHAPTERS.find(ch => ch.id === sub.chapterId);
-        const challenge = currentChapter?.challenges.find(c => c.id === sub.challengeId);
+        const challenge = await getEffectiveJourneyChallenge(sub.chapterId, sub.challengeId);
         
         // Use the canonical progression engine to handle challenge completion and unlocking
         const progressionResult = await updateProgressOnChallengeComplete(

@@ -174,6 +174,13 @@ export interface PlayerJourneyLink {
   challengeId: string;       // Challenge ID (e.g., "ep1-get-letter", "ch2-team-formation")
 }
 
+/** Inserts the mission into a Journey chapter as its own numbered step. */
+export interface JourneyPlacement {
+  chapterId: number;
+  /** Challenge id this step follows; null / empty = end of chapter. */
+  afterChallengeId?: string | null;
+}
+
 export interface MissionTemplate {
   id: string;
   title: string;
@@ -201,6 +208,7 @@ export interface MissionTemplate {
   story?: StoryMetadata;      // only for STORY missions
   profile?: ProfileMetadata;  // only for PROFILE missions — which journey stage to add content to
   playerJourneyLink?: PlayerJourneyLink; // Link to Player Journey step
+  journeyPlacement?: JourneyPlacement;
   /** Journey interactive type (STORY / Player's Journey missions). */
   journeyMissionType?: JourneyMissionType;
   /** Chapter number for Journey listing (mirrors story.chapterId when numeric). */

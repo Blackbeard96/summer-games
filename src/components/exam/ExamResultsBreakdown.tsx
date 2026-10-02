@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import type { TrainingAnswer, TrainingQuestion } from '../../types/trainingGrounds';
+import MatchingQuestionBoard from '../quiz/MatchingQuestionBoard';
+import { answerPointsEarned, isMatchingQuestion, questionPointsPossible } from '../../utils/quizMatching';
 
 export interface ExamResultsBreakdownProps {
   questions: TrainingQuestion[];
@@ -124,6 +126,22 @@ const ExamResultsBreakdown: React.FC<ExamResultsBreakdownProps> = ({
                       />
                     </div>
                   ) : null}
+                  {isMatchingQuestion(question) ? (
+                    <div style={{ marginBottom: '0.5rem' }}>
+                      <p style={{ margin: '0 0 0.5rem', color: '#334155', fontWeight: 600 }}>
+                        {answer ? answerPointsEarned(answer, question) : 0} of {questionPointsPossible(question)} matches
+                        correct
+                      </p>
+                      <MatchingQuestionBoard
+                        question={question}
+                        className="mst-match--light"
+                        selections={answer?.matchSelections || {}}
+                        disabled
+                        reveal
+                      />
+                    </div>
+                  ) : (
+                  <>
                   <p style={{ margin: '0 0 0.5rem', color: '#334155' }}>
                     <strong>Your answer:</strong>{' '}
                     <span
@@ -146,6 +164,8 @@ const ExamResultsBreakdown: React.FC<ExamResultsBreakdownProps> = ({
                       {formatChoiceLabels(question, correctIndices)}
                     </span>
                   </p>
+                  </>
+                  )}
                   {question.explanation ? (
                     <p
                       style={{

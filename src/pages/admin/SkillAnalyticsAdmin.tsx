@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { listAcademicSkills } from '../../utils/academicSkillService';
@@ -9,6 +9,7 @@ import {
 } from '../../utils/masteryService';
 import { AcademicSkill } from '../../types/academicSkills';
 import MasteryBadge from '../../components/skills/MasteryBadge';
+import SkillAnswerDetailPanel from '../../components/skills/SkillAnswerDetailPanel';
 import { getMasteryBand } from '../../utils/masteryCalculations';
 
 const SkillAnalyticsAdmin: React.FC = () => {
@@ -24,6 +25,7 @@ const SkillAnalyticsAdmin: React.FC = () => {
   const [syncProgress, setSyncProgress] = useState<{ done: number; total: number } | null>(null);
   const [syncResult, setSyncResult] = useState<SkillHistorySyncResult | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -97,6 +99,9 @@ const SkillAnalyticsAdmin: React.FC = () => {
     })
     .sort((a, b) => b.classMastery - a.classMastery);
 
+  const selectedClassroom = classrooms.find((c) => c.id === classId);
+  const closeSkillDetail = useCallback(() => setSelectedSkillId(null), []);
+
   const categories = useMemo(() => {
     const set = new Set(skills.map((s) => s.category || 'Uncategorized'));
     return Array.from(set).sort();
@@ -108,7 +113,7 @@ const SkillAnalyticsAdmin: React.FC = () => {
         Skill Analytics
       </h1>
       <p style={{ margin: '0.35rem 0 1rem', color: '#9ca3af', fontSize: '0.9rem' }}>
-        Class-wide academic mastery from tagged CFU questions.
+        Class-wide academic mastery from tagged CFU questions. Click a skill to see how each player answered.
       </p>
 
       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
@@ -179,9 +184,23 @@ const SkillAnalyticsAdmin: React.FC = () => {
                 const skill = skillName[r.skillId];
                 const band = getMasteryBand(r.classMastery, r.attempts > 0 ? 1 : 0);
                 return (
-                  <tr key={r.skillId} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                  <tr
+                    key={r.skillId}
+                    tabIndex={0}
+                    title="See how each player answered"
+                    onClick={() => setSelectedSkillId(r.skillId)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setSelectedSkillId(r.skillId);
+                      }
+                    }}
+                    style={{ borderTop: '1px solid rgba(255,255,255,0.06)', cursor: 'pointer' }}
+                  >
                     <td style={td}>
-                      <div style={{ fontWeight: 700 }}>{skill?.name || r.skillId}</div>
+                      <div style={{ fontWeight: 700, color: '#f0c96a', textDecoration: 'underline', textUnderlineOffset: 3 }}>
+                        {skill?.name || r.skillId}
+                      </div>
                       <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
                         {skill?.category || '—'}
                       </div>
@@ -199,6 +218,16 @@ const SkillAnalyticsAdmin: React.FC = () => {
             </tbody>
           </table>
         </div>
+      )}
+
+      {selectedSkillId && selectedClassroom && (
+        <SkillAnswerDetailPanel
+          skillId={selectedSkillId}
+          skill={skillName[selectedSkillId]}
+          classStudentIds={selectedClassroom.students}
+          className={selectedClassroom.name}
+          onClose={closeSkillDetail}
+        />
       )}
     </div>
   );

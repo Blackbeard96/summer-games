@@ -1,4 +1,5 @@
 import type { TrainingQuestion } from '../types/trainingGrounds';
+import { isMatchingQuestion, matchCardLabel, matchPairsOf } from './quizMatching';
 
 type ExportableCFU = Partial<TrainingQuestion> & {
   quizSetTitle?: string;
@@ -23,6 +24,12 @@ function formatDateCell(value: unknown): string {
 }
 
 function buildCorrectAnswerLabel(question: ExportableCFU): string {
+  if (isMatchingQuestion(question)) {
+    const pairs = matchPairsOf(question);
+    return `Matching (${pairs.length} pts): ${pairs
+      .map((p) => `${matchCardLabel(p.prompt)} → ${matchCardLabel(p.response)}`)
+      .join(' | ')}`;
+  }
   const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   const indices =
     Array.isArray(question.correctIndices) && question.correctIndices.length > 0

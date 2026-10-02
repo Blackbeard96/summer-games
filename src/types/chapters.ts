@@ -36,6 +36,8 @@ export interface ChapterChallenge {
   isCompleted: boolean;
   completionDate?: Date;
   googleClassroomAssignment?: GoogleClassroomAssignment;
+  /** Set for Journey steps added in Mission Admin (played via MissionRunner). */
+  linkedMissionId?: string;
 }
 
 export interface GoogleClassroomAssignment {

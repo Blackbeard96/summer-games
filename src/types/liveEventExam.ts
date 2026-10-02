@@ -1,5 +1,6 @@
 import type { Timestamp } from 'firebase/firestore';
 import type { TrainingAnswer, TrainingQuestion } from './trainingGrounds';
+import { answerPointsEarned, answerPointsPossible, questionPointsPossible } from '../utils/quizMatching';
 
 /** Admin-configurable behavior for Exam Live Events (stored on inSessionRooms). */
 export interface LiveEventExamSettings {
@@ -60,17 +61,20 @@ export function computeExamScoreFromBank(
   const aligned: TrainingAnswer[] = [];
   let scoreSum = 0;
   let correctCount = 0;
+  let total = 0;
 
   for (const q of questions) {
     const a = byId.get(q.id);
-    if (!a) continue;
+    if (!a) {
+      total += questionPointsPossible(q);
+      continue;
+    }
     aligned.push(a);
-    const pc = a.partialCredit ?? (a.isCorrect ? 1 : 0);
-    scoreSum += pc;
+    total += answerPointsPossible(a, q);
+    scoreSum += answerPointsEarned(a, q);
     if (a.isCorrect) correctCount += 1;
   }
 
-  const total = questions.length;
   const scorePercent =
     total > 0 ? Math.round((scoreSum / total) * 1000) / 10 : 0;
 

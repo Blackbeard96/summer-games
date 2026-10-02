@@ -22,6 +22,12 @@ import {
 } from '../types/liveEventExam';
 import type { TrainingAnswer, TrainingQuestion } from '../types/trainingGrounds';
 import { tsMs } from './productivityTracking';
+import {
+  answerPointsEarned,
+  answerPointsPossible,
+  buildMatchingAnswer,
+  isMatchingQuestion,
+} from './quizMatching';
 import { updatePlayerWorkStats } from './workStatsTracking';
 import { recordQuizProductivityAttempt } from './productivityTracking';
 import { getEnergyTypeForMode } from './season1Energy';
@@ -74,7 +80,8 @@ export function isExamProgressStale(
   examQuizSetId: string,
   examStartedAtMs: number | null,
   questionIds: string[],
-  totalQuestions: number
+  totalQuestions: number,
+  questions: TrainingQuestion[] = []
 ): boolean {
   const progressQuizId = typeof data.examQuizSetId === 'string' ? data.examQuizSetId : '';
   if (progressQuizId && examQuizSetId && progressQuizId !== examQuizSetId) return true;
@@ -102,10 +109,13 @@ export function isExamProgressStale(
   }
 
   if (completed && questionIds.length > 0 && totalQuestions > 0) {
-    const stubQuestions = questionIds.map((id) => ({ id })) as import('../types/trainingGrounds').TrainingQuestion[];
-    const stored = computeExamScoreFromBank(stubQuestions, answers);
+    const byId = new Map(questions.map((q) => [q.id, q]));
+    const bank = questionIds.map((id) => byId.get(id) ?? ({ id } as TrainingQuestion));
+    const stored = computeExamScoreFromBank(bank, answers);
     const storedPercent = Number(data.scorePercent) || 0;
-    if (Math.abs(storedPercent - stored.scorePercent) > 0.5) return true;
+    // Matching questions are weighted per pair, which id-only stubs can't reproduce.
+    const hasPointWeightedAnswers = answers.some((a) => typeof a.pointsPossible === 'number');
+    if (!hasPointWeightedAnswers && Math.abs(storedPercent - stored.scorePercent) > 0.5) return true;
     if ((Number(data.correctCount) || 0) !== stored.correctCount) return true;
   }
 
@@ -166,7 +176,8 @@ export async function ensureExamProgressDoc(
   totalQuestions: number,
   examQuizSetId: string,
   examStartedAtMs: number | null,
-  questionIds: string[] = []
+  questionIds: string[] = [],
+  questions: TrainingQuestion[] = []
 ): Promise<PlayerExamProgress> {
   const ref = examProgressRef(sessionId, playerId);
   const snap = await getDoc(ref);
@@ -195,7 +206,7 @@ export async function ensureExamProgressDoc(
 
   const data = snap.data() as Record<string, unknown>;
 
-  if (isExamProgressStale(data, examQuizSetId, examStartedAtMs, questionIds, totalQuestions)) {
+  if (isExamProgressStale(data, examQuizSetId, examStartedAtMs, questionIds, totalQuestions, questions)) {
     const fresh = buildFresh();
     await setDoc(ref, fresh);
     return parsePlayerExamProgress(playerId, fresh);
@@ -300,40 +311,48 @@ export async function submitExamAnswer(args: {
   question: TrainingQuestion;
   questionIndex: number;
   selectedIndices: number[];
+  /** Matching questions: prompt pair id -> placed response pair id */
+  matchSelections?: Record<string, string>;
   totalQuestions: number;
   timeSpentMs: number;
   existingAnswers: TrainingAnswer[];
   examQuizSetId?: string;
 }): Promise<PlayerExamProgress> {
-  const { isCorrect, partialCredit } = scoreAnswer(args.question, args.selectedIndices);
-  const correctIndices =
-    args.question.correctIndices ??
-    (args.question.correctIndex !== undefined ? [args.question.correctIndex] : []);
-
-  const answer: TrainingAnswer = {
-    questionId: args.question.id,
-    ...(correctIndices.length === 1 && args.selectedIndices.length === 1
-      ? { selectedIndex: args.selectedIndices[0] }
-      : {}),
-    selectedIndices: args.selectedIndices,
-    isCorrect,
-    partialCredit,
-    timeSpentMs: args.timeSpentMs,
-  };
+  let answer: TrainingAnswer;
+  if (isMatchingQuestion(args.question)) {
+    answer = buildMatchingAnswer(args.question, args.matchSelections || {}, args.timeSpentMs);
+  } else {
+    const { isCorrect, partialCredit } = scoreAnswer(args.question, args.selectedIndices);
+    const correctIndices =
+      args.question.correctIndices ??
+      (args.question.correctIndex !== undefined ? [args.question.correctIndex] : []);
+    answer = {
+      questionId: args.question.id,
+      ...(correctIndices.length === 1 && args.selectedIndices.length === 1
+        ? { selectedIndex: args.selectedIndices[0] }
+        : {}),
+      selectedIndices: args.selectedIndices,
+      isCorrect,
+      partialCredit,
+      timeSpentMs: args.timeSpentMs,
+    };
+  }
+  const partialCredit = answer.partialCredit ?? 0;
 
   const withoutCurrent = args.existingAnswers.filter((a) => a.questionId !== args.question.id);
   const answers = [...withoutCurrent, answer];
   const answeredCount = answers.length;
   let correctCount = 0;
   let scoreSum = 0;
+  let pointsPossible = Math.max(0, args.totalQuestions - answeredCount);
   answers.forEach((a) => {
-    const pc = a.partialCredit ?? (a.isCorrect ? 1 : 0);
-    scoreSum += pc;
+    scoreSum += answerPointsEarned(a);
+    pointsPossible += answerPointsPossible(a);
     if (a.isCorrect) correctCount += 1;
   });
   const scorePercent =
-    args.totalQuestions > 0
-      ? Math.round((scoreSum / args.totalQuestions) * 1000) / 10
+    pointsPossible > 0
+      ? Math.round((scoreSum / pointsPossible) * 1000) / 10
       : 0;
   await setDoc(
     examProgressRef(args.sessionId, args.playerId),

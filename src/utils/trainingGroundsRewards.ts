@@ -8,6 +8,7 @@ import { db } from '../firebase';
 import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
 import { TrainingAttempt, TrainingAnswer, TrainingQuestion, DEFAULT_REWARDS } from '../types/trainingGrounds';
 import { getPlayerUniversalLawEffects } from './universalLawBoons';
+import { questionPointsPossible, quizPointTotals } from './quizMatching';
 
 export interface RewardResult {
   ppGained: number;
@@ -30,14 +31,9 @@ export function calculateQuizRewards(
   questions: TrainingQuestion[],
   answers: TrainingAnswer[]
 ): RewardResult {
-  // First, calculate the overall percentage score based on partial credit
-  let totalPartialCredit = 0;
-  answers.forEach((answer) => {
-    const partialCredit = answer.partialCredit !== undefined ? answer.partialCredit : (answer.isCorrect ? 1.0 : 0.0);
-    totalPartialCredit += partialCredit;
-  });
-  const totalQuestions = questions.length;
-  const scorePercentage = totalQuestions > 0 ? totalPartialCredit / totalQuestions : 0; // 0.0 to 1.0
+  // Overall score as points earned / possible (each matching pair counts like a question)
+  const totals = quizPointTotals(questions, answers);
+  const scorePercentage = totals.possible > 0 ? totals.earned / totals.possible : 0; // 0.0 to 1.0
   
   // Calculate what rewards would be at 100% (perfect score)
   let maxPossiblePP = 0;
@@ -48,8 +44,9 @@ export function calculateQuizRewards(
   
   // Calculate base rewards (what they'd get if all questions were 100% correct)
   questions.forEach((question, index) => {
-    maxPossiblePP += question.pointsPP;
-    maxPossibleXP += question.pointsXP;
+    const points = questionPointsPossible(question);
+    maxPossiblePP += (Number(question.pointsPP) || 0) * points;
+    maxPossibleXP += (Number(question.pointsXP) || 0) * points;
     
     // Calculate streak bonuses (only for perfect runs)
     const rewardConfig = DEFAULT_REWARDS[question.difficulty] || DEFAULT_REWARDS.medium;

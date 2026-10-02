@@ -13,6 +13,7 @@ import {
   deleteQuestion,
   reorderQuestions,
   uploadQuestionImage,
+  uploadMatchCardImage,
   deleteQuestionImage,
   getQuizSetAttempts,
   assignedClassIdsForQuiz,
@@ -23,7 +24,24 @@ import {
   isTrainingQuizArchived,
   setQuizSetsArchived,
 } from '../utils/trainingGroundsService';
-import { TrainingQuizSet, TrainingQuestion, DEFAULT_REWARDS } from '../types/trainingGrounds';
+import {
+  TrainingQuizSet,
+  TrainingQuestion,
+  TrainingQuestionType,
+  MatchCardContent,
+  MatchPair,
+  DEFAULT_REWARDS,
+} from '../types/trainingGrounds';
+import {
+  MAX_MATCH_PAIRS,
+  MIN_MATCH_PAIRS,
+  MATCHING_SECONDS_PER_PAIR,
+  isMatchingQuestion,
+  matchCardHasContent,
+  matchCardLabel,
+  matchPairsOf,
+} from '../utils/quizMatching';
+import MatchPairsEditor, { MatchPairDraft, emptyMatchPairDraft } from './quiz/MatchPairsEditor';
 import { getAvailableArtifacts } from '../utils/artifactCompensation';
 import { exportTrainingGroundCFUsToCSV } from '../utils/exportTrainingGroundCFUsToCSV';
 import SkillPicker from './skills/SkillPicker';
@@ -75,6 +93,74 @@ function compactOptionsAndCorrectIndices(
   return { validOptions, correctIndices };
 }
 
+const defaultMatchPairDrafts = (): MatchPairDraft[] => [
+  emptyMatchPairDraft(),
+  emptyMatchPairDraft(),
+  emptyMatchPairDraft(),
+];
+
+function matchPairDraftsFromQuestion(question: TrainingQuestion): MatchPairDraft[] {
+  const pairs = matchPairsOf(question);
+  if (pairs.length === 0) return defaultMatchPairDrafts();
+  return pairs.map((p) => ({
+    id: p.id,
+    promptText: p.prompt?.text || '',
+    promptImageUrl: p.prompt?.imageUrl || null,
+    promptImageFile: null,
+    responseText: p.response?.text || '',
+    responseImageUrl: p.response?.imageUrl || null,
+    responseImageFile: null,
+  }));
+}
+
+function cardFromDraft(text: string, imageUrl: string | null): MatchCardContent {
+  const card: MatchCardContent = {};
+  if (text.trim()) card.text = text.trim();
+  if (imageUrl) card.imageUrl = imageUrl;
+  return card;
+}
+
+function validateMatchPairDrafts(drafts: MatchPairDraft[]): string | null {
+  if (drafts.length < MIN_MATCH_PAIRS) return `Add at least ${MIN_MATCH_PAIRS} matching pairs.`;
+  if (drafts.length > MAX_MATCH_PAIRS) return `A matching question can have at most ${MAX_MATCH_PAIRS} pairs.`;
+  for (let i = 0; i < drafts.length; i++) {
+    const d = drafts[i];
+    if (!d.promptText.trim() && !d.promptImageUrl && !d.promptImageFile) {
+      return `Pair ${i + 1}: add text or an image to the prompt card.`;
+    }
+    if (!d.responseText.trim() && !d.responseImageUrl && !d.responseImageFile) {
+      return `Pair ${i + 1}: add text or an image to the matching card.`;
+    }
+  }
+  const textOnlyResponses = drafts
+    .filter((d) => !d.responseImageUrl && !d.responseImageFile)
+    .map((d) => d.responseText.trim().toLowerCase());
+  if (new Set(textOnlyResponses).size !== textOnlyResponses.length) {
+    return 'Each matching card must be different so players can tell them apart.';
+  }
+  return null;
+}
+
+/** Copy fields for duplicating/importing a matching question (shares the existing card images). */
+function matchingCopyFields(question: TrainingQuestion): Partial<TrainingQuestion> | { error: string } {
+  const pairs = matchPairsOf(question).filter(
+    (p) => matchCardHasContent(p.prompt) && matchCardHasContent(p.response)
+  );
+  if (pairs.length < MIN_MATCH_PAIRS) {
+    return { error: `matching questions need at least ${MIN_MATCH_PAIRS} complete pairs.` };
+  }
+  const fields: Partial<TrainingQuestion> = {
+    questionType: 'matching',
+    matchPairs: pairs.map((p) => ({ id: p.id, prompt: { ...p.prompt }, response: { ...p.response } })),
+    options: [],
+    correctIndices: [],
+  };
+  if (typeof question.timeLimitSeconds === 'number' && question.timeLimitSeconds > 0) {
+    fields.timeLimitSeconds = question.timeLimitSeconds;
+  }
+  return fields;
+}
+
 const TrainingGroundsAdmin: React.FC = () => {
   const { currentUser } = useAuth();
   const [quizSets, setQuizSets] = useState<TrainingQuizSet[]>([]);
@@ -123,6 +209,9 @@ const TrainingGroundsAdmin: React.FC = () => {
   });
 
   const [questionForm, setQuestionForm] = useState({
+    questionType: 'multiple_choice' as TrainingQuestionType,
+    matchPairs: defaultMatchPairDrafts(),
+    timeLimitSeconds: '' as string, // matching only; '' = automatic Live Event timer
     prompt: '',
     options: ['', '', '', ''], // default four rows; save requires ≥2 non-empty
     correctIndex: 0, // DEPRECATED: Use correctIndices instead (0=A, 1=B, 2=C, 3=D)
@@ -601,6 +690,9 @@ const TrainingGroundsAdmin: React.FC = () => {
   };
 
   const emptyQuestionForm = () => ({
+    questionType: 'multiple_choice' as TrainingQuestionType,
+    matchPairs: defaultMatchPairDrafts(),
+    timeLimitSeconds: '' as string,
     prompt: '',
     options: ['', '', '', ''],
     correctIndex: 0,
@@ -730,7 +822,125 @@ const TrainingGroundsAdmin: React.FC = () => {
     });
   };
 
+  const saveMatchingQuestion = async () => {
+    if (!selectedQuizSet) return;
+    const validationError = validateMatchPairDrafts(questionForm.matchPairs);
+    if (validationError) {
+      alert(validationError);
+      return;
+    }
+    let timeLimit: number | null = null;
+    const timeLimitRaw = questionForm.timeLimitSeconds.trim();
+    if (timeLimitRaw) {
+      const n = Math.round(Number(timeLimitRaw));
+      if (!Number.isFinite(n) || n < 10 || n > 600) {
+        alert('Live Event time limit must be between 10 and 600 seconds (leave blank for automatic).');
+        return;
+      }
+      timeLimit = n;
+    }
+
+    const quizSetId = selectedQuizSet.id;
+    const editing = editingQuestion;
+    const drafts = questionForm.matchPairs;
+    const rewardConfig = DEFAULT_REWARDS[questionForm.difficulty];
+    const buildPairs = (urls?: Map<string, string>): MatchPair[] =>
+      drafts.map((d) => ({
+        id: d.id,
+        prompt: cardFromDraft(d.promptText, urls?.get(`${d.id}:prompt`) ?? d.promptImageUrl),
+        response: cardFromDraft(d.responseText, urls?.get(`${d.id}:response`) ?? d.responseImageUrl),
+      }));
+
+    try {
+      setUploading(true);
+      const data: any = {
+        prompt: questionForm.prompt.trim() || 'Match each card to its partner.',
+        questionType: 'matching',
+        options: [],
+        correctIndices: [],
+        explanation: questionForm.explanation || null,
+        difficulty: questionForm.difficulty,
+        pointsPP: questionForm.pointsPP || rewardConfig?.basePP || 10,
+        pointsXP: questionForm.pointsXP || rewardConfig?.baseXP || 10,
+        skillIds: Array.isArray(questionForm.skillIds) ? questionForm.skillIds : [],
+      };
+      if (questionForm.category && questionForm.category.trim()) {
+        data.category = questionForm.category.trim();
+      }
+
+      let questionId: string;
+      if (editing) {
+        questionId = editing.id;
+      } else {
+        questionId = await addQuestion(quizSetId, {
+          ...data,
+          matchPairs: buildPairs(),
+          imageUrl: questionForm.imageUrl || null,
+          order: questions.length,
+          ...(timeLimit ? { timeLimitSeconds: timeLimit } : {}),
+        });
+      }
+
+      const failedUploads: string[] = [];
+      const uploadedUrls = new Map<string, string>();
+      for (let i = 0; i < drafts.length; i++) {
+        const d = drafts[i];
+        const sides: Array<['prompt' | 'response', File | null]> = [
+          ['prompt', d.promptImageFile],
+          ['response', d.responseImageFile],
+        ];
+        for (const [side, file] of sides) {
+          if (!file) continue;
+          try {
+            uploadedUrls.set(`${d.id}:${side}`, await uploadMatchCardImage(quizSetId, questionId, d.id, side, file));
+          } catch (err) {
+            console.warn('Failed to upload matching card image:', err);
+            failedUploads.push(`Pair ${i + 1} ${side === 'prompt' ? 'prompt' : 'match'} card`);
+          }
+        }
+      }
+
+      let imageUrl: string | null = questionForm.imageUrl || editing?.imageUrl || null;
+      if (questionForm.imageFile) {
+        try {
+          imageUrl = await uploadQuestionImage(quizSetId, questionId, questionForm.imageFile);
+        } catch (err) {
+          console.warn('Failed to upload question image:', err);
+          failedUploads.push('Question image');
+        }
+      }
+
+      const update: any = { ...data, matchPairs: buildPairs(uploadedUrls), imageUrl };
+      if (timeLimit) update.timeLimitSeconds = timeLimit;
+      else if (editing) update.timeLimitSeconds = deleteField();
+      if (editing?.correctIndex !== undefined) update.correctIndex = deleteField();
+      await updateQuestion(quizSetId, questionId, update);
+
+      alert(
+        failedUploads.length > 0
+          ? `Question saved, but these images failed to upload:\n• ${failedUploads.join('\n• ')}\n\nEdit the question to try again.`
+          : editing
+            ? 'Question updated successfully!'
+            : 'Question added successfully!'
+      );
+      setEditingQuestion(null);
+      setShowQuestionForm(false);
+      setQuestionForm(emptyQuestionForm());
+      await loadQuestions(quizSetId);
+      if (!editing) await loadQuizSets();
+    } catch (error) {
+      console.error('Error saving matching question:', error);
+      alert('Failed to save matching question');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleAddQuestion = async () => {
+    if (questionForm.questionType === 'matching') {
+      await saveMatchingQuestion();
+      return;
+    }
     if (!selectedQuizSet || !questionForm.prompt.trim()) {
       alert('Please enter a question prompt');
       return;
@@ -805,6 +1015,10 @@ const TrainingGroundsAdmin: React.FC = () => {
 
   const handleUpdateQuestion = async () => {
     if (!selectedQuizSet || !editingQuestion) return;
+    if (questionForm.questionType === 'matching') {
+      await saveMatchingQuestion();
+      return;
+    }
 
     try {
       setUploading(true);
@@ -837,6 +1051,11 @@ const TrainingGroundsAdmin: React.FC = () => {
       } else if (editingQuestion.correctIndex !== undefined) {
         // If question previously had a single correctIndex but now has multiple, delete the old field
         updateData.correctIndex = deleteField();
+      }
+      if (editingQuestion.questionType || editingQuestion.matchPairs || editingQuestion.timeLimitSeconds != null) {
+        updateData.questionType = deleteField();
+        updateData.matchPairs = deleteField();
+        updateData.timeLimitSeconds = deleteField();
       }
       
       // Handle image upload separately - only if new file is provided
@@ -911,6 +1130,31 @@ const TrainingGroundsAdmin: React.FC = () => {
 
     try {
       setUploading(true);
+      if (isMatchingQuestion(question)) {
+        const fields = matchingCopyFields(question);
+        if ('error' in fields) {
+          alert(`Cannot duplicate: ${fields.error}`);
+          return;
+        }
+        const matchingDuplicate: any = {
+          ...fields,
+          prompt: question.prompt,
+          explanation: question.explanation ?? null,
+          difficulty: question.difficulty || 'medium',
+          pointsPP: question.pointsPP ?? 10,
+          pointsXP: question.pointsXP ?? 10,
+          order: questions.length,
+          skillIds: Array.isArray(question.skillIds) ? [...question.skillIds] : [],
+        };
+        if (question.category?.trim()) matchingDuplicate.category = question.category.trim();
+        if (question.artifactRewards?.length) matchingDuplicate.artifactRewards = [...question.artifactRewards];
+        if (question.imageUrl) matchingDuplicate.imageUrl = question.imageUrl;
+        await addQuestion(selectedQuizSet.id, matchingDuplicate);
+        alert('Question duplicated successfully!');
+        await loadQuestions(selectedQuizSet.id);
+        await loadQuizSets();
+        return;
+      }
       const rawOpts = [...(question.options || [])].map((o) => String(o ?? ''));
       const prevCorrect = (question as any).correctIndices?.length
         ? ([...(question as any).correctIndices] as number[])
@@ -1016,6 +1260,27 @@ const TrainingGroundsAdmin: React.FC = () => {
 
       for (let i = 0; i < sortedSelected.length; i++) {
         const question = sortedSelected[i];
+        if (isMatchingQuestion(question)) {
+          const fields = matchingCopyFields(question);
+          if ('error' in fields) {
+            alert(`Skipping a question (${question.prompt?.slice(0, 40) || question.id}…): ${fields.error}`);
+            continue;
+          }
+          const matchingImport: any = {
+            ...fields,
+            prompt: question.prompt,
+            imageUrl: question.imageUrl ?? null,
+            explanation: question.explanation ?? null,
+            difficulty: question.difficulty || 'medium',
+            pointsPP: question.pointsPP ?? DEFAULT_REWARDS[question.difficulty || 'medium']?.basePP ?? 10,
+            pointsXP: question.pointsXP ?? DEFAULT_REWARDS[question.difficulty || 'medium']?.baseXP ?? 10,
+            order: baseOrder + i,
+          };
+          if (question.category?.trim()) matchingImport.category = question.category.trim();
+          if (question.artifactRewards?.length) matchingImport.artifactRewards = [...question.artifactRewards];
+          await addQuestion(selectedQuizSet.id, matchingImport);
+          continue;
+        }
         const rawOpts = [...(question.options || [])].map((o) => String(o ?? ''));
         const prevCorrect = (question as any).correctIndices?.length
           ? ([...(question as any).correctIndices] as number[])
@@ -1071,9 +1336,16 @@ const TrainingGroundsAdmin: React.FC = () => {
     const correctIndices = (question as any).correctIndices || 
       (question.correctIndex !== undefined ? [question.correctIndex] : []);
     
+    const matching = isMatchingQuestion(question);
     setQuestionForm({
+      questionType: matching ? 'matching' : 'multiple_choice',
+      matchPairs: matching ? matchPairDraftsFromQuestion(question) : defaultMatchPairDrafts(),
+      timeLimitSeconds:
+        typeof question.timeLimitSeconds === 'number' && question.timeLimitSeconds > 0
+          ? String(question.timeLimitSeconds)
+          : '',
       prompt: question.prompt,
-      options,
+      options: matching ? ['', '', '', ''] : options,
       correctIndex: correctIndices.length === 1 ? correctIndices[0] : 0, // For backwards compatibility
       correctIndices: correctIndices,
       explanation: question.explanation || '',
@@ -2083,6 +2355,24 @@ const TrainingGroundsAdmin: React.FC = () => {
                       <div style={{ fontWeight: '600', marginBottom: '0.5rem' }}>
                         Q{index + 1}: {question.prompt}
                       </div>
+                      {isMatchingQuestion(question) ? (
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
+                          <span style={{ fontWeight: 600, color: '#4f46e5' }}>
+                            Matching • {matchPairsOf(question).length} pairs ({matchPairsOf(question).length} points)
+                          </span>
+                          {' '}• Difficulty: {question.difficulty}
+                          {typeof question.timeLimitSeconds === 'number' && question.timeLimitSeconds > 0
+                            ? ` • Live timer: ${question.timeLimitSeconds}s`
+                            : ''}
+                          <ul style={{ margin: '0.35rem 0 0', paddingLeft: '1.1rem' }}>
+                            {matchPairsOf(question).map((pair) => (
+                              <li key={pair.id}>
+                                {matchCardLabel(pair.prompt)} → {matchCardLabel(pair.response)}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : (
                       <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
                         Difficulty: {question.difficulty} • Correct: {
                           (() => {
@@ -2092,6 +2382,7 @@ const TrainingGroundsAdmin: React.FC = () => {
                           })()
                         }
                       </div>
+                      )}
                       {Array.isArray(question.skillIds) && question.skillIds.length > 0 && (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginBottom: '0.5rem' }}>
                           <span style={{ fontSize: '0.75rem', color: '#6b7280', marginRight: '0.25rem' }}>Skills:</span>
@@ -2258,15 +2549,104 @@ const TrainingGroundsAdmin: React.FC = () => {
             </h3>
 
             <div style={{ marginBottom: '1rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Question Prompt *</label>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Question Type</label>
+              <div role="radiogroup" aria-label="Question type" style={{ display: 'flex', gap: '0.5rem' }}>
+                {([
+                  { value: 'multiple_choice', label: 'Multiple Choice', hint: '1 point' },
+                  { value: 'matching', label: 'Matching', hint: '1 point per pair' },
+                ] as Array<{ value: TrainingQuestionType; label: string; hint: string }>).map((opt) => {
+                  const active = questionForm.questionType === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() =>
+                        setQuestionForm({
+                          ...questionForm,
+                          questionType: opt.value,
+                          prompt:
+                            opt.value === 'matching' && !questionForm.prompt.trim()
+                              ? 'Match each card to its partner.'
+                              : questionForm.prompt,
+                        })
+                      }
+                      style={{
+                        flex: 1,
+                        padding: '0.6rem 0.75rem',
+                        borderRadius: '0.6rem',
+                        border: `2px solid ${active ? '#4f46e5' : '#e5e7eb'}`,
+                        background: active ? '#eef2ff' : 'white',
+                        color: active ? '#3730a3' : '#374151',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                      }}
+                    >
+                      {opt.label}
+                      <span style={{ display: 'block', fontSize: '0.75rem', fontWeight: 500, color: '#6b7280' }}>
+                        {opt.hint}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
+                {questionForm.questionType === 'matching' ? 'Instructions *' : 'Question Prompt *'}
+              </label>
               <textarea
                 value={questionForm.prompt}
                 onChange={(e) => setQuestionForm({ ...questionForm, prompt: e.target.value })}
                 style={{ width: '100%', padding: '0.5rem', border: '1px solid #ccc', borderRadius: '0.5rem', minHeight: '80px' }}
-                placeholder="Enter the question"
+                placeholder={
+                  questionForm.questionType === 'matching'
+                    ? 'e.g. Match each vocabulary word to its definition.'
+                    : 'Enter the question'
+                }
               />
             </div>
 
+            {questionForm.questionType === 'matching' ? (
+              <>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.25rem', fontWeight: '600' }}>
+                    Matching pairs * ({MIN_MATCH_PAIRS}–{MAX_MATCH_PAIRS})
+                  </label>
+                  <p style={{ fontSize: '0.8rem', color: '#6b7280', margin: '0 0 0.6rem' }}>
+                    Each card can be text, an image, or both. Players drag each matching card onto its prompt card;
+                    the matching cards are shuffled for them. Every correct match is worth 1 point.
+                  </p>
+                  <MatchPairsEditor
+                    pairs={questionForm.matchPairs}
+                    disabled={uploading}
+                    onChange={(pairs) => setQuestionForm({ ...questionForm, matchPairs: pairs })}
+                  />
+                </div>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.25rem', fontWeight: '600' }}>
+                    Live Event time limit (seconds)
+                  </label>
+                  <input
+                    type="number"
+                    min={10}
+                    max={600}
+                    value={questionForm.timeLimitSeconds}
+                    onChange={(e) => setQuestionForm({ ...questionForm, timeLimitSeconds: e.target.value })}
+                    placeholder={`Auto: quiz timer + ${MATCHING_SECONDS_PER_PAIR}s per pair`}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #ccc', borderRadius: '0.5rem' }}
+                  />
+                  <p style={{ fontSize: '0.8rem', color: '#6b7280', margin: '0.35rem 0 0' }}>
+                    Leave blank for automatic: at least double the normal question timer, plus{' '}
+                    {MATCHING_SECONDS_PER_PAIR}s per pair ({questionForm.matchPairs.length} pairs now).
+                  </p>
+                </div>
+              </>
+            ) : (
+            <>
             <div style={{ marginBottom: '1rem' }}>
               <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
                 Answer options * (at least {MIN_TRAINING_ANSWER_CHOICES} filled; up to {MAX_TRAINING_ANSWER_CHOICES})
@@ -2402,6 +2782,8 @@ const TrainingGroundsAdmin: React.FC = () => {
                 </p>
               )}
             </div>
+            </>
+            )}
 
             <div style={{ marginBottom: '1rem' }}>
               <SkillPicker
@@ -2423,6 +2805,11 @@ const TrainingGroundsAdmin: React.FC = () => {
                 <option value="medium">Medium (10 PP, 10 XP)</option>
                 <option value="hard">Hard (15 PP, 15 XP)</option>
               </select>
+              {questionForm.questionType === 'matching' && (
+                <p style={{ fontSize: '0.8rem', color: '#6b7280', margin: '0.35rem 0 0' }}>
+                  Matching rewards are earned per correct match.
+                </p>
+              )}
             </div>
 
             <div style={{ marginBottom: '1rem' }}>

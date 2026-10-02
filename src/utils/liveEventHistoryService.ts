@@ -37,6 +37,7 @@ import { getQuestions } from './trainingGroundsService';
 import { enrichAnswersWithSkills, recordSkillEvidenceFromAttempt } from './masteryService';
 import { listAcademicSkills } from './academicSkillService';
 import type { TrainingAnswer } from '../types/trainingGrounds';
+import { liveRowPartialCredit, liveRowPointsEarned, liveRowPointsPossible } from './quizMatching';
 
 const COLLECTION = 'liveEventSessions';
 const HIGH_MISS_MIN_RESPONSES = 8;
@@ -363,9 +364,10 @@ function buildParticipantRecords(
     const questionsCorrect =
       correctCount[userId] ??
       qp?.correctAnswers ??
-      rows.filter((r) => r.isCorrect).length;
-    const questionsAnswered = rows.length > 0 ? rows.length : questionsCorrect > 0 ? questionTotal : undefined;
-    const questionsSeen = questionTotal > 0 ? questionTotal : questionsAnswered;
+      rows.reduce((sum, r) => sum + liveRowPointsEarned(r), 0);
+    const answeredPoints = rows.reduce((sum, r) => sum + liveRowPointsPossible(r), 0);
+    const questionsAnswered = rows.length > 0 ? answeredPoints : questionsCorrect > 0 ? questionTotal : undefined;
+    const questionsSeen = questionTotal > 0 ? Math.max(questionTotal, questionsAnswered ?? 0) : questionsAnswered;
     const questionsIncorrect =
       questionsAnswered != null ? Math.max(0, questionsAnswered - questionsCorrect) : undefined;
     const questionsUnanswered =
@@ -789,7 +791,7 @@ export async function applyLiveEventSkillMastery(
       questionId: r.questionId,
       selectedIndices: [],
       isCorrect: r.isCorrect,
-      partialCredit: r.isCorrect ? 1 : 0,
+      partialCredit: liveRowPartialCredit(r),
       timeSpentMs: 0,
     }));
     const enriched = enrichAnswersWithSkills(answers, questions);

@@ -6,6 +6,8 @@ import { db } from '../firebase';
 import { ENERGY_TYPES, battleEnergyDisplayLabel } from '../constants/energyTypes';
 import LiveQuizQuestionCard from './liveQuiz/LiveQuizQuestionCard';
 import LiveQuizAnswerOptions from './liveQuiz/LiveQuizAnswerOptions';
+import MatchingQuestionBoard from './quiz/MatchingQuestionBoard';
+import { isMatchingQuestion, matchPairsOf } from '../utils/quizMatching';
 import {
   activateExamLiveEvent,
   advanceExamQuestionIndex,
@@ -76,6 +78,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
   const [progress, setProgress] = useState<PlayerExamProgress | null>(null);
   const [allProgress, setAllProgress] = useState<PlayerExamProgress[]>([]);
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
+  const [matchSelections, setMatchSelections] = useState<Record<string, string>>({});
   /** Current question answer saved; student can advance (no reveal until end unless settings allow). */
   const [answerLocked, setAnswerLocked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -193,7 +196,8 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
       questions.length,
       examQuizSetId,
       examStartedAtMs,
-      questionIds
+      questionIds,
+      questions
     )
       .then((row) => {
         setProgress(row);
@@ -380,12 +384,14 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
     if (!existing) {
       setAnswerLocked(false);
       setSelectedIndices([]);
+      setMatchSelections({});
       return;
     }
     const indices =
       existing.selectedIndices ??
       (existing.selectedIndex !== undefined ? [existing.selectedIndex] : []);
     setSelectedIndices(indices);
+    setMatchSelections(existing.matchSelections || {});
     setAnswerLocked(true);
   }, [currentQuestion?.id, progress?.answers, currentIndex]);
 
@@ -408,7 +414,18 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
 
   const handleSubmitAnswer = async () => {
     if (!currentUser || !currentQuestion || answerLocked || submitting) return;
-    if (selectedIndices.length === 0) {
+    const matching = isMatchingQuestion(currentQuestion);
+    if (matching) {
+      const placed = Object.keys(matchSelections).length;
+      const total = matchPairsOf(currentQuestion).length;
+      if (placed === 0) {
+        setMessage('Drag at least one card onto its match before saving.');
+        return;
+      }
+      if (placed < total && !window.confirm(`You've placed ${placed} of ${total} matches. Save anyway?`)) {
+        return;
+      }
+    } else if (selectedIndices.length === 0) {
       setMessage('Select an answer before submitting.');
       return;
     }
@@ -423,7 +440,8 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
         classId,
         question: currentQuestion,
         questionIndex: currentIndex,
-        selectedIndices,
+        selectedIndices: matching ? [] : selectedIndices,
+        ...(matching ? { matchSelections } : {}),
         totalQuestions,
         timeSpentMs: Date.now() - questionStartMs,
         existingAnswers: progress?.answers || [],
@@ -453,6 +471,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
 
   const setCurrentQuestionState = () => {
     setSelectedIndices([]);
+    setMatchSelections({});
     setAnswerLocked(false);
     setQuestionStartMs(Date.now());
     setMessage(null);
@@ -976,14 +995,29 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
             questionNumber={currentIndex + 1}
             totalQuestions={totalQuestions}
           />
-          <LiveQuizAnswerOptions
-            question={currentQuestion}
-            selectedIndices={selectedIndices}
-            onSelect={handleSelect}
-            disabled={answerLocked || submitting}
-            reveal={answerLocked && showFeedbackDuringExam}
-            submittedIndices={answerLocked && showFeedbackDuringExam ? submittedIndices : undefined}
-          />
+          {isMatchingQuestion(currentQuestion) ? (
+            <MatchingQuestionBoard
+              question={currentQuestion}
+              className="mst-match--light"
+              selections={matchSelections}
+              onChange={(next) => {
+                if (answerLocked || submitting || timeExpired) return;
+                setMatchSelections(next);
+              }}
+              disabled={answerLocked || submitting || timeExpired}
+              reveal={answerLocked && showFeedbackDuringExam}
+              seed={`${currentQuestion.id}:${currentUser?.uid ?? ''}`}
+            />
+          ) : (
+            <LiveQuizAnswerOptions
+              question={currentQuestion}
+              selectedIndices={selectedIndices}
+              onSelect={handleSelect}
+              disabled={answerLocked || submitting}
+              reveal={answerLocked && showFeedbackDuringExam}
+              submittedIndices={answerLocked && showFeedbackDuringExam ? submittedIndices : undefined}
+            />
+          )}
           {answerLocked && !showFeedbackDuringExam ? (
             <p style={{ marginTop: '0.75rem', color: '#64748b', fontSize: '0.9rem', fontWeight: 600 }}>
               Answer saved. Continue when you are ready — correct answers are shown at the end.

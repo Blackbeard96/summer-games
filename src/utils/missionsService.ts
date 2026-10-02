@@ -23,7 +23,6 @@ import { db, auth } from '../firebase';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { updateProgressOnChallengeComplete } from './chapterProgression';
 import { grantChallengeRewards } from './challengeRewards';
-import { CHAPTERS } from '../types/chapters';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { getLevelFromXP } from '../utils/leveling';
 import { parseMissionRewardEntriesFromFirestore } from './seasonFirestoreService';
@@ -706,8 +705,8 @@ export async function completeMission(
             journeyStepCompleted = true;
             
             // Grant journey step rewards if challenge definition exists
-            const chapter = CHAPTERS.find(c => c.id === chapterId);
-            const challenge = chapter?.challenges.find(c => c.id === challengeId);
+            const { getEffectiveJourneyChallenge } = await import('./journeyChallengeConfigStore');
+            const challenge = await getEffectiveJourneyChallenge(chapterId, challengeId);
             
             if (challenge && challenge.rewards.length > 0) {
               // Grant journey step rewards (these are separate from mission rewards)

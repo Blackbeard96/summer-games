@@ -103,6 +103,9 @@ export interface LiveQuizPerQuestionResultEntry {
   quizRoundIndex: number;
   isCorrect: boolean;
   pointsAwarded: number;
+  /** Matching questions: each correct match counts as one question. */
+  correctMatches?: number;
+  totalMatches?: number;
 }
 
 export interface LiveQuizSession {
@@ -117,6 +120,10 @@ export interface LiveQuizSession {
    * Lets clients score submissions without loading the full training question bank (major latency win).
    */
   currentQuestionCorrectIndices?: number[];
+  /** Pair ids when the current question is a matching question (scored like correct indices). */
+  currentQuestionMatchPairIds?: string[];
+  /** Timer for the current question; matching questions get longer than `timeLimitSeconds`. */
+  currentQuestionTimeLimitSeconds?: number;
   /** Increments each time a new question goes live; answers must match this round */
   quizRoundIndex?: number;
   questionStartedAt: number | null;  // server timestamp ms
@@ -148,6 +155,10 @@ export interface LiveQuizResponse {
   /** Must match LiveQuizSession.quizRoundIndex for the active question (omitted on legacy docs) */
   quizRoundIndex?: number;
   selectedIndices: number[];
+  /** Matching questions: prompt pair id -> placed response pair id */
+  matchSelections?: Record<string, string>;
+  correctMatches?: number;
+  totalMatches?: number;
   submittedAt: number;         // ms
   isCorrect: boolean;
   pointsAwarded: number;

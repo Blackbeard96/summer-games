@@ -4,6 +4,8 @@ import { useAuth } from '../context/AuthContext';
 import { getAttempt, getQuizSet, getQuestions, isTrainingQuizAcceptingSoloCompletions } from '../utils/trainingGroundsService';
 import { TrainingAttempt, TrainingQuestion, TrainingQuizSet } from '../types/trainingGrounds';
 import TrainingQuizSummaryModal from '../components/TrainingQuizSummaryModal';
+import MatchingQuestionBoard from '../components/quiz/MatchingQuestionBoard';
+import { answerPointsEarned, isMatchingQuestion, questionPointsPossible } from '../utils/quizMatching';
 
 const QuizResults: React.FC = () => {
   const { attemptId } = useParams<{ attemptId: string }>();
@@ -146,6 +148,10 @@ const QuizResults: React.FC = () => {
                 const answer = attempt.answers.find((a) => a.questionId === question.id);
                 const isCorrect = answer?.isCorrect || false;
                 const isExpanded = expandedQuestions.has(question.id);
+                const matching = isMatchingQuestion(question);
+                const matchScore = matching
+                  ? `${answer ? answerPointsEarned(answer, question) : 0}/${questionPointsPossible(question)} matches`
+                  : null;
 
                 return (
                   <div
@@ -163,6 +169,7 @@ const QuizResults: React.FC = () => {
                         {question.prompt.length > 50
                           ? `${question.prompt.substring(0, 50)}...`
                           : question.prompt}
+                        {matchScore && ` (${matchScore})`}
                       </span>
                       <span aria-hidden="true">{isExpanded ? '▼' : '▶'}</span>
                     </button>
@@ -180,6 +187,21 @@ const QuizResults: React.FC = () => {
                             alt="Question illustration"
                           />
                         )}
+                        {matching ? (
+                          <div style={{ marginBottom: question.explanation ? '0.75rem' : 0 }}>
+                            <p style={{ margin: '0 0 0.5rem', fontWeight: 600 }}>
+                              {matchScore} correct
+                            </p>
+                            <MatchingQuestionBoard
+                              question={question}
+                              selections={answer?.matchSelections || {}}
+                              disabled
+                              reveal
+                              seed={`${question.id}:${attempt.userId}`}
+                            />
+                          </div>
+                        ) : (
+                        <>
                         <div style={{ marginBottom: '0.75rem' }}>
                           <strong style={{ color: 'var(--mst-text-primary)' }}>Your answer(s):</strong>{' '}
                           <span
@@ -236,6 +258,8 @@ const QuizResults: React.FC = () => {
                             })()}
                           </span>
                         </div>
+                        </>
+                        )}
                         {question.explanation && (
                           <div className="mst-mission-block mst-mission-block--info" style={{ marginBottom: 0 }}>
                             <strong style={{ color: 'var(--mst-text-primary)' }}>Explanation:</strong>{' '}

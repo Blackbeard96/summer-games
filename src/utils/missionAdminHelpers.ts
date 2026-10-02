@@ -6,6 +6,12 @@ import type { MissionTemplate, MissionCategory } from '../types/missions';
 import { isJourneyMissionCategory } from '../types/missions';
 import { CHAPTERS } from '../types/chapters';
 import { resolveJourneyChallengePreviewUrl } from './journeyChallengePreviewDefaults';
+import {
+  hasJourneyOverrideContent,
+  journeyChallengeIdForMission,
+  orderJourneyChapterEntries,
+  type JourneyChallengeOverride,
+} from './journeyChallengeConfig';
 
 export type MissionAdminFilter =
   | 'all'
@@ -66,6 +72,7 @@ export function isPlayerJourneyMission(mission: MissionTemplate): boolean {
   if (isJourneyMissionCategory(mission.missionCategory)) return true;
   if (mission.deliveryChannels?.includes('PLAYER_JOURNEY')) return true;
   if (mission.playerJourneyLink) return true;
+  if (mission.journeyPlacement) return true;
   return false;
 }
 
@@ -117,43 +124,114 @@ export function buildHardcodedJourneyMissions(): MissionTemplate[] {
 
 /**
  * Merge Firestore missions with hardcoded Journey challenges for admin listing.
- * If a Firestore mission already links to a challenge, keep the Firestore row
- * and skip the synthetic duplicate.
- * Optional mediaMap applies preview/modal URLs onto core journey rows.
+ * Rows follow the order players see in each chapter (core challenges plus missions
+ * placed as new steps), numbered Ch N-M. If a Firestore mission links to a core
+ * challenge, the Firestore row replaces the synthetic duplicate.
+ * Optional mediaMap applies preview/modal URLs onto core journey rows; overrides
+ * apply admin title / description / reward edits.
  */
 export function mergeJourneyMissionsForAdmin(
   firestoreMissions: MissionTemplate[],
-  mediaMap?: Record<string, { previewImageUrl?: string; modalImageUrl?: string; previewImageStoragePath?: string; modalImageStoragePath?: string }>
+  mediaMap?: Record<string, { previewImageUrl?: string; modalImageUrl?: string; previewImageStoragePath?: string; modalImageStoragePath?: string }>,
+  overrides?: Record<string, JourneyChallengeOverride>
 ): MissionTemplate[] {
-  const linkedChallengeIds = new Set<string>();
+  const linkedByChallengeId = new Map<string, MissionTemplate>();
   for (const m of firestoreMissions) {
-    if (m.playerJourneyLink?.challengeId) {
-      linkedChallengeIds.add(m.playerJourneyLink.challengeId);
+    const linkId = m.playerJourneyLink?.challengeId;
+    if (linkId && !m.journeyPlacement && !linkedByChallengeId.has(linkId)) {
+      linkedByChallengeId.set(linkId, m);
     }
   }
 
-  const hardcoded = buildHardcodedJourneyMissions()
-    .filter((m) => {
-      const challengeId = challengeIdFromJourneyMissionId(m.id);
-      return challengeId ? !linkedChallengeIds.has(challengeId) : true;
-    })
-    .map((m) => {
-      const challengeId = challengeIdFromJourneyMissionId(m.id);
-      const media = challengeId && mediaMap ? mediaMap[challengeId] : undefined;
-      // Show the same bundled /images previews the Journey page uses when no
-      // Firestore journeyChallengeMedia override has been uploaded yet.
-      const previewImageUrl = resolveJourneyChallengePreviewUrl(challengeId, media) || m.previewImageUrl;
+  const hardcodedById = new Map<string, MissionTemplate>();
+  for (const m of buildHardcodedJourneyMissions()) {
+    const challengeId = challengeIdFromJourneyMissionId(m.id)!;
+    const media = mediaMap ? mediaMap[challengeId] : undefined;
+    const override = overrides?.[challengeId];
+    const edited = hasJourneyOverrideContent(override);
+    // Show the same bundled /images previews the Journey page uses when no
+    // Firestore journeyChallengeMedia override has been uploaded yet.
+    const previewImageUrl = resolveJourneyChallengePreviewUrl(challengeId, media) || m.previewImageUrl;
+    hardcodedById.set(challengeId, {
+      ...m,
+      title: override?.title?.trim() || m.title,
+      description: override?.description?.trim() || m.description,
+      shortDescription: override?.description?.trim() || m.shortDescription,
+      xpReward: typeof override?.xpReward === 'number' ? override.xpReward : m.xpReward,
+      ppReward: typeof override?.ppReward === 'number' ? override.ppReward : m.ppReward,
+      previewImageUrl,
+      previewImageStoragePath: media?.previewImageStoragePath || m.previewImageStoragePath,
+      modalImageUrl: media?.modalImageUrl || m.modalImageUrl,
+      modalImageStoragePath: media?.modalImageStoragePath || m.modalImageStoragePath,
+      metadata: { ...m.metadata, journeyOverride: edited },
+    });
+  }
+
+  const placed = firestoreMissions.filter((m) => m.journeyPlacement);
+  const used = new Set<string>();
+  const ordered: MissionTemplate[] = [];
+  for (const chapter of CHAPTERS) {
+    const entries = orderJourneyChapterEntries(
+      chapter.challenges,
+      placed.filter((m) => m.journeyPlacement?.chapterId === chapter.id)
+    );
+    entries.forEach((entry, index) => {
+      const position = { chapterNumber: chapter.id, missionNumber: index + 1, sortOrder: index + 1 };
+      if (entry.kind === 'mission') {
+        used.add(entry.mission.id);
+        ordered.push({ ...entry.mission, ...position });
+        return;
+      }
+      const linked = linkedByChallengeId.get(entry.challenge.id);
+      if (linked) {
+        used.add(linked.id);
+        ordered.push(linked);
+        return;
+      }
+      const core = hardcodedById.get(entry.challenge.id);
+      if (core) ordered.push({ ...core, ...position });
+    });
+  }
+
+  const remaining = firestoreMissions.filter((m) => !used.has(m.id) && isPlayerJourneyMission(m));
+  return [...ordered, ...sortJourneyMissions(remaining)];
+}
+
+export interface JourneyStepChoice {
+  /** Challenge id used as a `journeyPlacement.afterChallengeId` anchor. */
+  id: string;
+  label: string;
+  /** Set when the step is a mission placed in the chapter (not a core challenge). */
+  missionId?: string;
+}
+
+/** Steps of every chapter in Journey order, for "Place after" pickers in Mission Admin. */
+export function buildJourneyStepChoices(
+  firestoreMissions: MissionTemplate[],
+  overrides?: Record<string, JourneyChallengeOverride>
+): Record<number, JourneyStepChoice[]> {
+  const placed = firestoreMissions.filter((m) => m.journeyPlacement);
+  const out: Record<number, JourneyStepChoice[]> = {};
+  for (const chapter of CHAPTERS) {
+    const entries = orderJourneyChapterEntries(
+      chapter.challenges,
+      placed.filter((m) => m.journeyPlacement?.chapterId === chapter.id)
+    );
+    out[chapter.id] = entries.map((entry, index) => {
+      const num = `${chapter.id}-${index + 1}`;
+      if (entry.kind === 'core') {
+        const title = overrides?.[entry.challenge.id]?.title?.trim() || entry.challenge.title;
+        return { id: entry.challenge.id, label: `${num} ${title}` };
+      }
+      const draft = entry.mission.isPublished === false ? ' (draft)' : '';
       return {
-        ...m,
-        previewImageUrl,
-        previewImageStoragePath: media?.previewImageStoragePath || m.previewImageStoragePath,
-        modalImageUrl: media?.modalImageUrl || m.modalImageUrl,
-        modalImageStoragePath: media?.modalImageStoragePath || m.modalImageStoragePath,
+        id: journeyChallengeIdForMission(entry.mission.id),
+        label: `${num} ${entry.mission.title}${draft}`,
+        missionId: entry.mission.id,
       };
     });
-
-  const firestoreJourney = firestoreMissions.filter(isPlayerJourneyMission);
-  return sortJourneyMissions([...hardcoded, ...firestoreJourney]);
+  }
+  return out;
 }
 
 export function filterMissionsForAdmin(

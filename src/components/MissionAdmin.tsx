@@ -47,8 +47,20 @@ import {
   challengeIdFromJourneyMissionId,
   assignedClassIdsForMission,
   buildDuplicatedMissionDoc,
+  buildJourneyStepChoices,
+  type JourneyStepChoice,
   type MissionAdminFilter,
 } from '../utils/missionAdminHelpers';
+import {
+  isJourneyMissionChallengeId,
+  journeyChallengeIdForMission,
+  type JourneyChallengeOverride,
+} from '../utils/journeyChallengeConfig';
+import {
+  clearJourneyChallengeOverride,
+  loadAllJourneyChallengeOverrides,
+  saveJourneyChallengeOverride,
+} from '../utils/journeyChallengeConfigStore';
 import SkillPicker from './skills/SkillPicker';
 import {
   uploadMissionPreviewImage,
@@ -94,7 +106,15 @@ type MissionCreateFormData = {
   hubDisplayOrder: string;
   classIds: string[];
   skillIds: string[];
+  journeyPlaced: boolean;
+  journeyChapterId: string;
+  journeyAfterId: string;
 };
+
+type JourneyStepChoices = Record<number, JourneyStepChoice[]>;
+
+/** Where a mission sits as a numbered Journey step (create/edit form state). */
+type JourneyPlacementForm = { journeyPlaced: boolean; journeyChapterId: string; journeyAfterId: string };
 
 type MissionCreateDraftPersist = {
   formData: MissionCreateFormData;
@@ -224,6 +244,9 @@ const MissionAdmin: React.FC = () => {
   const [previewMission, setPreviewMission] = useState<MissionTemplate | null>(null);
   const [imageEditMission, setImageEditMission] = useState<MissionTemplate | null>(null);
   const [journeyMedia, setJourneyMedia] = useState<Record<string, JourneyChallengeMedia>>({});
+  const [journeyOverrides, setJourneyOverrides] = useState<Record<string, JourneyChallengeOverride>>({});
+  const [overrideEditMission, setOverrideEditMission] = useState<MissionTemplate | null>(null);
+  const [createPlacement, setCreatePlacement] = useState<{ chapterId: number; afterChallengeId: string } | null>(null);
   const [classrooms, setClassrooms] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {
@@ -253,14 +276,19 @@ const MissionAdmin: React.FC = () => {
     const isInitialLoad = missions.length === 0 && !showCreateModal;
     if (isInitialLoad) setLoading(true);
     try {
-      const [missionsSnapshot, mediaMap] = await Promise.all([
+      const [missionsSnapshot, mediaMap, overrideMap] = await Promise.all([
         getDocs(query(collection(db, 'missions'), orderBy('createdAt', 'desc'))),
         loadAllJourneyChallengeMedia().catch((err) => {
           console.warn('Journey challenge media load failed:', err);
           return {} as Record<string, JourneyChallengeMedia>;
         }),
+        loadAllJourneyChallengeOverrides().catch((err) => {
+          console.warn('Journey challenge overrides load failed:', err);
+          return {} as Record<string, JourneyChallengeOverride>;
+        }),
       ]);
       setJourneyMedia(mediaMap);
+      setJourneyOverrides(overrideMap);
 
       const missionsData: MissionTemplate[] = [];
       missionsSnapshot.forEach((docSnap) => {
@@ -279,6 +307,7 @@ const MissionAdmin: React.FC = () => {
           story: data.story || undefined,
           profile: data.profile || undefined,
           playerJourneyLink: data.playerJourneyLink || undefined,
+          journeyPlacement: data.journeyPlacement || undefined,
           journeyMissionType: data.journeyMissionType || undefined,
           chapterNumber: typeof data.chapterNumber === 'number' ? data.chapterNumber : undefined,
           missionNumber: typeof data.missionNumber === 'number' ? data.missionNumber : undefined,
@@ -446,6 +475,14 @@ const MissionAdmin: React.FC = () => {
         missionDocData.sequenceVersion = 1;
       }
 
+      const placement = missionData.journeyPlacement;
+      if (placement) {
+        missionDocData.playerJourneyLink = {
+          chapterId: placement.chapterId,
+          challengeId: journeyChallengeIdForMission(missionRef.id),
+        };
+      }
+
       if (typeof missionData.hubDisplayOrder !== 'number' || !Number.isFinite(missionData.hubDisplayOrder)) {
         delete missionDocData.hubDisplayOrder;
       }
@@ -463,9 +500,12 @@ const MissionAdmin: React.FC = () => {
       clearMissionCreateDraft();
       await loadMissions();
       setShowCreateModal(false);
+      setCreatePlacement(null);
       
       let message = 'Mission created successfully!';
-      if (playerJourneyLink) {
+      if (placement) {
+        message = `Mission added to Chapter ${placement.chapterId} of the Player's Journey.`;
+      } else if (playerJourneyLink) {
         const chapter = CHAPTERS.find(c => c.id === playerJourneyLink.chapterId);
         const challenge = chapter?.challenges.find(c => c.id === playerJourneyLink.challengeId);
         const challengeTitle = challenge?.title || `Chapter ${playerJourneyLink.chapterId}-${playerJourneyLink.challengeId}`;
@@ -546,17 +586,35 @@ const MissionAdmin: React.FC = () => {
     return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading missions...</div>;
   }
 
+  const journeyStepChoices = buildJourneyStepChoices(missions, journeyOverrides);
+
   const filteredMissions =
     listFilter === 'journey'
-      ? mergeJourneyMissionsForAdmin(missions, journeyMedia)
+      ? mergeJourneyMissionsForAdmin(missions, journeyMedia, journeyOverrides)
       : listFilter === 'all'
         ? sortJourneyMissions([
-            ...mergeJourneyMissionsForAdmin(missions, journeyMedia).filter((m) =>
+            ...mergeJourneyMissionsForAdmin(missions, journeyMedia, journeyOverrides).filter((m) =>
               isHardcodedJourneyMissionId(m.id)
             ),
             ...missions,
           ])
         : filterMissionsForAdmin(missions, listFilter);
+
+  /** Challenge id a new step would follow when inserted after this row, if it is a Journey step. */
+  const journeyAnchorFor = (mission: MissionTemplate): { chapterId: number; afterChallengeId: string } | null => {
+    const coreId = challengeIdFromJourneyMissionId(mission.id);
+    if (coreId && mission.chapterNumber) return { chapterId: mission.chapterNumber, afterChallengeId: coreId };
+    if (mission.journeyPlacement) {
+      return { chapterId: mission.journeyPlacement.chapterId, afterChallengeId: journeyChallengeIdForMission(mission.id) };
+    }
+    return null;
+  };
+
+  const openCreateModal = (placement: { chapterId: number; afterChallengeId: string } | null) => {
+    if (placement && showCreateModal) return;
+    setCreatePlacement(placement);
+    setShowCreateModal(true);
+  };
 
   const filterTabs: Array<{ id: MissionAdminFilter; label: string }> = [
     { id: 'all', label: 'All Missions' },
@@ -573,7 +631,7 @@ const MissionAdmin: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Mission Admin</h2>
         <button
-          onClick={() => setShowCreateModal(true)}
+          onClick={() => openCreateModal(null)}
           style={{
             backgroundColor: '#10b981',
             color: 'white',
@@ -619,14 +677,18 @@ const MissionAdmin: React.FC = () => {
           const chrome = missionCategoryListChrome(mission.missionCategory);
           const published = isMissionPublished(mission);
           const isCoreJourney = isHardcodedJourneyMissionId(mission.id);
+          const coreEdited = isCoreJourney && mission.metadata?.journeyOverride === true;
+          const journeyAnchor = listFilter === 'journey' ? journeyAnchorFor(mission) : null;
+          // List rows carry display-only Journey numbering; edit the stored document
+          const editMission = () => setSelectedMission(missions.find((m) => m.id === mission.id) || mission);
           return (
           <div
             key={mission.id}
             onClick={() => {
               if (isCoreJourney) {
-                setPreviewMission(mission);
+                setOverrideEditMission(mission);
               } else {
-                setSelectedMission(mission);
+                editMission();
               }
             }}
             style={{
@@ -692,7 +754,7 @@ const MissionAdmin: React.FC = () => {
                         fontSize: '0.75rem',
                         fontWeight: 'bold'
                       }}>
-                        Core Journey
+                        Core Journey{coreEdited ? ' · Edited' : ''}
                       </span>
                     ) : (
                       <span style={{
@@ -725,7 +787,8 @@ const MissionAdmin: React.FC = () => {
                   {(mission.missionCategory === 'STORY' || isCoreJourney) && (
                     <p style={{ margin: '0.5rem 0 0 0', color: '#9ca3af', fontSize: '0.8rem' }}>
                       {getJourneyChapterLabel(mission)} · XP {missionXpReward(mission)} · PP {missionPpReward(mission)}
-                      {isCoreJourney ? ' · Defined in Player Journey chapters' : ''}
+                      {isCoreJourney ? ' · Gameplay defined in Player Journey chapters' : ''}
+                      {mission.journeyPlacement ? ' · Added Journey step' : ''}
                     </p>
                   )}
                   {mission.story && mission.missionCategory !== 'STORY' && !isCoreJourney && (
@@ -741,8 +804,22 @@ const MissionAdmin: React.FC = () => {
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
-                {!isCoreJourney && (
-                  <button type="button" onClick={() => setSelectedMission(mission)} style={adminChipBtn}>Edit</button>
+                <button
+                  type="button"
+                  onClick={() => (isCoreJourney ? setOverrideEditMission(mission) : editMission())}
+                  style={adminChipBtn}
+                >
+                  Edit
+                </button>
+                {journeyAnchor && (
+                  <button
+                    type="button"
+                    onClick={() => openCreateModal(journeyAnchor)}
+                    style={{ ...adminChipBtn, background: '#ecfdf5', borderColor: '#6ee7b7', color: '#065f46' }}
+                    title="Create a new mission that players do right after this step"
+                  >
+                    + Step After
+                  </button>
                 )}
                 {!isCoreJourney && (
                   <button
@@ -763,7 +840,7 @@ const MissionAdmin: React.FC = () => {
                     {published ? 'Unpublish' : 'Publish'}
                   </button>
                 )}
-                {!isCoreJourney && mission.missionCategory === 'STORY' && (
+                {!isCoreJourney && mission.missionCategory === 'STORY' && !mission.journeyPlacement && (
                   <div style={{ display: 'flex', gap: '0.25rem' }}>
                     <button type="button" onClick={(e) => handleReorderJourney(mission, -1, e)} style={adminChipBtn}>↑</button>
                     <button type="button" onClick={(e) => handleReorderJourney(mission, 1, e)} style={adminChipBtn}>↓</button>
@@ -795,6 +872,7 @@ const MissionAdmin: React.FC = () => {
           key={selectedMission.id}
           mission={selectedMission}
           classrooms={classrooms}
+          journeyStepChoices={journeyStepChoices}
           onClose={() => setSelectedMission(null)}
           onSave={handleSaveMission}
           onDelete={handleDeleteMission}
@@ -807,9 +885,27 @@ const MissionAdmin: React.FC = () => {
       {showCreateModal && (
         <MissionCreateModal
           classrooms={classrooms}
-          onClose={() => setShowCreateModal(false)}
+          journeyStepChoices={journeyStepChoices}
+          initialPlacement={createPlacement}
+          onClose={() => {
+            setShowCreateModal(false);
+            setCreatePlacement(null);
+          }}
           onCreate={handleCreateMission}
           saving={saving}
+        />
+      )}
+
+      {overrideEditMission && (
+        <JourneyChallengeOverrideModal
+          key={overrideEditMission.id}
+          mission={overrideEditMission}
+          override={journeyOverrides[challengeIdFromJourneyMissionId(overrideEditMission.id) || '']}
+          onClose={() => setOverrideEditMission(null)}
+          onSaved={async () => {
+            setOverrideEditMission(null);
+            await loadMissions();
+          }}
         />
       )}
 
@@ -921,6 +1017,287 @@ const adminChipBtn: React.CSSProperties = {
   cursor: 'pointer',
   color: '#111827',
 };
+
+const adminInput: React.CSSProperties = {
+  width: '100%',
+  padding: '0.5rem',
+  borderRadius: '0.25rem',
+  border: '1px solid #d1d5db',
+};
+
+interface JourneyChallengeOverrideModalProps {
+  mission: MissionTemplate;
+  override?: JourneyChallengeOverride;
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+}
+
+/** Edit title / description / XP / PP of a Core Journey challenge without touching its gameplay code. */
+const JourneyChallengeOverrideModal: React.FC<JourneyChallengeOverrideModalProps> = ({
+  mission,
+  override,
+  onClose,
+  onSaved,
+}) => {
+  const challengeId = challengeIdFromJourneyMissionId(mission.id) || '';
+  const chapter = CHAPTERS.find((c) => c.challenges.some((ch) => ch.id === challengeId));
+  const base = chapter?.challenges.find((ch) => ch.id === challengeId);
+  const baseXp = base?.rewards.find((r) => r.type === 'xp')?.value ?? 0;
+  const basePp = base?.rewards.find((r) => r.type === 'pp')?.value ?? 0;
+  const otherRewards = (base?.rewards || []).filter((r) => r.type !== 'xp' && r.type !== 'pp');
+
+  const [title, setTitle] = useState(override?.title || base?.title || '');
+  const [description, setDescription] = useState(override?.description || base?.description || '');
+  const [xp, setXp] = useState(String(override?.xpReward ?? baseXp));
+  const [pp, setPp] = useState(String(override?.ppReward ?? basePp));
+  const [busy, setBusy] = useState(false);
+
+  if (!chapter || !base) {
+    return null;
+  }
+
+  const handleSave = async () => {
+    const xpNum = xp.trim() === '' ? baseXp : parseInt(xp, 10);
+    const ppNum = pp.trim() === '' ? basePp : parseInt(pp, 10);
+    if (!Number.isFinite(xpNum) || xpNum < 0 || !Number.isFinite(ppNum) || ppNum < 0) {
+      alert('XP and PP must be whole numbers of 0 or more.');
+      return;
+    }
+    const patch = {
+      title: title.trim() && title.trim() !== base.title ? title : undefined,
+      description: description.trim() && description.trim() !== base.description ? description : undefined,
+      xpReward: xpNum !== baseXp ? xpNum : undefined,
+      ppReward: ppNum !== basePp ? ppNum : undefined,
+    };
+    setBusy(true);
+    try {
+      if (Object.values(patch).every((v) => v === undefined)) {
+        await clearJourneyChallengeOverride(challengeId);
+      } else {
+        await saveJourneyChallengeOverride(challengeId, chapter.id, patch);
+      }
+      await onSaved();
+    } catch (error) {
+      console.error('Error saving Journey challenge edits:', error);
+      alert('Failed to save Journey challenge edits.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleReset = async () => {
+    if (!window.confirm(`Reset "${base.title}" to its original title, description, and rewards?`)) return;
+    setBusy(true);
+    try {
+      await clearJourneyChallengeOverride(challengeId);
+      await onSaved();
+    } catch (error) {
+      console.error('Error resetting Journey challenge edits:', error);
+      alert('Failed to reset Journey challenge.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const label: React.CSSProperties = { display: 'block', marginBottom: '0.35rem', fontWeight: 'bold' };
+  const hint: React.CSSProperties = { margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#6b7280' };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.7)',
+        zIndex: 10000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '1rem',
+      }}
+      onClick={() => !busy && onClose()}
+    >
+      <div
+        style={{
+          background: 'white',
+          borderRadius: '0.75rem',
+          maxWidth: 620,
+          width: '100%',
+          padding: '1.5rem',
+          maxHeight: '90vh',
+          overflow: 'auto',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 style={{ marginTop: 0, marginBottom: '0.25rem' }}>Edit Journey Step</h3>
+        <p style={{ marginTop: 0, color: '#6b7280', fontSize: '0.85rem' }}>
+          {getJourneyChapterLabel(mission)} · Core Journey. Battles, cutscenes, and other gameplay for this step stay as
+          built; these edits change what players see and the XP / PP it awards.
+        </p>
+
+        <div style={{ marginBottom: '1rem' }}>
+          <label style={label}>Title</label>
+          <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} style={adminInput} />
+          {title.trim() !== base.title && <p style={hint}>Original: {base.title}</p>}
+        </div>
+
+        <div style={{ marginBottom: '1rem' }}>
+          <label style={label}>Description</label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={5}
+            style={{ ...adminInput, resize: 'vertical' }}
+          />
+          {description.trim() !== base.description && <p style={hint}>Original: {base.description}</p>}
+        </div>
+
+        <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
+          <div style={{ flex: 1 }}>
+            <label style={label}>XP Reward</label>
+            <input type="number" min={0} step={1} value={xp} onChange={(e) => setXp(e.target.value)} style={adminInput} />
+            <p style={hint}>Original: {baseXp}</p>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={label}>PP Reward</label>
+            <input type="number" min={0} step={1} value={pp} onChange={(e) => setPp(e.target.value)} style={adminInput} />
+            <p style={hint}>Original: {basePp}</p>
+          </div>
+        </div>
+
+        {otherRewards.length > 0 && (
+          <p style={{ ...hint, marginBottom: '1rem' }}>
+            Also awards (not editable here): {otherRewards.map((r) => r.description || String(r.value)).join(', ')}
+          </p>
+        )}
+
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={busy}
+            style={{
+              background: '#10b981',
+              color: 'white',
+              border: 'none',
+              padding: '0.6rem 1.2rem',
+              borderRadius: '0.5rem',
+              fontWeight: 'bold',
+              cursor: busy ? 'not-allowed' : 'pointer',
+              opacity: busy ? 0.6 : 1,
+            }}
+          >
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+          {override && (
+            <button type="button" onClick={handleReset} disabled={busy} style={adminChipBtn}>
+              Reset to Original
+            </button>
+          )}
+          <button type="button" onClick={onClose} disabled={busy} style={adminChipBtn}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+interface JourneyPlacementFieldsProps {
+  value: JourneyPlacementForm;
+  choices: JourneyStepChoices;
+  /** The mission being edited, so it cannot be placed after itself. */
+  missionId?: string;
+  onChange: (next: JourneyPlacementForm) => void;
+}
+
+/** "Add as a numbered Journey step" controls shared by the create and edit modals. */
+const JourneyPlacementFields: React.FC<JourneyPlacementFieldsProps> = ({ value, choices, missionId, onChange }) => {
+  const chapterId = parseInt(value.journeyChapterId, 10) || CHAPTERS[0].id;
+  const ownAnchor = missionId ? journeyChallengeIdForMission(missionId) : '';
+  const steps = (choices[chapterId] || []).filter((s) => s.id !== ownAnchor);
+  const label: React.CSSProperties = { display: 'block', marginBottom: '0.35rem', fontWeight: 'bold' };
+
+  return (
+    <div
+      style={{
+        marginBottom: '1rem',
+        padding: '1rem',
+        background: '#fffbeb',
+        border: '1px solid #fcd34d',
+        borderRadius: '0.5rem',
+      }}
+    >
+      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 'bold' }}>
+        <input
+          type="checkbox"
+          checked={value.journeyPlaced}
+          onChange={(e) =>
+            onChange({
+              ...value,
+              journeyPlaced: e.target.checked,
+              journeyChapterId: value.journeyChapterId || String(chapterId),
+            })
+          }
+        />
+        Add as a numbered step in a Player&apos;s Journey chapter
+      </label>
+      {value.journeyPlaced && (
+        <>
+          <div style={{ display: 'flex', gap: '1rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 180px' }}>
+              <label style={label}>Chapter</label>
+              <select
+                value={String(chapterId)}
+                onChange={(e) => onChange({ ...value, journeyChapterId: e.target.value, journeyAfterId: '' })}
+                style={adminInput}
+              >
+                {CHAPTERS.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    Chapter {c.id}: {c.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ flex: '2 1 260px' }}>
+              <label style={label}>Place after</label>
+              <select
+                value={value.journeyAfterId}
+                onChange={(e) => onChange({ ...value, journeyAfterId: e.target.value })}
+                style={adminInput}
+              >
+                {steps.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+                <option value="">End of chapter</option>
+              </select>
+            </div>
+          </div>
+          <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
+            Players unlock this mission after finishing the step above it, and the following step stays locked until they
+            complete it. It needs a mission sequence so players have something to play. Unpublished missions are hidden
+            from players.
+          </p>
+        </>
+      )}
+    </div>
+  );
+};
+
+/** Validates placement fields and returns the Firestore value, or an error message. */
+function journeyPlacementFromForm(
+  form: JourneyPlacementForm,
+  sequenceLength: number
+): { placement?: { chapterId: number; afterChallengeId: string | null }; error?: string } {
+  if (!form.journeyPlaced) return {};
+  const chapterId = parseInt(form.journeyChapterId, 10);
+  if (!CHAPTERS.some((c) => c.id === chapterId)) return { error: 'Choose a Player\'s Journey chapter for this step.' };
+  if (sequenceLength === 0) {
+    return { error: 'Journey steps need at least one mission sequence step so players have something to play.' };
+  }
+  return { placement: { chapterId, afterChallengeId: form.journeyAfterId || null } };
+}
 
 interface MissionImageEditModalProps {
   mission: MissionTemplate;
@@ -1198,6 +1575,7 @@ const MissionImageEditModal: React.FC<MissionImageEditModalProps> = ({
 interface MissionEditModalProps {
   mission: MissionTemplate;
   classrooms: Array<{ id: string; name: string }>;
+  journeyStepChoices: JourneyStepChoices;
   onClose: () => void;
   onSave: (data: Partial<MissionTemplate> & { hubDisplayOrderClear?: boolean }) => void;
   onDelete: (missionId: string) => void | Promise<void>;
@@ -1208,6 +1586,7 @@ interface MissionEditModalProps {
 const MissionEditModal: React.FC<MissionEditModalProps> = ({
   mission,
   classrooms,
+  journeyStepChoices,
   onSave,
   onClose,
   onDelete,
@@ -1253,6 +1632,12 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({
     skillIds: Array.isArray(mission.skillIds) ? [...mission.skillIds] : [],
   });
 
+  const [journeyPlacementForm, setJourneyPlacementForm] = useState<JourneyPlacementForm>({
+    journeyPlaced: !!mission.journeyPlacement,
+    journeyChapterId: mission.journeyPlacement ? String(mission.journeyPlacement.chapterId) : '',
+    journeyAfterId: mission.journeyPlacement?.afterChallengeId || '',
+  });
+
   const [imageUploading, setImageUploading] = useState<'preview' | 'modal' | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
 
@@ -1273,6 +1658,12 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({
       formData.classIds.length === 0
     ) {
       alert('Assign this Skill Mission to at least one class before publishing. Only students in those classes can see it.');
+      return;
+    }
+
+    const { placement, error: placementError } = journeyPlacementFromForm(journeyPlacementForm, sequence.length);
+    if (placementError) {
+      alert(placementError);
       return;
     }
     
@@ -1364,13 +1755,14 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({
 
     // Add story metadata if STORY mission
     if (formData.missionCategory === 'STORY') {
-      if (!formData.storyChapterId) {
+      const storyChapterId = formData.storyChapterId || (placement ? `chapter_${placement.chapterId}` : '');
+      if (!storyChapterId) {
         alert('Chapter ID is required for STORY missions');
         return;
       }
       
       missionData.story = {
-        chapterId: formData.storyChapterId,
+        chapterId: storyChapterId,
         order: formData.storyOrder,
         required: formData.storyRequired,
         prerequisites: formData.storyPrerequisites
@@ -1522,6 +1914,24 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({
       // If sequence was removed
       missionData.sequence = [];
       missionData.sequenceVersion = (mission.sequenceVersion || 0) + 1;
+    }
+
+    if (placement) {
+      missionData.journeyPlacement = placement;
+      missionData.playerJourneyLink = {
+        chapterId: placement.chapterId,
+        challengeId: journeyChallengeIdForMission(mission.id),
+      };
+      missionData.chapterNumber = placement.chapterId;
+      if (!missionData.deliveryChannels?.includes('PLAYER_JOURNEY')) {
+        missionData.deliveryChannels = [...(missionData.deliveryChannels || []), 'PLAYER_JOURNEY'];
+      }
+    } else if (mission.journeyPlacement) {
+      const md = missionData as Record<string, unknown>;
+      md.journeyPlacement = deleteField();
+      if (isJourneyMissionChallengeId(mission.playerJourneyLink?.challengeId || '')) {
+        md.playerJourneyLink = deleteField();
+      }
     }
 
     onSave(missionData);
@@ -2079,6 +2489,13 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({
             </div>
           </div>
 
+          <JourneyPlacementFields
+            value={journeyPlacementForm}
+            choices={journeyStepChoices}
+            missionId={mission.id}
+            onChange={setJourneyPlacementForm}
+          />
+
           <MissionRewardsBattlePassEditor entries={rewardEntries} onChange={setRewardEntries} />
 
           {/* Mission Sequence Builder */}
@@ -2229,18 +2646,38 @@ const DEFAULT_CREATE_FORM: MissionCreateFormData = {
   hubDisplayOrder: '',
   classIds: [],
   skillIds: [],
+  journeyPlaced: false,
+  journeyChapterId: '',
+  journeyAfterId: '',
 };
 
 const MissionCreateModal: React.FC<{
   classrooms: Array<{ id: string; name: string }>;
+  journeyStepChoices: JourneyStepChoices;
+  /** Pre-fills "Add as a numbered Journey step" (from a list row's "+ Step After"). */
+  initialPlacement?: { chapterId: number; afterChallengeId: string } | null;
   onClose: () => void;
   onCreate: (data: Omit<MissionTemplate, 'id' | 'createdAt' | 'updatedAt'>, playerJourneyLink?: PlayerJourneyLink, sequence?: MissionSequenceStep[], draftMissionId?: string) => void;
   saving: boolean;
-}> = ({ classrooms, onClose, onCreate, saving }) => {
+}> = ({ classrooms, journeyStepChoices, initialPlacement, onClose, onCreate, saving }) => {
   const restored = readMissionCreateDraft();
-  const [formData, setFormData] = useState<MissionCreateFormData>(
-    () => ({ ...DEFAULT_CREATE_FORM, ...(restored?.formData || {}), classIds: restored?.formData?.classIds || [], skillIds: restored?.formData?.skillIds || [] })
-  );
+  const [formData, setFormData] = useState<MissionCreateFormData>(() => {
+    const base: MissionCreateFormData = {
+      ...DEFAULT_CREATE_FORM,
+      ...(restored?.formData || {}),
+      classIds: restored?.formData?.classIds || [],
+      skillIds: restored?.formData?.skillIds || [],
+    };
+    if (!initialPlacement) return base;
+    return {
+      ...base,
+      missionCategory: 'STORY',
+      storyChapterId: `chapter_${initialPlacement.chapterId}`,
+      journeyPlaced: true,
+      journeyChapterId: String(initialPlacement.chapterId),
+      journeyAfterId: initialPlacement.afterChallengeId,
+    };
+  });
 
   const [rewardEntries, setRewardEntries] = useState<BattlePassTierRewardEntry[]>(
     () => restored?.rewardEntries || []
@@ -2335,7 +2772,13 @@ const MissionCreateModal: React.FC<{
     e.preventDefault();
     
     // Validation
-    if (formData.deliveryChannels.includes('PLAYER_JOURNEY') && !formData.linkedJourneyStep) {
+    const { placement, error: placementError } = journeyPlacementFromForm(formData, sequence.length);
+    if (placementError) {
+      alert(placementError);
+      return;
+    }
+
+    if (!placement && formData.deliveryChannels.includes('PLAYER_JOURNEY') && !formData.linkedJourneyStep) {
       alert('Please select a Player Journey step to link this mission to.');
       return;
     }
@@ -2374,13 +2817,14 @@ const MissionCreateModal: React.FC<{
     }
 
     if (formData.missionCategory === 'STORY') {
-      if (!formData.storyChapterId) {
+      const storyChapterId = formData.storyChapterId || (placement ? `chapter_${placement.chapterId}` : '');
+      if (!storyChapterId) {
         alert('Chapter ID is required for STORY missions');
         return;
       }
       
       missionData.story = {
-        chapterId: formData.storyChapterId,
+        chapterId: storyChapterId,
         order: formData.storyOrder,
         required: formData.storyRequired,
         prerequisites: formData.storyPrerequisites
@@ -2399,7 +2843,14 @@ const MissionCreateModal: React.FC<{
     
     // Parse player journey link if selected
     let playerJourneyLink: PlayerJourneyLink | undefined;
-    if (formData.linkedJourneyStep) {
+    if (placement) {
+      // The Journey link is built from the mission id when the mission is saved
+      missionData.journeyPlacement = placement;
+      missionData.chapterNumber = placement.chapterId;
+      if (!missionData.deliveryChannels.includes('PLAYER_JOURNEY')) {
+        missionData.deliveryChannels = [...missionData.deliveryChannels, 'PLAYER_JOURNEY'];
+      }
+    } else if (formData.linkedJourneyStep) {
       const [chapterIdStr, challengeId] = formData.linkedJourneyStep.split('::');
       const chapterId = parseInt(chapterIdStr, 10);
       if (!isNaN(chapterId) && challengeId) {
@@ -2846,8 +3297,22 @@ const MissionCreateModal: React.FC<{
             </div>
           </div>
 
+          <JourneyPlacementFields
+            value={formData}
+            choices={journeyStepChoices}
+            onChange={(next) =>
+              setFormData((prev) => ({
+                ...prev,
+                ...next,
+                ...(next.journeyPlaced && !prev.journeyPlaced
+                  ? { missionCategory: 'STORY' as MissionCategory, storyChapterId: prev.storyChapterId || `chapter_${next.journeyChapterId}` }
+                  : {}),
+              }))
+            }
+          />
+
           {/* Link to Player Journey Step - only show if PLAYER_JOURNEY is checked */}
-          {formData.deliveryChannels.includes('PLAYER_JOURNEY') && (
+          {formData.deliveryChannels.includes('PLAYER_JOURNEY') && !formData.journeyPlaced && (
             <div style={{ marginBottom: '1rem', padding: '1rem', background: '#f3f4f6', borderRadius: '0.5rem' }}>
               <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
                 Link to Player Journey Step <span style={{ color: '#ef4444' }}>*</span>

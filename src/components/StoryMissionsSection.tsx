@@ -17,6 +17,7 @@ import {
   checkGating
 } from '../utils/missionsService';
 import { MissionTemplate, PlayerMission } from '../types/missions';
+import { isJourneyMissionChallengeId } from '../utils/journeyChallengeConfig';
 
 interface StoryMissionsSectionProps {
   chapterId: string; // e.g. "chapter_1", "chapter_2"
@@ -48,7 +49,12 @@ const StoryMissionsSection: React.FC<StoryMissionsSectionProps> = ({
         });
 
         // Sort by story.order / sortOrder; hide unpublished drafts
-        const published = missions.filter((m) => m.isPublished !== false);
+        // Missions placed as numbered chapter steps render in the challenge list instead
+        const published = missions.filter(
+          (m) =>
+            m.isPublished !== false &&
+            !isJourneyMissionChallengeId(m.playerJourneyLink?.challengeId || '')
+        );
         published.sort((a, b) => {
           const orderA = a.sortOrder ?? a.story?.order ?? 999;
           const orderB = b.sortOrder ?? b.story?.order ?? 999;

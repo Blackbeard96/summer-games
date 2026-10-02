@@ -1,5 +1,6 @@
 import React from 'react';
 import type { TrainingQuestion } from '../../types/trainingGrounds';
+import { isMatchingQuestion, matchPairsOf } from '../../utils/quizMatching';
 
 interface LiveQuizQuestionCardProps {
   question: TrainingQuestion;
@@ -77,9 +78,11 @@ export const LiveQuizQuestionCard: React.FC<LiveQuizQuestionCardProps> = ({
         {question.prompt}
       </h2>
       <p style={{ fontSize: compact ? '0.82rem' : '0.9rem', color: '#64748b', marginBottom: compact ? '0.65rem' : '1rem', fontWeight: 500 }}>
-        {(question.correctIndices ?? (question.correctIndex !== undefined ? [question.correctIndex] : [])).length > 1
-          ? '☑️ Select all that apply'
-          : '○ Select one answer'}
+        {isMatchingQuestion(question)
+          ? `⇄ Drag each card to its match (${matchPairsOf(question).length} points)`
+          : (question.correctIndices ?? (question.correctIndex !== undefined ? [question.correctIndex] : [])).length > 1
+            ? '☑️ Select all that apply'
+            : '○ Select one answer'}
       </p>
       {question.imageUrl && (
         <div style={{ marginBottom: compact ? '0.65rem' : '1rem', textAlign: 'center' }}>

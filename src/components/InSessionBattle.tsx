@@ -144,6 +144,8 @@ import type { Move as BattleMove } from '../types/battle';
 import { isSelfDirectedBattleMove, isValidLiveEventRosterTarget } from '../utils/battleSkillTargetResolution';
 import { computeLiveEventParticipationSkillCost } from '../utils/liveEventSkillCost';
 import { FLOW_STATE_SUCCESS_THRESHOLD } from '../utils/liveEventFlowState';
+import MatchingQuestionBoard from './quiz/MatchingQuestionBoard';
+import { isMatchingQuestion, matchPairsOf, pointsPossibleForOrder } from '../utils/quizMatching';
 import {
   getPassiveParticipationUi,
   formatPassiveParticipationCountdown,
@@ -449,15 +451,20 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   /** Seconds until auto-advance after the answer timer ends (Battle Royale / Team BR; all clients). */
   const [brInterQuestionSecondsLeft, setBrInterQuestionSecondsLeft] = useState<number | null>(null);
   const [quizSelectedIndices, setQuizSelectedIndices] = useState<number[]>([]);
+  const [quizMatchSelections, setQuizMatchSelections] = useState<Record<string, string>>({});
   const [quizAnswerSubmitted, setQuizAnswerSubmitted] = useState(false);
   /** Prevents double-submit (e.g. rapid taps on auto-submit single-choice). */
   const quizSubmitLockRef = useRef(false);
+  const matchAutoSubmitKeyRef = useRef<string | null>(null);
   const liveQuizScrollRef = useRef<HTMLDivElement | null>(null);
   const [quizMyResponse, setQuizMyResponse] = useState<{
     selectedIndices: number[];
     isCorrect: boolean;
     pointsAwarded: number;
     flowBoostApplied?: boolean;
+    matchSelections?: Record<string, string>;
+    correctMatches?: number;
+    totalMatches?: number;
   } | null>(null);
   const [flowBoonSaving, setFlowBoonSaving] = useState(false);
   const [quizResponseCount, setQuizResponseCount] = useState(0);
@@ -1305,6 +1312,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       quizSubmitLockRef.current = false;
       setQuizMyResponse(null);
       setQuizSelectedIndices([]);
+      setQuizMatchSelections({});
       // New question: scroll quiz body to top so prompt + answers are reachable
       requestAnimationFrame(() => {
         const el = liveQuizScrollRef.current;
@@ -1318,11 +1326,61 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           (r.quizRoundIndex ?? 1) === round
         ) {
           setQuizAnswerSubmitted(true);
-          setQuizMyResponse({ selectedIndices: r.selectedIndices, isCorrect: r.isCorrect, pointsAwarded: r.pointsAwarded });
+          setQuizMyResponse({
+            selectedIndices: r.selectedIndices,
+            isCorrect: r.isCorrect,
+            pointsAwarded: r.pointsAwarded,
+            matchSelections: r.matchSelections,
+            correctMatches: r.correctMatches,
+            totalMatches: r.totalMatches,
+          });
         }
       });
     }
   }, [sessionId, currentUser?.uid, quizSession?.status, quizSession?.currentQuestionId, quizSession?.quizRoundIndex]);
+
+  // Matching questions take a while to arrange — lock in whatever is placed when the timer is about to end.
+  useEffect(() => {
+    if (!quizSession || quizSession.status !== 'question_live' || !quizSession.currentQuestionId) return;
+    if (quizCountdown == null || quizCountdown > 1 || quizAnswerSubmitted || quizSubmitLockRef.current) return;
+    if (!currentUser || Object.keys(quizMatchSelections).length === 0) return;
+    const q = quizQuestions.find((x) => x.id === quizSession.currentQuestionId);
+    if (!isMatchingQuestion(q)) return;
+    const attemptKey = `${quizSession.currentQuestionId}:${quizSession.quizRoundIndex ?? 1}`;
+    if (matchAutoSubmitKeyRef.current === attemptKey) return;
+    matchAutoSubmitKeyRef.current = attemptKey;
+    const selections = quizMatchSelections;
+    quizSubmitLockRef.current = true;
+    setQuizAnswerSubmitted(true);
+    submitQuizResponse(
+      sessionId,
+      currentUser.uid,
+      quizSession.currentQuestionId,
+      [],
+      quizSession.quizRoundIndex ?? 1,
+      selections
+    )
+      .then((res) => {
+        if (res.ok) {
+          setQuizMyResponse({
+            selectedIndices: [],
+            isCorrect: res.isCorrect === true,
+            pointsAwarded: res.pointsAwarded ?? 0,
+            flowBoostApplied: res.flowBoostApplied === true,
+            matchSelections: selections,
+            correctMatches: res.correctMatches,
+            totalMatches: res.totalMatches,
+          });
+        } else {
+          setQuizAnswerSubmitted(false);
+          quizSubmitLockRef.current = false;
+        }
+      })
+      .catch(() => {
+        setQuizAnswerSubmitted(false);
+        quizSubmitLockRef.current = false;
+      });
+  }, [quizCountdown, quizSession, quizAnswerSubmitted, quizMatchSelections, quizQuestions, currentUser, sessionId]);
 
   // Completed quiz: scroll to top so standings + question/response breakdown are reachable
   useEffect(() => {
@@ -5482,10 +5540,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 const timeExpired = quizSession.questionEndsAt != null && Date.now() > quizSession.questionEndsAt;
                 const correctIndices = currentQ?.correctIndices ?? (currentQ?.correctIndex !== undefined ? [currentQ.correctIndex] : []);
                 const isBattle = isBattleQuizMode(quizSession.gameMode);
-                const isSingleSelect = correctIndices.length <= 1;
+                const isMatching = isMatchingQuestion(currentQ);
+                const isSingleSelect = !isMatching && correctIndices.length <= 1;
                 const compactQuizChrome = !liveQuizExpanded;
 
-                const submitSelected = async (selected: number[]) => {
+                const submitSelected = async (selected: number[], matchSelections?: Record<string, string>) => {
                   if (!currentUser || !currentQ || quizSubmitLockRef.current || quizAnswerSubmitted) return;
                   quizSubmitLockRef.current = true;
                   setQuizAnswerSubmitted(true);
@@ -5495,7 +5554,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       currentUser.uid,
                       quizSession.currentQuestionId!,
                       selected,
-                      quizSession.quizRoundIndex ?? 1
+                      quizSession.quizRoundIndex ?? 1,
+                      matchSelections
                     );
                     if (res.ok) {
                       setQuizMyResponse({
@@ -5503,6 +5563,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                         isCorrect: res.isCorrect === true,
                         pointsAwarded: res.pointsAwarded ?? 0,
                         flowBoostApplied: res.flowBoostApplied === true,
+                        matchSelections,
+                        correctMatches: res.correctMatches,
+                        totalMatches: res.totalMatches,
                       });
                     } else {
                       setQuizAnswerSubmitted(false);
@@ -5678,6 +5741,54 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       timeExpired={timeExpired}
                       compact={compactQuizChrome}
                     />
+                    {isMatching ? (
+                      <div style={{ marginTop: '0.5rem' }}>
+                        <MatchingQuestionBoard
+                          question={currentQ}
+                          className="mst-match--light"
+                          selections={quizMyResponse?.matchSelections ?? quizMatchSelections}
+                          onChange={(next) => {
+                            if (quizAnswerSubmitted || timeExpired || quizSubmitLockRef.current) return;
+                            setQuizMatchSelections(next);
+                          }}
+                          disabled={quizAnswerSubmitted || timeExpired}
+                          reveal={timeExpired || !!quizMyResponse}
+                          seed={`${currentQ.id}:${quizSession.quizRoundIndex ?? 0}:${currentUser?.uid ?? ''}`}
+                        />
+                        {!quizAnswerSubmitted && !timeExpired && (() => {
+                          const placed = Object.keys(quizMatchSelections).length;
+                          const total = matchPairsOf(currentQ).length;
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (placed === 0) return;
+                                if (
+                                  placed < total &&
+                                  !window.confirm(`You've placed ${placed} of ${total} matches. Submit anyway?`)
+                                ) {
+                                  return;
+                                }
+                                void submitSelected([], quizMatchSelections);
+                              }}
+                              disabled={placed === 0}
+                              style={{
+                                marginTop: '1rem',
+                                padding: '0.75rem 1.5rem',
+                                background: placed > 0 ? '#10b981' : '#9ca3af',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '0.5rem',
+                                fontWeight: 600,
+                                cursor: placed > 0 ? 'pointer' : 'not-allowed',
+                              }}
+                            >
+                              Submit Matches ({placed}/{total})
+                            </button>
+                          );
+                        })()}
+                      </div>
+                    ) : (
                     <LiveQuizAnswerOptions
                       question={currentQ}
                       selectedIndices={quizSelectedIndices}
@@ -5698,12 +5809,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       shuffleKey={String(quizSession.quizRoundIndex ?? 0)}
                       compact={compactQuizChrome}
                     />
+                    )}
                     {isSingleSelect && !quizAnswerSubmitted && !timeExpired && !quizMyResponse ? (
                       <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#64748b' }}>
                         Single choice: tap an option to submit right away. (Select-all-that-apply still uses Submit.)
                       </p>
                     ) : null}
-                    {!quizAnswerSubmitted && !timeExpired && !isSingleSelect && (
+                    {!quizAnswerSubmitted && !timeExpired && !isSingleSelect && !isMatching && (
                       <button
                         onClick={() => {
                           if (!currentQ || quizAnswerSubmitted) return;
@@ -5736,6 +5848,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       }}>
                         <div style={{ fontWeight: 700, fontSize: '1.1rem', color: quizMyResponse.isCorrect ? '#047857' : '#b91c1c', marginBottom: quizMyResponse.isCorrect ? '0.5rem' : 0 }}>
                           {quizMyResponse.isCorrect ? '✓ Correct!' : '✗ Incorrect'}
+                          {quizMyResponse.totalMatches ? (
+                            <span style={{ marginLeft: '0.5rem', fontSize: '0.95rem', fontWeight: 600 }}>
+                              {quizMyResponse.correctMatches ?? 0} of {quizMyResponse.totalMatches} matches
+                            </span>
+                          ) : null}
                         </div>
                         <div style={{ color: '#374151', fontSize: '0.95rem' }}>
                           {isBattle ? (
@@ -5752,12 +5869,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                 : quizMyResponse.isCorrect
                                   ? `Correct! +${quizMyResponse.pointsAwarded} Points`
                                   : `${quizMyResponse.pointsAwarded} pts`}
-                              {quizMyResponse.isCorrect && !quizMyResponse.flowBoostApplied && (
-                                <>
-                                  <span style={{ margin: '0 0.35rem' }}>•</span>
-                                  <strong style={{ color: '#059669' }}>+1 Participation Point</strong>
-                                </>
-                              )}
+                              {quizMyResponse.totalMatches
+                                ? (quizMyResponse.correctMatches ?? 0) > 0 && (
+                                    <>
+                                      <span style={{ margin: '0 0.35rem' }}>•</span>
+                                      <strong style={{ color: '#059669' }}>
+                                        +{quizMyResponse.correctMatches} Participation Point
+                                        {quizMyResponse.correctMatches === 1 ? '' : 's'}
+                                      </strong>
+                                    </>
+                                  )
+                                : quizMyResponse.isCorrect && !quizMyResponse.flowBoostApplied && (
+                                    <>
+                                      <span style={{ margin: '0 0.35rem' }}>•</span>
+                                      <strong style={{ color: '#059669' }}>+1 Participation Point</strong>
+                                    </>
+                                  )}
                             </>
                           )}
                         </div>
@@ -5950,8 +6077,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   />
                   {/* Host only: how every player did — per-player breakdown */}
                   {isSessionHost && (() => {
-                    const totalQuestions = quizSession.questionOrder?.length ?? 0;
                     const questionMap = new Map(quizQuestions.map((q) => [q.id, q]));
+                    const totalQuestions = pointsPossibleForOrder(quizSession.questionOrder, questionMap);
                     return (
                       <div style={{
                         marginTop: '1.25rem',
@@ -6031,7 +6158,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   {currentUser && (() => {
                     const uid = currentUser.uid;
                     const myCorrect = quizSession.correctCount?.[uid] ?? 0;
-                    const totalQuestions = quizSession.questionOrder?.length ?? 0;
+                    const totalQuestions = pointsPossibleForOrder(
+                      quizSession.questionOrder,
+                      new Map(quizQuestions.map((q) => [q.id, q]))
+                    );
                     const myWrong = totalQuestions - myCorrect;
                     const passPct = totalQuestions > 0 ? Math.round((myCorrect / totalQuestions) * 100) : 0;
                     const myEntry = entriesWithPP.find((e) => e.uid === uid);

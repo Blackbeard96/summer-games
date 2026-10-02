@@ -37,6 +37,13 @@ import { getChapterProgress } from '../utils/journeyProgress';
 import { formatMissionCompletionDate, isChallengeProgressCompleted } from '../utils/journeyMissionProgress';
 import { loadAllJourneyChallengeMedia } from '../utils/journeyChallengeMedia';
 import { resolveJourneyChallengePreviewUrl } from '../utils/journeyChallengePreviewDefaults';
+import { buildJourneyChapter, type JourneyChallengeOverride } from '../utils/journeyChallengeConfig';
+import {
+  loadAllJourneyChallengeOverrides,
+  loadJourneyMissionsForChapter,
+} from '../utils/journeyChallengeConfigStore';
+import { acceptMission } from '../utils/missionsService';
+import type { MissionTemplate } from '../types/missions';
 
 interface ChapterDetailProps {
   chapter: Chapter;
@@ -44,7 +51,14 @@ interface ChapterDetailProps {
   focusChallengeId?: string; // Challenge ID to focus/scroll to
 }
 
-const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusChallengeId }) => {
+const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter: baseChapter, onBack, focusChallengeId }) => {
+  const [journeyOverrides, setJourneyOverrides] = useState<Record<string, JourneyChallengeOverride>>({});
+  const [journeyMissions, setJourneyMissions] = useState<MissionTemplate[]>([]);
+  const [startingMissionId, setStartingMissionId] = useState<string | null>(null);
+  const chapter = useMemo(
+    () => buildJourneyChapter(baseChapter, journeyOverrides, journeyMissions),
+    [baseChapter, journeyOverrides, journeyMissions]
+  );
   const { currentUser, isAdmin: isAdminUser } = useAuth();
   const { vault, moves, actionCards, unlockElementalMoves } = useBattle();
   const { storyProgress, getEpisodeStatus, isEpisodeUnlocked, startEpisode, isLoading: storyLoading, error: storyError } = useStory();
@@ -132,10 +146,54 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       .catch((err) => {
         console.warn('ChapterDetail: could not load journey challenge media', err);
       });
+    loadAllJourneyChallengeOverrides()
+      .then((overrides) => {
+        if (!cancelled) setJourneyOverrides(overrides);
+      })
+      .catch((err) => {
+        console.warn('ChapterDetail: could not load journey challenge overrides', err);
+      });
+    loadJourneyMissionsForChapter(baseChapter.id)
+      .then((missions) => {
+        if (!cancelled) setJourneyMissions(missions);
+      })
+      .catch((err) => {
+        console.warn('ChapterDetail: could not load journey missions', err);
+      });
     return () => {
       cancelled = true;
     };
-  }, [chapter.id]);
+  }, [baseChapter.id]);
+
+  const handleStartJourneyMission = async (challenge: ChapterChallenge) => {
+    const missionId = challenge.linkedMissionId;
+    if (!currentUser || !missionId || startingMissionId) return;
+    const mission = journeyMissions.find((m) => m.id === missionId);
+    if (!mission?.sequence?.length) {
+      alert('This mission is not ready to play yet. Please check back soon.');
+      return;
+    }
+    setStartingMissionId(missionId);
+    try {
+      const result = await acceptMission(currentUser.uid, missionId, 'PLAYER_JOURNEY', { isAdmin: isAdminUser });
+      if (result.error === 'Mission already completed') {
+        await updateProgressOnChallengeComplete(currentUser.uid, chapter.id, challenge.id);
+        const refreshed = await getDoc(doc(db, 'users', currentUser.uid));
+        if (refreshed.exists()) setRawUserProgress(refreshed.data());
+        return;
+      }
+      if (!result.success && !result.playerMissionId) {
+        alert(result.error || 'Could not start this mission.');
+        return;
+      }
+      navigate(`/mission/${missionId}/play`);
+    } catch (error) {
+      console.error('Error starting journey mission:', error);
+      alert('Could not start this mission. Please try again.');
+    } finally {
+      setStartingMissionId(null);
+    }
+  };
 
   useEffect(() => {
     if (!currentUser) return;
@@ -4543,9 +4601,34 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                           </button>
                         )}
 
+                        {status === 'available' && challenge.linkedMissionId && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleStartJourneyMission(challenge);
+                            }}
+                            disabled={startingMissionId === challenge.linkedMissionId}
+                            style={{
+                              background: 'linear-gradient(135deg, #d4a84f 0%, #a67c2e 100%)',
+                              color: '#0b1220',
+                              padding: '0.75rem 1.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: startingMissionId === challenge.linkedMissionId ? 'wait' : 'pointer',
+                              opacity: startingMissionId === challenge.linkedMissionId ? 0.7 : 1,
+                              width: '100%'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>⚔️</span>
+                            {startingMissionId === challenge.linkedMissionId ? 'Starting…' : 'Start Mission'}
+                          </button>
+                        )}
+
                         {/* Regular submit button for other challenges */}
                         {/* Exclude all Chapter 2 challenges from showing "Submit for Approval" */}
                         {status === 'available' && 
+                         !challenge.linkedMissionId &&
                          challenge.id !== 'ep1-manifest-test' && 
                          challenge.id !== 'ep1-get-letter' && 
                          challenge.id !== 'ep1-truth-metal-choice' && 
@@ -4654,10 +4737,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                     
                     <div className="mst-chapter-preview">
                       {(() => {
-                        const src = resolveJourneyChallengePreviewUrl(
-                          challenge.id,
-                          journeyChallengeMedia[challenge.id]
-                        );
+                        const src = challenge.linkedMissionId
+                          ? journeyMissions.find((m) => m.id === challenge.linkedMissionId)?.previewImageUrl
+                          : resolveJourneyChallengePreviewUrl(
+                              challenge.id,
+                              journeyChallengeMedia[challenge.id]
+                            );
                         if (src) {
                           return (
                             <img

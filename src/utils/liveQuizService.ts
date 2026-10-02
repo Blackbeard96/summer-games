@@ -45,13 +45,37 @@ import { computeDamageAfterShield } from './liveEventCombatMath';
 import { grantArtifactToPlayer, getArtifactDetails } from './artifactCompensation';
 import { liveEventAwardDebug, truncateId } from './liveEventDebugLogging';
 import type { TrainingQuestion } from '../types/trainingGrounds';
+import {
+  isMatchingQuestion,
+  liveQuestionTimeLimitSeconds,
+  matchPairsOf,
+  scoreMatchingSelections,
+} from './quizMatching';
 
 const DEBUG = process.env.REACT_APP_DEBUG_LIVE_QUIZ === 'true';
 
 function correctIndicesFromQuestion(q: TrainingQuestion | undefined): number[] {
-  if (!q) return [];
+  if (!q || isMatchingQuestion(q)) return [];
   return q.correctIndices ?? (q.correctIndex !== undefined ? [q.correctIndex] : []);
 }
+
+/** Session fields denormalized when a question goes live (answer key + its own timer). */
+function servedQuestionFields(q: TrainingQuestion | undefined, baseSeconds: number, now: number) {
+  const seconds = liveQuestionTimeLimitSeconds(q, baseSeconds);
+  return {
+    currentQuestionCorrectIndices: correctIndicesFromQuestion(q),
+    currentQuestionMatchPairIds: isMatchingQuestion(q) ? matchPairsOf(q).map((p) => p.id) : deleteField(),
+    currentQuestionTimeLimitSeconds: seconds,
+    questionStartedAt: now,
+    questionEndsAt: now + seconds * 1000,
+  };
+}
+
+const clearedServedQuestionFields = () => ({
+  currentQuestionCorrectIndices: deleteField(),
+  currentQuestionMatchPairIds: deleteField(),
+  currentQuestionTimeLimitSeconds: deleteField(),
+});
 
 /** One shared in-flight load per quizSetId — many students submit during the same question. */
 const liveQuizQuestionsLoadPromises = new Map<string, Promise<TrainingQuestion[]>>();
@@ -672,18 +696,18 @@ export async function launchFirstQuestion(sessionId: string, hostUid: string): P
     if (session.hostUid !== hostUid) return { ok: false, error: 'Only host can start' };
     if (session.questionOrder.length === 0) return { ok: false, error: 'No questions' };
     const liveQuestionId = session.questionOrder[0];
-    const correctIndices = correctIndicesFromQuestion(bank.find((q) => q.id === liveQuestionId));
-    const now = Date.now();
-    const endsAt = now + session.timeLimitSeconds * 1000;
+    const served = servedQuestionFields(
+      bank.find((q) => q.id === liveQuestionId),
+      session.timeLimitSeconds,
+      Date.now()
+    );
 
     tx.update(sessionRef(sessionId), {
       status: 'question_live',
       questionIndex: 0,
       currentQuestionId: liveQuestionId,
       quizRoundIndex: 1,
-      questionStartedAt: now,
-      questionEndsAt: endsAt,
-      currentQuestionCorrectIndices: correctIndices,
+      ...served,
       updatedAt: serverTimestamp(),
     });
     log('question served', { sessionId, questionId: liveQuestionId, round: 1 });
@@ -762,16 +786,20 @@ export async function advanceQuiz(
         });
         if (already) return;
 
-        const cap = battleMode ? MAX_BR : MAX_REGULAR;
+        const totalMatches =
+          typeof r.totalMatches === 'number' && r.totalMatches > 0 ? Math.floor(r.totalMatches) : 0;
+        const correctMatches = totalMatches
+          ? Math.max(0, Math.min(totalMatches, Math.floor(r.correctMatches ?? 0)))
+          : 0;
+        const cap = (battleMode ? MAX_BR : MAX_REGULAR) * (battleMode ? 1 : Math.max(1, totalMatches));
         const points =
           typeof r.pointsAwarded === 'number' && Number.isFinite(r.pointsAwarded)
             ? Math.max(0, Math.min(cap, r.pointsAwarded))
             : 0;
         newLeaderboard[uid] = (newLeaderboard[uid] || 0) + points;
-        if (r.isCorrect) {
-          newCorrectCount[uid] = (newCorrectCount[uid] || 0) + 1;
-          correctUids.add(uid);
-        }
+        const credit = totalMatches ? correctMatches : r.isCorrect ? 1 : 0;
+        if (credit > 0) newCorrectCount[uid] = (newCorrectCount[uid] || 0) + credit;
+        if (r.isCorrect) correctUids.add(uid);
         newPerQuestionResults[uid] = [
           ...existing,
           {
@@ -779,6 +807,7 @@ export async function advanceQuiz(
             quizRoundIndex: activeRound,
             isCorrect: r.isCorrect,
             pointsAwarded: points,
+            ...(totalMatches ? { correctMatches, totalMatches } : {}),
           },
         ];
       });
@@ -826,7 +855,7 @@ export async function advanceQuiz(
         currentQuestionId: null,
         questionStartedAt: null,
         questionEndsAt: null,
-        currentQuestionCorrectIndices: deleteField(),
+        ...clearedServedQuestionFields(),
         battleEndReason: mode === 'team_battle_royale' ? 'team_elimination' : 'survivor_threshold',
       });
       log('Battle quiz completed (threshold)', { sessionId, mode });
@@ -853,7 +882,7 @@ export async function advanceQuiz(
           currentQuestionId: null,
           questionStartedAt: null,
           questionEndsAt: null,
-          currentQuestionCorrectIndices: deleteField(),
+          ...clearedServedQuestionFields(),
           ...(battleMode ? { battleEndReason: 'manual_complete' as const } : {}),
         });
         log('Quiz completed', { sessionId });
@@ -864,9 +893,6 @@ export async function advanceQuiz(
     }
 
     const nextQuestionId = nextQuestionOrder[nextQuestionIndex];
-    const nextCorrectIndices = correctIndicesFromQuestion(questionById.get(nextQuestionId));
-    const now = Date.now();
-    const endsAt = now + session.timeLimitSeconds * 1000;
     const nextRound = activeRound + 1;
 
     tx.update(sessionRef(sessionId), {
@@ -875,10 +901,8 @@ export async function advanceQuiz(
       questionIndex: nextQuestionIndex,
       questionOrder: nextQuestionOrder,
       currentQuestionId: nextQuestionId,
-      currentQuestionCorrectIndices: nextCorrectIndices,
+      ...servedQuestionFields(questionById.get(nextQuestionId), session.timeLimitSeconds, Date.now()),
       quizRoundIndex: nextRound,
-      questionStartedAt: now,
-      questionEndsAt: endsAt,
     });
     log('question served', {
       sessionId,
@@ -918,6 +942,8 @@ type SubmitQuizTxResult = {
   flowBoostApplied?: boolean;
   isCorrect?: boolean;
   gameMode?: LiveQuizGameMode;
+  correctMatches?: number;
+  totalMatches?: number;
 };
 
 /** Runs after the answer doc is committed — was blocking the client until these finished. */
@@ -927,7 +953,12 @@ async function submitQuizResponseFollowUp(
   result: SubmitQuizTxResult
 ): Promise<void> {
   if (!result.ok) return;
-  if (!result.isCorrect) {
+  const mode = result.gameMode ?? 'regular';
+  const isBattle = isBattleQuizMode(mode);
+  // Regular mode: every correct match earns participation like a correct question.
+  const matchCredit = !isBattle && result.totalMatches ? result.correctMatches ?? 0 : null;
+  const earnedCredit = matchCredit != null ? matchCredit > 0 : !!result.isCorrect;
+  if (!earnedCredit) {
     try {
       const roomSnap = await getDoc(roomRef(sessionId));
       let displayName: string | undefined;
@@ -944,9 +975,7 @@ async function submitQuizResponseFollowUp(
     }
     return;
   }
-  const mode = result.gameMode ?? 'regular';
-  const isBattle = isBattleQuizMode(mode);
-  const ppDelta = isBattle ? (result.pointsAwarded ?? 0) : 1;
+  const ppDelta = isBattle ? (result.pointsAwarded ?? 0) : matchCredit ?? 1;
 
   const rref = roomRef(sessionId);
   const qref = sessionRef(sessionId);
@@ -1010,7 +1039,8 @@ export async function submitQuizResponse(
   uid: string,
   questionId: string,
   selectedIndices: number[],
-  quizRoundIndexFromClient: number
+  quizRoundIndexFromClient: number,
+  matchSelections?: Record<string, string>
 ): Promise<{
   ok: boolean;
   error?: string;
@@ -1018,6 +1048,8 @@ export async function submitQuizResponse(
   basePointsAwarded?: number;
   flowBoostApplied?: boolean;
   isCorrect?: boolean;
+  correctMatches?: number;
+  totalMatches?: number;
 }> {
   const preSnap = await getDoc(sessionRef(sessionId));
   if (!preSnap.exists()) return { ok: false, error: 'No quiz session' };
@@ -1025,11 +1057,13 @@ export async function submitQuizResponse(
 
   /** Older sessions omit this field — load bank once (cached per quizId). */
   let legacyCorrectIndices: number[] | null = null;
+  let legacyMatchPairIds: string[] | null = null;
   if (preSession.currentQuestionCorrectIndices === undefined) {
     const bank = await getQuestionsCachedForLiveQuiz(preSession.quizId);
     const canonical = bank.find((q) => q.id === questionId);
     if (!canonical) return { ok: false, error: 'Question not found' };
     legacyCorrectIndices = correctIndicesFromQuestion(canonical);
+    if (isMatchingQuestion(canonical)) legacyMatchPairIds = matchPairsOf(canonical).map((p) => p.id);
   }
 
   const result = await runTransaction(db, async (tx): Promise<SubmitQuizTxResult> => {
@@ -1074,12 +1108,24 @@ export async function submitQuizResponse(
         ? session.currentQuestionCorrectIndices
         : legacyCorrectIndices!;
 
+    const matchPairIds =
+      session.currentQuestionCorrectIndices !== undefined
+        ? session.currentQuestionMatchPairIds ?? null
+        : legacyMatchPairIds;
+    const matchScore = matchPairIds?.length
+      ? scoreMatchingSelections(
+          matchPairIds.map((id) => ({ id })),
+          matchSelections
+        )
+      : null;
+
     const correctSet = new Set(authoritativeCorrectIndices);
     const selectedSet = new Set(selectedIndices);
-    const allCorrect =
-      authoritativeCorrectIndices.length === selectedIndices.length &&
-      authoritativeCorrectIndices.every((i) => selectedSet.has(i)) &&
-      selectedIndices.every((i) => correctSet.has(i));
+    const allCorrect = matchScore
+      ? matchScore.isCorrect
+      : authoritativeCorrectIndices.length === selectedIndices.length &&
+        authoritativeCorrectIndices.every((i) => selectedSet.has(i)) &&
+        selectedIndices.every((i) => correctSet.has(i));
     const startedAt = session.questionStartedAt ?? now;
 
     let pointsAwarded: number;
@@ -1107,14 +1153,21 @@ export async function submitQuizResponse(
         brPatch = { battleRoyaleState: br };
       }
     } else {
-      const basePoints = calculateLiveQuizPoints({
-        isCorrect: allCorrect,
-        submittedAt: now,
-        questionStartedAt: startedAt,
-        questionEndsAt: endsAt,
-      });
+      const basePoints = matchScore
+        ? calculateLiveQuizPoints({
+            isCorrect: matchScore.correct > 0,
+            submittedAt: now,
+            questionStartedAt: startedAt,
+            questionEndsAt: endsAt,
+          }) * matchScore.correct
+        : calculateLiveQuizPoints({
+            isCorrect: allCorrect,
+            submittedAt: now,
+            questionStartedAt: startedAt,
+            questionEndsAt: endsAt,
+          });
       let boosted = basePoints;
-      if (allCorrect && basePoints > 0 && roomSnap.exists()) {
+      if (basePoints > 0 && roomSnap.exists()) {
         const playersRoom = (roomSnap.data()?.players || []) as Array<Record<string, unknown>>;
         const row = playersRoom.find((p) => (p as { userId?: string }).userId === uid);
         const flow = parseFlowStateFromPlayerRow(row);
@@ -1134,6 +1187,17 @@ export async function submitQuizResponse(
       submittedAt: now,
       isCorrect: allCorrect,
       pointsAwarded,
+      ...(matchScore
+        ? {
+            matchSelections: Object.fromEntries(
+              matchPairIds!
+                .filter((id) => typeof matchSelections?.[id] === 'string')
+                .map((id) => [id, matchSelections![id]])
+            ),
+            correctMatches: matchScore.correct,
+            totalMatches: matchScore.total,
+          }
+        : {}),
     };
     tx.set(responseDocRef(sessionId, uid), response);
     if (brPatch) {
@@ -1165,6 +1229,7 @@ export async function submitQuizResponse(
       flowBoostApplied,
       isCorrect: allCorrect,
       gameMode: mode,
+      ...(matchScore ? { correctMatches: matchScore.correct, totalMatches: matchScore.total } : {}),
     };
   });
 
@@ -1182,6 +1247,8 @@ export async function submitQuizResponse(
     basePointsAwarded: result.basePointsAwarded,
     flowBoostApplied: result.flowBoostApplied,
     isCorrect: result.isCorrect,
+    correctMatches: result.correctMatches,
+    totalMatches: result.totalMatches,
   };
 }
 

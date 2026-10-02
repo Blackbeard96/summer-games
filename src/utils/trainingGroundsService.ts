@@ -31,6 +31,7 @@ import {
 } from '../types/trainingGrounds';
 import type { LiveQuizSession } from '../types/liveQuiz';
 import { enrichAnswersWithSkills } from './masteryService';
+import { liveRowPartialCredit, liveRowPointsEarned, liveRowPointsPossible } from './quizMatching';
 
 // ============================================================================
 // Quiz Sets
@@ -384,6 +385,23 @@ export async function uploadQuestionImage(quizSetId: string, questionId: string,
   return downloadURL;
 }
 
+function matchCardImagePath(quizSetId: string, questionId: string, pairId: string, side: 'prompt' | 'response'): string {
+  return `trainingGrounds/${quizSetId}/${questionId}_${pairId}_${side}.png`;
+}
+
+/** Image for one card of a matching question pair. */
+export async function uploadMatchCardImage(
+  quizSetId: string,
+  questionId: string,
+  pairId: string,
+  side: 'prompt' | 'response',
+  imageFile: File
+): Promise<string> {
+  const storageRef = ref(storage, matchCardImagePath(quizSetId, questionId, pairId, side));
+  await uploadBytes(storageRef, imageFile);
+  return getDownloadURL(storageRef);
+}
+
 export async function deleteQuestionImage(quizSetId: string, questionId: string): Promise<void> {
   const storageRef = ref(storage, `trainingGrounds/${quizSetId}/${questionId}.png`);
   try {
@@ -494,12 +512,12 @@ export async function syncLiveEventQuizToTrainingAttempt(
       return { ok: true, skipped: true };
     }
 
-    const per = (session.perQuestionResults || {}) as Record<string, { questionId: string; quizRoundIndex: number; isCorrect: boolean; pointsAwarded: number }[]>;
+    const per = session.perQuestionResults || {};
     const rows = per[userId] ?? [];
-    const correctFromRows = rows.filter((r) => r.isCorrect).length;
+    const correctFromRows = rows.reduce((sum, r) => sum + liveRowPointsEarned(r), 0);
     let scoreCorrect = session.correctCount?.[userId] ?? correctFromRows;
 
-    let scoreTotal = rows.length;
+    let scoreTotal = rows.reduce((sum, r) => sum + liveRowPointsPossible(r), 0);
     if (scoreTotal === 0 && Array.isArray(session.questionOrder) && session.questionOrder.length > 0) {
       scoreTotal = session.questionOrder.length;
     }
@@ -524,7 +542,8 @@ export async function syncLiveEventQuizToTrainingAttempt(
       questionId: e.questionId,
       selectedIndices: [],
       isCorrect: e.isCorrect,
-      partialCredit: e.isCorrect ? 1 : 0,
+      partialCredit: liveRowPartialCredit(e),
+      ...(e.totalMatches ? { pointsEarned: liveRowPointsEarned(e), pointsPossible: liveRowPointsPossible(e) } : {}),
       timeSpentMs: 0,
     }));
 

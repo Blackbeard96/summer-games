@@ -633,9 +633,8 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
 
     try {
       // Get challenge rewards from chapter definition
-      const { CHAPTERS } = await import('../types/chapters');
-      const chapter2 = CHAPTERS.find(c => c.id === 2);
-      const challenge = chapter2?.challenges.find(c => c.id === challengeId);
+      const { getEffectiveJourneyChallenge } = await import('../utils/journeyChallengeConfigStore');
+      const challenge = await getEffectiveJourneyChallenge(2, challengeId);
       
       if (!challenge) {
         console.error('Challenge not found:', challengeId);

@@ -2,18 +2,39 @@
  * Training Grounds Quiz System Types
  */
 
+/** Missing = 'multiple_choice' (every question created before matching existed). */
+export type TrainingQuestionType = 'multiple_choice' | 'matching';
+
+/** One side of a matching pair: text, an image, or both. */
+export interface MatchCardContent {
+  text?: string | null;
+  imageUrl?: string | null;
+}
+
+/** A prompt card and the response card players must drag onto it. Each pair is worth 1 point. */
+export interface MatchPair {
+  id: string;
+  prompt: MatchCardContent;
+  response: MatchCardContent;
+}
+
 export interface TrainingQuestion {
   id: string;
   prompt: string;
   imageUrl?: string | null;
+  questionType?: TrainingQuestionType;
+  /** Matching questions only (2–8 pairs). `options` / `correctIndices` are empty for matching. */
+  matchPairs?: MatchPair[];
+  /** Live Event per-question timer override in seconds; blank = quiz default (longer for matching). */
+  timeLimitSeconds?: number | null;
   options: string[]; // Non-empty answer texts in display order (typically 2–6 choices)
   correctIndex?: number; // DEPRECATED: Use correctIndices instead (0-based: 0=A, 1=B, 2=C, 3=D)
   correctIndices: number[]; // Array of indices of correct answers (supports multiple correct answers)
   explanation?: string | null;
   difficulty: 'easy' | 'medium' | 'hard';
   category?: string;
-  pointsPP: number; // PP reward for fully correct answer (partial credit calculated proportionally)
-  pointsXP: number; // XP reward for fully correct answer (partial credit calculated proportionally)
+  pointsPP: number; // PP reward for fully correct answer (matching: per correct match)
+  pointsXP: number; // XP reward for fully correct answer (matching: per correct match)
   artifactRewards?: string[]; // Array of artifact IDs to grant for correct answer
   order: number; // Order within quiz set
   /** Academic skill IDs assessed by this question (Skill Mastery system). */
@@ -64,7 +85,9 @@ export interface TrainingAttempt {
   quizSetId: string;
   startedAt: any;
   completedAt?: any;
+  /** Points earned: fully correct multiple-choice questions + correct matches. */
   scoreCorrect: number;
+  /** Points possible: 1 per multiple-choice question + 1 per matching pair. */
   scoreTotal: number;
   percent: number;
   answers: TrainingAnswer[];
@@ -84,6 +107,11 @@ export interface TrainingAnswer {
   selectedIndices: number[]; // Array of selected answer indices (supports multiple selections)
   isCorrect: boolean; // Fully correct (all correct answers selected, no incorrect)
   partialCredit: number; // 0.0 to 1.0 - percentage credit for partial correctness
+  /** Matching only: prompt pair id → response pair id the player placed on it. */
+  matchSelections?: Record<string, string>;
+  /** Score points earned / possible (matching: correct matches / pairs; otherwise partialCredit / 1). */
+  pointsEarned?: number;
+  pointsPossible?: number;
   timeSpentMs: number; // Time taken to answer (optional, can be 0)
   /** Denormalized skill tags at answer time (Skill Mastery). */
   skillIds?: string[];
