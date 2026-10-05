@@ -186,7 +186,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
   }, [examAssessmentId]);
 
   useEffect(() => {
-    if (!sessionId || !currentUser || !examQuizSetId || questions.length === 0) return;
+    if (!sessionId || !currentUser || !examQuizSetId || questions.length === 0 || isSessionHost) return;
     const name = currentUser.displayName || currentUser.email?.split('@')[0] || 'Player';
     const questionIds = questions.map((q) => q.id);
     void ensureExamProgressDoc(
@@ -207,7 +207,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
       .catch((e) => {
         console.warn('[LiveEventExam] ensureExamProgressDoc', e);
       });
-  }, [sessionId, currentUser, examQuizSetId, questions.length, examStartedAtMs, questions]);
+  }, [sessionId, currentUser, examQuizSetId, questions.length, examStartedAtMs, questions, isSessionHost]);
 
   useEffect(() => {
     if (!sessionId || !currentUser) return;
@@ -499,7 +499,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
   };
 
   const handleEndExamMode = async () => {
-    const unfinished = allProgress.filter((p) => !p.completed).length;
+    const unfinished = allProgress.filter((p) => !p.completed && p.playerId !== currentUser?.uid).length;
     const prompt =
       unfinished > 0
         ? `${unfinished} player(s) have not submitted yet. Ending now leaves their exams unsubmitted (no score is recorded). End Exam Mode anyway?`
@@ -592,6 +592,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
     const ids = new Set<string>();
     students.forEach((s) => ids.add(s.id));
     allProgress.forEach((p) => ids.add(p.playerId));
+    if (currentUser) ids.delete(currentUser.uid);
     return Array.from(ids).map((id) => {
       const student = students.find((s) => s.id === id);
       const prog = progressByPlayer.get(id);
@@ -601,7 +602,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
         prog,
       };
     });
-  }, [students, allProgress, progressByPlayer]);
+  }, [students, allProgress, progressByPlayer, currentUser]);
 
   if (!currentUser) {
     return (
@@ -618,7 +619,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
           <div>
             <span style={badgeStyle}>Exam Mode</span>
             <h1 style={{ margin: '0.5rem 0 0', fontSize: '1.75rem' }}>Configure Exam Live Event</h1>
-            <p style={{ color: '#64748b', marginTop: '0.35rem' }}>
+            <p style={{ color: '#334155', marginTop: '0.35rem' }}>
               {battleEnergyDisplayLabel(ENERGY_TYPES.MENTAL)} work — no combat, skills, or battle UI.
             </p>
           </div>
@@ -734,7 +735,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
                   </button>
                 ))}
               </div>
-              <p style={{ margin: '0.35rem 0 0', fontSize: '0.8rem', color: '#64748b', fontWeight: 400 }}>
+              <p style={{ margin: '0.35rem 0 0', fontSize: '0.8rem', color: '#334155', fontWeight: 400 }}>
                 Students see a countdown while they work. When time runs out, the exam auto-submits.
               </p>
             </label>
@@ -764,7 +765,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
           <div style={{ flex: 1 }}>
             <span style={badgeStyle}>Exam Mode — Host</span>
             <h1 style={{ margin: '0.35rem 0', fontSize: '1.5rem' }}>{displayTitle}</h1>
-            <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
+            <p style={{ color: '#334155', fontSize: '0.9rem' }}>
               {totalQuestions} questions · {battleEnergyDisplayLabel(ENERGY_TYPES.MENTAL)} · Live progress
               {examHasTimeLimit(examSettings)
                 ? ` · ${examSettings.timeLimitMinutes} min limit`
@@ -826,7 +827,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
                 </tbody>
               </table>
             </div>
-            <p style={{ marginTop: '1rem', color: '#64748b', fontSize: '0.85rem' }}>
+            <p style={{ marginTop: '1rem', color: '#334155', fontSize: '0.85rem' }}>
               Students see a full-screen exam only — combat and skills are disabled. Submitted scores sync to MST
               Productivity (Admin → Productivity → Live Event Exam Results).
               {examAssessmentId
@@ -911,7 +912,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
       <ExamShell>
         <span style={badgeStyle}>Exam Mode</span>
         <h1 style={{ marginTop: '0.75rem' }}>Waiting for your teacher</h1>
-        <p style={{ color: '#64748b' }}>
+        <p style={{ color: '#334155' }}>
           The host has not started the exam yet. When it begins, you will answer Training Grounds questions at your own
           pace and see your full score and review when you finish.
         </p>
@@ -938,7 +939,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
         <p style={{ color: '#b45309', marginTop: '0.75rem', fontWeight: 600 }}>
           {questionsLoadError || 'No questions are available for this exam.'}
         </p>
-        <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
+        <p style={{ color: '#334155', fontSize: '0.9rem' }}>
           Prior Training Grounds completions do not remove questions — ask your teacher to confirm the CFU is
           published and has questions, then reload.
         </p>
@@ -1008,7 +1009,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
               }}
             />
           </div>
-          <p style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.35rem' }}>
+          <p style={{ fontSize: '0.85rem', color: '#334155', marginTop: '0.35rem' }}>
             Question {Math.min(currentIndex + 1, totalQuestions)} of {totalQuestions} ·{' '}
             {battleEnergyDisplayLabel(ENERGY_TYPES.MENTAL)}
             {examHasTimeLimit(examSettings) ? ` · ${examSettings.timeLimitMinutes} min limit` : ''}
@@ -1061,7 +1062,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
             />
           )}
           {answerLocked && !showFeedbackDuringExam ? (
-            <p style={{ marginTop: '0.75rem', color: '#64748b', fontSize: '0.9rem', fontWeight: 600 }}>
+            <p style={{ marginTop: '0.75rem', color: '#334155', fontSize: '0.9rem', fontWeight: 600 }}>
               Answer saved. Continue when you are ready — correct answers are shown at the end.
             </p>
           ) : null}
@@ -1106,6 +1107,8 @@ function ExamShell({ children }: { children: React.ReactNode }) {
         style={{
           minHeight: '100vh',
           background: 'linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%)',
+          color: '#0f172a',
+          colorScheme: 'light',
           padding: '1.5rem',
           maxWidth: 900,
           margin: '0 auto',

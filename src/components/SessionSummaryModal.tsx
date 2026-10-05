@@ -23,6 +23,7 @@ interface SessionSummaryModalProps {
     movesEarned?: number;
     eliminated?: boolean;
     eliminatedBy?: string;
+    isTeacher?: boolean;
   }>;
 }
 
@@ -54,10 +55,71 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
   const [liveWorkSummary, setLiveWorkSummary] = React.useState<
     import('../types/inSessionStats').LiveEventWorkSummary | null
   >(null);
+  const [resolvedClasses, setResolvedClasses] = React.useState<{
+    classIdByPlayer: Record<string, string>;
+    classNameById: Record<string, string>;
+  } | null>(null);
 
+  const hostIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    if (summary?.hostUid) ids.add(summary.hostUid);
+    (roomPlayers || []).forEach((p) => {
+      if (p.isTeacher) ids.add(p.userId);
+    });
+    return ids;
+  }, [summary?.hostUid, roomPlayers]);
+  const viewerIsHost = hostIds.has(currentPlayerId);
+
+  const summaryPlayers = React.useMemo(
+    () =>
+      roomPlayers?.map((p) => ({
+        userId: p.userId,
+        displayName: p.displayName,
+        classId: p.classId,
+        isTeacher: hostIds.has(p.userId),
+      })) ||
+      Object.values(summary?.stats || {}).map((s) => ({
+        userId: s.playerId,
+        displayName: s.playerName,
+        isTeacher: hostIds.has(s.playerId),
+      })),
+    [roomPlayers, summary?.stats, hostIds]
+  );
+
+  // Summaries finalized before roster-based class resolution only have the room row's classId.
   React.useEffect(() => {
     if (!isOpen || !summary?.sessionId) return;
-    if (summary.workSummary) {
+    if (summary.playerClassIds && summary.classNames) {
+      setResolvedClasses({ classIdByPlayer: summary.playerClassIds, classNameById: summary.classNames });
+      return;
+    }
+    let cancelled = false;
+    void import('../utils/liveEventClassResolution')
+      .then(({ resolveLiveEventPlayerClasses }) =>
+        resolveLiveEventPlayerClasses({
+          roomClassId: summary.classId,
+          classIds: summary.classIds,
+          hostUid: summary.hostUid,
+          players: summaryPlayers,
+        })
+      )
+      .then((res) => {
+        if (!cancelled) setResolvedClasses(res);
+      })
+      .catch((e) => {
+        console.warn('[SessionSummaryModal] class resolution failed', e);
+        if (!cancelled) setResolvedClasses({ classIdByPlayer: {}, classNameById: {} });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, summary, summaryPlayers]);
+
+  // Rebuild when missing, or (host only) when the stored summary predates Live Event activity tracking.
+  React.useEffect(() => {
+    if (!isOpen || !summary?.sessionId) return;
+    const stale = !summary.workSummary || (viewerIsHost && summary.workSummary.activities === undefined);
+    if (!stale || !resolvedClasses) {
       setLiveWorkSummary(null);
       return;
     }
@@ -65,20 +127,12 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
     (async () => {
       try {
         const { buildLiveEventWorkSummary } = await import('../utils/workBoardService');
-        const players =
-          roomPlayers?.map((p) => ({
-            userId: p.userId,
-            displayName: p.displayName,
-            classId: p.classId,
-          })) ||
-          Object.values(summary.stats).map((s) => ({
-            userId: s.playerId,
-            displayName: s.playerName,
-          }));
         const built = await buildLiveEventWorkSummary({
           sessionId: summary.sessionId,
           classId: summary.classId,
-          players,
+          players: summaryPlayers,
+          hostUid: summary.hostUid,
+          playerClassIds: resolvedClasses.classIdByPlayer,
         });
         if (!cancelled) setLiveWorkSummary(built);
       } catch (e) {
@@ -88,12 +142,12 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, summary, roomPlayers]);
+  }, [isOpen, summary, summaryPlayers, viewerIsHost, resolvedClasses]);
 
   const displaySummary = React.useMemo(() => {
     if (!summary) return null;
     const merged = mergeRoomEliminationsIntoSummary(summary, roomPlayers);
-    if (merged.workSummary || !liveWorkSummary) return merged;
+    if (!liveWorkSummary) return merged;
     return { ...merged, workSummary: liveWorkSummary };
   }, [summary, roomPlayers, liveWorkSummary]);
   const classIdByPlayer = React.useMemo(() => {
@@ -102,8 +156,18 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
       const classId = typeof p.classId === 'string' ? p.classId.trim() : '';
       if (classId) map.set(p.userId, classId);
     });
+    Object.entries(resolvedClasses?.classIdByPlayer || {}).forEach(([uid, cid]) => map.set(uid, cid));
     return map;
-  }, [roomPlayers]);
+  }, [roomPlayers, resolvedClasses]);
+  const classLabel = React.useCallback(
+    (playerId: string) => {
+      if (hostIds.has(playerId)) return 'Host';
+      const cid = classIdByPlayer.get(playerId);
+      if (!cid) return 'Not on an invited class roster';
+      return resolvedClasses?.classNameById[cid] || summary?.classNames?.[cid] || cid;
+    },
+    [hostIds, classIdByPlayer, resolvedClasses, summary?.classNames]
+  );
   const allStats = React.useMemo(
     () => (displaySummary ? Object.values(displaySummary.stats) : []),
     [displaySummary]
@@ -147,10 +211,26 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
   }, null);
 
   const workSummary = displaySummary?.workSummary;
+  const activities = workSummary?.activities || [];
+  const activityDoneByPlayer = React.useMemo(() => {
+    const map = new Map<string, number>();
+    (workSummary?.activities || []).forEach((a) =>
+      a.completedPlayerIds.forEach((uid) => map.set(uid, (map.get(uid) || 0) + 1))
+    );
+    return map;
+  }, [workSummary]);
+  const activityRoster = React.useMemo(
+    () => (workSummary?.activityRosterIds || []).filter((uid) => !hostIds.has(uid)),
+    [workSummary, hostIds]
+  );
+  const activityCompletedTotal = activityRoster.reduce((n, uid) => n + (activityDoneByPlayer.get(uid) || 0), 0);
+  const activityAssignedTotal = activityRoster.length * activities.length;
+  const hasWorkBoard = !!workSummary && (workSummary.availableW > 0 || workSummary.completedW > 0);
 
   const classRollup = React.useMemo(() => {
     type ClassRow = {
       classId: string;
+      label: string;
       players: SessionStats[];
       totalPP: number;
       totalParticipation: number;
@@ -159,15 +239,20 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
       participatingPlayers: number;
       workCompletedW: number;
       workAvailableW: number;
+      activitiesCompleted: number;
+      activitiesAssigned: number;
     };
     const rows = new Map<string, ClassRow>();
     const workByPlayer = new Map(
       (workSummary?.byPlayer || []).map((p) => [p.playerId, p] as const)
     );
+    const activityCount = workSummary?.activities?.length || 0;
     for (const stats of allStats) {
-      const classId = classIdByPlayer.get(stats.playerId) || 'Unspecified class';
+      if (hostIds.has(stats.playerId)) continue;
+      const classId = classIdByPlayer.get(stats.playerId) || '';
       const current = rows.get(classId) || {
         classId,
+        label: classLabel(stats.playerId),
         players: [],
         totalPP: 0,
         totalParticipation: 0,
@@ -176,13 +261,19 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
         participatingPlayers: 0,
         workCompletedW: 0,
         workAvailableW: 0,
+        activitiesCompleted: 0,
+        activitiesAssigned: 0,
       };
+      current.activitiesAssigned += activityCount;
+      current.activitiesCompleted += activityDoneByPlayer.get(stats.playerId) || 0;
       current.players.push(stats);
       current.totalPP += totalEarned(stats);
       current.totalParticipation += stats.participationEarned || 0;
       current.totalEliminations += stats.eliminations || 0;
       if (stats.isEliminated) current.eliminatedCount += 1;
-      if ((stats.participationEarned || 0) > 0) current.participatingPlayers += 1;
+      if ((stats.participationEarned || 0) > 0 || (activityDoneByPlayer.get(stats.playerId) || 0) > 0) {
+        current.participatingPlayers += 1;
+      }
       const wp = workByPlayer.get(stats.playerId);
       if (wp) {
         current.workCompletedW += wp.completedW;
@@ -190,8 +281,31 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
       }
       rows.set(classId, current);
     }
-    return Array.from(rows.values()).sort((a, b) => b.totalPP - a.totalPP);
-  }, [allStats, classIdByPlayer, workSummary, quizPpByPlayer]);
+    return Array.from(rows.values()).sort((a, b) => b.players.length - a.players.length || b.totalPP - a.totalPP);
+  }, [allStats, classIdByPlayer, workSummary, quizPpByPlayer, hostIds, classLabel, activityDoneByPlayer]);
+
+  const workRows = React.useMemo(() => {
+    const boardById = new Map((workSummary?.byPlayer || []).map((p) => [p.playerId, p] as const));
+    const ids = Array.from(new Set([...activityRoster, ...Array.from(boardById.keys())])).filter(
+      (uid) => !hostIds.has(uid)
+    );
+    return ids
+      .map((uid) => {
+        const board = hasWorkBoard ? boardById.get(uid) : undefined;
+        return {
+          playerId: uid,
+          name: board?.playerName || resolvePlayerName(uid),
+          activitiesDone: activityDoneByPlayer.get(uid) || 0,
+          board,
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.activitiesDone - a.activitiesDone ||
+          (b.board?.completedW || 0) - (a.board?.completedW || 0) ||
+          a.name.localeCompare(b.name)
+      );
+  }, [workSummary, activityRoster, hostIds, hasWorkBoard, activityDoneByPlayer, resolvePlayerName]);
 
   if (!isOpen || !displaySummary) return null;
 
@@ -538,17 +652,55 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
           <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.75rem' }}>
             📋 Work Completed
           </h3>
-          {!workSummary || (workSummary.availableW <= 0 && workSummary.completedW <= 0) ? (
+          {!workSummary || (activities.length === 0 && !hasWorkBoard) ? (
             <p style={{ fontSize: '0.9rem', color: '#6b7280', margin: 0 }}>
-              No Work Board items were available for this event.
+              No Live Event activities or Work Board items were tracked for this event.
             </p>
           ) : (
             <>
-              {workSummary.periodTitle ? (
-                <p style={{ fontSize: '0.85rem', color: '#64748b', margin: '0 0 0.65rem' }}>
-                  Period: {workSummary.periodTitle}
-                </p>
+              {activities.length > 0 ? (
+                <div style={{ marginBottom: '1rem' }}>
+                  <div style={{ fontSize: '0.95rem', color: '#0f172a', marginBottom: '0.5rem' }}>
+                    <strong>Live Event work:</strong> {activityCompletedTotal} / {activityAssignedTotal} completed
+                    <span style={{ color: '#0369a1', fontWeight: 700, marginLeft: '0.5rem' }}>
+                      {activityAssignedTotal > 0
+                        ? `${Math.round((activityCompletedTotal / activityAssignedTotal) * 1000) / 10}%`
+                        : '0%'}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      height: 10,
+                      borderRadius: 999,
+                      background: '#e2e8f0',
+                      overflow: 'hidden',
+                      marginBottom: '0.6rem',
+                    }}
+                  >
+                    <div
+                      style={{
+                        height: '100%',
+                        width: `${activityAssignedTotal > 0 ? Math.min(100, (activityCompletedTotal / activityAssignedTotal) * 100) : 0}%`,
+                        background: 'linear-gradient(90deg, #22c55e, #15803d)',
+                      }}
+                    />
+                  </div>
+                  <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                    {activities.map((a) => (
+                      <li key={a.id} style={{ fontSize: '0.85rem', color: '#334155', padding: '0.15rem 0' }}>
+                        <strong>{a.kind === 'exam' ? 'Exam' : 'Live quiz'}:</strong> {a.title} —{' '}
+                        {a.completedPlayerIds.filter((uid) => !hostIds.has(uid)).length} / {activityRoster.length}{' '}
+                        {a.kind === 'exam' ? 'submitted' : 'completed'}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ) : null}
+              {hasWorkBoard ? (
+              <>
+              <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#0f172a', margin: '0 0 0.4rem' }}>
+                Work Board{workSummary.periodTitle ? ` · ${workSummary.periodTitle}` : ''}
+              </div>
               <div
                 style={{
                   display: 'flex',
@@ -592,11 +744,13 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                   {workSummary.requiredCompletionPct}%)
                 </p>
               ) : null}
-              {workSummary.byPlayer.length > 0 ? (
+              </>
+              ) : null}
+              {workRows.length > 0 ? (
                 <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                  {workSummary.byPlayer.map((p) => (
+                  {workRows.map((row) => (
                     <li
-                      key={p.playerId}
+                      key={row.playerId}
                       style={{
                         padding: '0.3rem 0',
                         fontSize: '0.85rem',
@@ -607,10 +761,16 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                         flexWrap: 'wrap',
                       }}
                     >
-                      <span style={{ fontWeight: 600 }}>{p.playerName}</span>
+                      <span style={{ fontWeight: 600 }}>{row.name}</span>
                       <span>
-                        {p.completedW} / {p.availableW} W ({p.completionPct}%)
-                        {p.declaredW > 0 ? ` · Expected ${p.declaredW}` : ''}
+                        {activities.length > 0
+                          ? `Live Event ${row.activitiesDone}/${activities.length}`
+                          : ''}
+                        {activities.length > 0 && row.board ? ' · ' : ''}
+                        {row.board
+                          ? `Work Board ${row.board.completedW} / ${row.board.availableW} W (${row.board.completionPct}%)`
+                          : ''}
+                        {row.board && row.board.declaredW > 0 ? ` · Expected ${row.board.declaredW}` : ''}
                       </span>
                     </li>
                   ))}
@@ -669,7 +829,7 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                     : null;
                 return (
                   <div
-                    key={row.classId}
+                    key={row.classId || 'unassigned'}
                     style={{
                       border: '1px solid #cbd5e1',
                       borderRadius: '0.5rem',
@@ -677,7 +837,7 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
-                      <div style={{ fontWeight: 'bold', color: '#0f172a' }}>{row.classId}</div>
+                      <div style={{ fontWeight: 'bold', color: '#0f172a' }}>{row.label}</div>
                       <div style={{ fontSize: '0.85rem', color: '#334155' }}>
                         {total} player{total !== 1 ? 's' : ''} • +{row.totalPP} PP • {row.eliminatedCount} elim
                       </div>
@@ -685,8 +845,11 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                     <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: '#475569' }}>
                       Participation points: {row.totalParticipation} • Participation rate: {participationRate}% •
                       Survival rate: {survivalRate}%
+                      {row.activitiesAssigned > 0
+                        ? ` • Live Event work: ${row.activitiesCompleted}/${row.activitiesAssigned} (${Math.round((row.activitiesCompleted / row.activitiesAssigned) * 1000) / 10}%)`
+                        : ''}
                       {workPct != null
-                        ? ` • Work completed: ${row.workCompletedW}/${row.workAvailableW} W (${workPct}%)`
+                        ? ` • Work Board: ${row.workCompletedW}/${row.workAvailableW} W (${workPct}%)`
                         : ''}
                     </div>
                     <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: '#64748b' }}>
@@ -1075,7 +1238,7 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                     <div style={{ fontWeight: 'bold', color: '#1f2937' }}>
                       {stats.playerName}
                       <span style={{ color: '#475569', marginLeft: '0.5rem', fontSize: '0.75rem', fontWeight: 500 }}>
-                        [{classIdByPlayer.get(stats.playerId) || 'Unspecified class'}]
+                        [{classLabel(stats.playerId)}]
                       </span>
                       {stats.isEliminated && (
                         <span style={{ color: '#ef4444', marginLeft: '0.5rem' }}>☠️</span>

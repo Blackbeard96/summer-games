@@ -1,4 +1,5 @@
 import type { Timestamp } from 'firebase/firestore';
+import type { TrainingAnswer } from './trainingGrounds';
 
 /** Completed Live Event Exam — `examProductivityLogs/{logId}` */
 export type ExamProductivityLog = {
@@ -21,4 +22,7 @@ export type ExamProductivityLog = {
   weekId: string;
   /** True when migrated from legacy quizProductivityLogs row. */
   legacyFromQuizLog?: boolean;
+  /** Player responses + question order for Profile review; older logs omit these. */
+  answers?: TrainingAnswer[];
+  questionIds?: string[];
 };

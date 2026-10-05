@@ -9,6 +9,7 @@ import {
   getClassroomIdsForEnrolledStudent,
   getLiveSessionSnapshotsForClassIds,
 } from '../utils/classroomQueries';
+import { resolvePlayerClassIdForLiveEvent } from '../utils/liveEventEligibility';
 
 interface InSessionRoom {
   id: string;
@@ -396,10 +397,17 @@ const InSessionNotification: React.FC = () => {
       const powerLevel =
         typeof plRaw === 'number' && Number.isFinite(plRaw) ? Math.floor(plRaw) : null;
 
+      const enrolledClassIds = await getClassroomIdsForEnrolledStudent(currentUser.uid).catch(
+        () => [] as string[]
+      );
       const newPlayer = {
         userId: currentUser.uid,
         displayName: displayName.trim(),
-        classId: studentData.classId || studentData.class || null,
+        classId: resolvePlayerClassIdForLiveEvent(
+          enrolledClassIds,
+          activeSession,
+          studentData.classId || studentData.class || null
+        ),
         photoURL: userData.photoURL || studentData.photoURL || currentUser.photoURL,
         level: studentData.level || 1,
         powerLevel,

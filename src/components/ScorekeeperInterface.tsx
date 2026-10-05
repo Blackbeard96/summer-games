@@ -109,7 +109,9 @@ const ScorekeeperInterface: React.FC = () => {
             );
 
             if (scorekeeperClassIds.length > 0) {
+              // Deleted classrooms stay listed on userRoles; defaulting to one shows an empty roster.
               const classOptions: Array<{ id: string; name: string }> = [];
+              const unreadable: Array<{ id: string; name: string }> = [];
               for (const cid of scorekeeperClassIds) {
                 try {
                   const classDoc = await getDoc(doc(db, 'classrooms', cid));
@@ -120,15 +122,19 @@ const ScorekeeperInterface: React.FC = () => {
                       name: classData.name || `Class ${cid}`,
                     });
                   } else {
-                    classOptions.push({ id: cid, name: `Class ${cid}` });
+                    logger.roles.warn('ScorekeeperInterface: Assigned classroom no longer exists', { classId: cid });
                   }
-                } catch {
-                  classOptions.push({ id: cid, name: `Class ${cid}` });
+                } catch (classError) {
+                  logger.roles.warn('ScorekeeperInterface: Could not read assigned classroom', { classId: cid, classError });
+                  unreadable.push({ id: cid, name: `Class ${cid}` });
                 }
               }
-              setAvailableClassrooms(classOptions);
-              setAssignedClassId(scorekeeperClassIds[0]);
-              setClassName(classOptions[0]?.name || `Class ${scorekeeperClassIds[0]}`);
+              const options = classOptions.length > 0 ? classOptions : unreadable;
+              setAvailableClassrooms(options);
+              if (options.length > 0) {
+                setAssignedClassId(options[0].id);
+                setClassName(options[0].name);
+              }
             }
           } else if (finalRole === 'admin') {
             // For admins, load all classrooms
@@ -267,16 +273,21 @@ const ScorekeeperInterface: React.FC = () => {
         
         // Use the same approach as AdminPanel - load from both collections
         const studentsSnapshot = await getDocs(collection(db, 'students'));
-        const usersSnapshot = await getDocs(collection(db, 'users'));
+        let userDocs: Array<{ id: string; data: () => Record<string, any> }> = [];
+        try {
+          userDocs = (await getDocs(collection(db, 'users'))).docs;
+        } catch (usersError) {
+          logger.roster.warn('ScorekeeperInterface: Could not read users; using students data only', usersError);
+        }
         
         logger.roster.info('ScorekeeperInterface: Loaded collections:', {
           students: studentsSnapshot.docs.length,
-          users: usersSnapshot.docs.length
+          users: userDocs.length
         });
         
         // Create a map of user data from the 'users' collection
         const usersMap = new Map();
-        usersSnapshot.docs.forEach(doc => {
+        userDocs.forEach(doc => {
           const userData = doc.data();
           usersMap.set(doc.id, {
           id: doc.id,
@@ -774,7 +785,7 @@ const ScorekeeperInterface: React.FC = () => {
         <div style={{ fontSize: '3rem' }}>🏫</div>
         <h2 style={{ color: '#f59e0b', margin: 0 }}>No Class Assigned</h2>
         <p style={{ color: '#6b7280', textAlign: 'center', maxWidth: '400px' }}>
-          You haven't been assigned to a class yet. Contact an administrator to get assigned to a class.
+          You aren't assigned to a current class (an old class may have been removed). Contact an administrator to get assigned to a class.
         </p>
       </div>
     );

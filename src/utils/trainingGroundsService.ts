@@ -545,7 +545,8 @@ export async function syncLiveEventQuizToTrainingAttempt(
 
     const answers: TrainingAnswer[] = rows.map((e) => ({
       questionId: e.questionId,
-      selectedIndices: [],
+      selectedIndices: Array.isArray(e.selectedIndices) ? e.selectedIndices : [],
+      ...(e.matchSelections ? { matchSelections: e.matchSelections } : {}),
       isCorrect: e.isCorrect,
       partialCredit: liveRowPartialCredit(e),
       ...(e.totalMatches ? { pointsEarned: liveRowPointsEarned(e), pointsPossible: liveRowPointsPossible(e) } : {}),

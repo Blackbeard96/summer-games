@@ -1408,25 +1408,56 @@ export async function finalizeSessionStats(
       liveEventQuizRankByPlayer,
     });
 
+    const summaryHostUid =
+      (typeof sessionData.hostUid === 'string' && sessionData.hostUid) ||
+      (typeof sessionData.teacherId === 'string' && sessionData.teacherId) ||
+      '';
+    const summaryClassIds = Array.from(
+      new Set(
+        [sessionData.classId, ...(Array.isArray(sessionData.classIds) ? sessionData.classIds : [])]
+          .map((c) => (typeof c === 'string' ? c.trim() : ''))
+          .filter(Boolean)
+      )
+    );
+    const roomPlayers = (sessionData.players || []) as Array<{
+      userId: string;
+      displayName?: string;
+      classId?: string | null;
+      isTeacher?: boolean;
+    }>;
+    const summaryPlayers = roomPlayers.length
+      ? roomPlayers
+      : Object.values(statsMap).map((s) => ({
+          userId: s.playerId,
+          displayName: s.playerName,
+        }));
+
+    let classResolution: Awaited<
+      ReturnType<typeof import('./liveEventClassResolution').resolveLiveEventPlayerClasses>
+    > | null = null;
+    try {
+      const { resolveLiveEventPlayerClasses } = await import('./liveEventClassResolution');
+      classResolution = await resolveLiveEventPlayerClasses({
+        roomClassId: typeof sessionData.classId === 'string' ? sessionData.classId : null,
+        classIds: summaryClassIds,
+        hostUid: summaryHostUid,
+        players: summaryPlayers,
+      });
+    } catch (classErr) {
+      debugError('inSessionStats', 'Class resolution failed (non-fatal)', classErr);
+    }
+
     let workSummary: SessionSummary['workSummary'];
     try {
       const { buildLiveEventWorkSummary } = await import('./workBoardService');
-      const roomPlayers = (sessionData.players || []) as Array<{
-        userId: string;
-        displayName?: string;
-        classId?: string | null;
-      }>;
       const gameTime = sessionData.gameTime as { workPeriodId?: string | null } | undefined;
       const built = await buildLiveEventWorkSummary({
         sessionId,
         classId: typeof sessionData.classId === 'string' ? sessionData.classId : null,
         workPeriodId: gameTime?.workPeriodId ?? null,
-        players: roomPlayers.length
-          ? roomPlayers
-          : Object.values(statsMap).map((s) => ({
-              userId: s.playerId,
-              displayName: s.playerName,
-            })),
+        players: summaryPlayers,
+        hostUid: summaryHostUid,
+        playerClassIds: classResolution?.classIdByPlayer,
       });
       if (built) workSummary = built;
     } catch (workErr) {
@@ -1456,6 +1487,14 @@ export async function finalizeSessionStats(
       ...(liveEventQuizRankByPlayer && { liveEventQuizRankByPlayer }),
       sessionActivity,
       ...(workSummary ? { workSummary } : {}),
+      ...(summaryHostUid ? { hostUid: summaryHostUid } : {}),
+      ...(summaryClassIds.length ? { classIds: summaryClassIds } : {}),
+      ...(classResolution
+        ? {
+            playerClassIds: classResolution.classIdByPlayer,
+            classNames: classResolution.classNameById,
+          }
+        : {}),
     };
     debug('inSessionStats', 'placement calculated', {
       sessionId,

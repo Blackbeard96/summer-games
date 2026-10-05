@@ -472,6 +472,8 @@ export async function completeExamAttempt(args: {
     totalQuestions: bank.length,
     timeTakenMs,
     completedAtMs,
+    answers: scored.alignedAnswers,
+    questionIds: bank.map((q) => q.id),
   });
 
   if (args.examSettings.awardPP || args.examSettings.awardXP) {

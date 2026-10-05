@@ -808,6 +808,8 @@ export async function advanceQuiz(
             isCorrect: r.isCorrect,
             pointsAwarded: points,
             ...(totalMatches ? { correctMatches, totalMatches } : {}),
+            ...(Array.isArray(r.selectedIndices) ? { selectedIndices: r.selectedIndices } : {}),
+            ...(r.matchSelections ? { matchSelections: r.matchSelections } : {}),
           },
         ];
       });

@@ -45,7 +45,7 @@ const ExamCountdown: React.FC<ExamCountdownProps> = ({
         <span aria-hidden>⏱</span>
         <span>
           {label}
-          <span style={{ fontWeight: 500, color: '#64748b', marginLeft: 6 }}>
+          <span style={{ fontWeight: 500, color: '#334155', marginLeft: 6 }}>
             ({settings.timeLimitMinutes} min limit)
           </span>
         </span>
@@ -65,7 +65,7 @@ const ExamCountdown: React.FC<ExamCountdownProps> = ({
         minWidth: 120,
       }}
     >
-      <span style={{ fontSize: '0.7rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase' }}>
+      <span style={{ fontSize: '0.7rem', fontWeight: 600, color: '#334155', textTransform: 'uppercase' }}>
         Exam time
       </span>
       <span

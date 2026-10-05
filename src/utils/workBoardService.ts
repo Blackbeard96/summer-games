@@ -543,10 +543,24 @@ export async function buildLiveEventWorkSummary(args: {
   sessionId: string;
   classId?: string | null;
   workPeriodId?: string | null;
-  players: Array<{ userId: string; displayName?: string; classId?: string | null }>;
+  players: Array<{ userId: string; displayName?: string; classId?: string | null; isTeacher?: boolean }>;
+  hostUid?: string | null;
+  /** Roster-resolved classes (see resolveLiveEventPlayerClasses); wins over the room row's classId. */
+  playerClassIds?: Record<string, string>;
 }): Promise<LiveEventWorkSummary | null> {
-  const players = (args.players || []).filter((p) => p?.userId);
+  const players = (args.players || [])
+    .filter((p) => p?.userId && !p.isTeacher && p.userId !== args.hostUid)
+    .map((p) => ({ ...p, classId: args.playerClassIds?.[p.userId] || p.classId }));
   if (players.length === 0) return null;
+
+  const rosterIds = players.map((p) => p.userId);
+  let activities: LiveEventWorkSummary['activities'] = [];
+  try {
+    const { loadLiveEventActivityWork } = await import('./liveEventActivityWork');
+    activities = await loadLiveEventActivityWork(args.sessionId, rosterIds);
+  } catch (e) {
+    console.warn('[workBoard] live event activity work failed', e);
+  }
 
   const classIds = Array.from(
     new Set(
@@ -558,7 +572,6 @@ export async function buildLiveEventWorkSummary(args: {
         .filter(Boolean)
     )
   );
-  if (classIds.length === 0) return null;
 
   let periodId = typeof args.workPeriodId === 'string' ? args.workPeriodId.trim() : '';
   let periodTitle: string | null = null;
@@ -631,13 +644,15 @@ export async function buildLiveEventWorkSummary(args: {
     }
   }
 
-  if (byPlayer.length === 0 && availableW === 0 && completedW === 0) {
+  if (byPlayer.length === 0 && availableW === 0 && completedW === 0 && activities.length === 0) {
     return null;
   }
 
   byPlayer.sort((a, b) => b.completedW - a.completedW || a.playerName.localeCompare(b.playerName));
 
   return {
+    activities,
+    activityRosterIds: rosterIds,
     periodId: periodId || null,
     periodTitle,
     availableW,

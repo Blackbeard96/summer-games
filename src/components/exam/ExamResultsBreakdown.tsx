@@ -9,7 +9,11 @@ export interface ExamResultsBreakdownProps {
   scorePercent: number;
   correctCount: number;
   title?: string;
+  /** Replaces the default "N of M fully correct" line under the score. */
+  summary?: string;
 }
+
+const RESPONSE_NOT_SAVED = 'Not saved for this attempt';
 
 function formatChoiceLabels(question: TrainingQuestion, indices: number[]): string {
   if (indices.length === 0) return 'None selected';
@@ -24,6 +28,7 @@ const ExamResultsBreakdown: React.FC<ExamResultsBreakdownProps> = ({
   scorePercent,
   correctCount,
   title,
+  summary,
 }) => {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -50,8 +55,8 @@ const ExamResultsBreakdown: React.FC<ExamResultsBreakdownProps> = ({
         <p style={{ fontSize: '2.5rem', fontWeight: 800, color: scoreColor, margin: '0.25rem 0' }}>
           {Math.round(scorePercent)}%
         </p>
-        <p style={{ color: '#64748b', margin: 0 }}>
-          {correctCount} of {questions.length} fully correct
+        <p style={{ color: '#334155', margin: 0 }}>
+          {summary ?? `${correctCount} of ${questions.length} fully correct`}
         </p>
       </div>
 
@@ -72,6 +77,7 @@ const ExamResultsBreakdown: React.FC<ExamResultsBreakdownProps> = ({
           const correctIndices =
             question.correctIndices ??
             (question.correctIndex !== undefined ? [question.correctIndex] : []);
+          const responseSaved = !answer || selectedIndices.length > 0 || answer.matchSelections != null;
 
           return (
             <div
@@ -132,13 +138,19 @@ const ExamResultsBreakdown: React.FC<ExamResultsBreakdownProps> = ({
                         {answer ? answerPointsEarned(answer, question) : 0} of {questionPointsPossible(question)} matches
                         correct
                       </p>
-                      <MatchingQuestionBoard
-                        question={question}
-                        className="mst-match--light"
-                        selections={answer?.matchSelections || {}}
-                        disabled
-                        reveal
-                      />
+                      {responseSaved ? (
+                        <MatchingQuestionBoard
+                          question={question}
+                          className="mst-match--light"
+                          selections={answer?.matchSelections || {}}
+                          disabled
+                          reveal
+                        />
+                      ) : (
+                        <p style={{ margin: 0, color: '#334155', fontStyle: 'italic' }}>
+                          Your placements: {RESPONSE_NOT_SAVED}
+                        </p>
+                      )}
                     </div>
                   ) : (
                   <>
@@ -150,7 +162,11 @@ const ExamResultsBreakdown: React.FC<ExamResultsBreakdownProps> = ({
                         fontWeight: 600,
                       }}
                     >
-                      {formatChoiceLabels(question, selectedIndices)}
+                      {responseSaved ? (
+                        formatChoiceLabels(question, selectedIndices)
+                      ) : (
+                        <em style={{ color: '#334155', fontWeight: 400 }}>{RESPONSE_NOT_SAVED}</em>
+                      )}
                     </span>
                     {partial ? (
                       <span style={{ color: '#d97706', marginLeft: '0.35rem' }}>
@@ -173,7 +189,7 @@ const ExamResultsBreakdown: React.FC<ExamResultsBreakdownProps> = ({
                         padding: '0.65rem',
                         background: '#f8fafc',
                         borderRadius: '0.4rem',
-                        color: '#64748b',
+                        color: '#334155',
                         fontSize: '0.9rem',
                       }}
                     >

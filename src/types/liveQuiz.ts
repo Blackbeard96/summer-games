@@ -106,6 +106,9 @@ export interface LiveQuizPerQuestionResultEntry {
   /** Matching questions: each correct match counts as one question. */
   correctMatches?: number;
   totalMatches?: number;
+  /** The player's response, kept so they can review it from their Profile later. */
+  selectedIndices?: number[];
+  matchSelections?: Record<string, string>;
 }
 
 export interface LiveQuizSession {

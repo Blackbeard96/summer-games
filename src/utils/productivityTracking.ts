@@ -17,7 +17,7 @@ import {
   type Timestamp as FsTimestamp,
   type Transaction,
 } from 'firebase/firestore';
-import type { TrainingAttempt } from '../types/trainingGrounds';
+import type { TrainingAnswer, TrainingAttempt } from '../types/trainingGrounds';
 import type { EnergyType } from '../types/season1';
 import { getEnergyTypeForLiveEvent, ENERGY_TYPES } from '../constants/energyTypes';
 import type { PlayerWorkStats } from './workStatsTracking';
@@ -758,6 +758,9 @@ export async function recordExamProductivityAttempt(args: {
   totalQuestions: number;
   timeTakenMs: number;
   completedAtMs: number;
+  /** Kept so the player can review their responses from their Profile. */
+  answers?: TrainingAnswer[];
+  questionIds?: string[];
 }): Promise<void> {
   const { examProductivityDocId } = await import('./examProfileHistory');
   const weekId = getWeekId(new Date(args.completedAtMs));
@@ -787,6 +790,8 @@ export async function recordExamProductivityAttempt(args: {
         timeTakenMs: args.timeTakenMs,
         completedAt: Timestamp.fromMillis(args.completedAtMs),
         weekId,
+        ...(args.answers ? { answers: args.answers } : {}),
+        ...(args.questionIds ? { questionIds: args.questionIds } : {}),
         updatedAt: serverTimestamp(),
       });
     });

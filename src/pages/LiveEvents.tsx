@@ -5,7 +5,11 @@ import { doc, getDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { canHostSession, isGlobalHost, joinSession } from '../utils/inSessionService';
 import { getClassroomIdsForEnrolledStudent, getVisibleLiveEventsForUser } from '../utils/classroomQueries';
-import { canUserJoinLiveEvent, normalizeLiveEventEligibility } from '../utils/liveEventEligibility';
+import {
+  canUserJoinLiveEvent,
+  normalizeLiveEventEligibility,
+  resolvePlayerClassIdForLiveEvent,
+} from '../utils/liveEventEligibility';
 import { battleEnergyDisplayLabel, inferEnergyTypeForLiveEvent } from '../constants/energyTypes';
 import { isUserAdmin } from '../utils/roleManagement';
 
@@ -229,7 +233,13 @@ const LiveEvents: React.FC = () => {
       const newPlayer = {
         userId: currentUser.uid,
         displayName: displayName.trim(),
-        classId: studentData.classId || studentData.class || null,
+        classId: isHostOfEvent
+          ? null
+          : resolvePlayerClassIdForLiveEvent(
+              userClassrooms,
+              event,
+              studentData.classId || studentData.class || null
+            ),
         photoURL: userData.photoURL || studentData.photoURL || currentUser.photoURL,
         level: studentData.level || 1,
         powerPoints: studentData.powerPoints || 0,

@@ -9,6 +9,7 @@ import {
 import { db } from '../firebase';
 import { tsMs } from './productivityTracking';
 import type { ExamProductivityLog } from '../types/examProductivity';
+import type { TrainingAnswer } from '../types/trainingGrounds';
 
 const LEGACY_EXAM_ATTEMPT_PREFIX = 'live_exam_';
 
@@ -81,6 +82,8 @@ function normalizeExamDoc(id: string, data: Record<string, unknown>): ExamProduc
     completedAt: data.completedAt,
     weekId: typeof data.weekId === 'string' ? data.weekId : '',
     legacyFromQuizLog: Boolean(data.legacyFromQuizLog),
+    ...(Array.isArray(data.answers) ? { answers: data.answers as TrainingAnswer[] } : {}),
+    ...(Array.isArray(data.questionIds) ? { questionIds: data.questionIds as string[] } : {}),
   };
 }
 

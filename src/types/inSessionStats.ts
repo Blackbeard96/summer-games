@@ -173,10 +173,31 @@ export interface SessionSummary {
    * Built at finalize so summaries show Classroom OS work outcomes.
    */
   workSummary?: LiveEventWorkSummary;
+  hostUid?: string;
+  /** All classes invited to the event (room classId first). */
+  classIds?: string[];
+  /** Class each student represented, resolved from class rosters at finalize. */
+  playerClassIds?: Record<string, string>;
+  classNames?: Record<string, string>;
+}
+
+/** Work done inside the Live Event itself (exam submissions, live quizzes). */
+export interface LiveEventActivityWork {
+  id: string;
+  kind: 'exam' | 'quiz';
+  title: string;
+  completedPlayerIds: string[];
 }
 
 /** Aggregated Work Board outcome for a Live Event summary. */
 export interface LiveEventWorkSummary {
+  /**
+   * Live Event activities students were given. Missing on summaries built before activities were
+   * tracked; those summaries only reflect Work Board items.
+   */
+  activities?: LiveEventActivityWork[];
+  /** Students the activities were assigned to (host excluded). */
+  activityRosterIds?: string[];
   periodId: string | null;
   periodTitle: string | null;
   /** Sum of available W across roster (what could be completed). */

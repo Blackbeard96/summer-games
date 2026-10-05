@@ -42,6 +42,28 @@ export function normalizeLiveEventEligibility(
   };
 }
 
+/**
+ * Class a player represents in a Live Event: the invited class they are enrolled in (room's primary
+ * class first). `students.classId` is a legacy field that is often missing or stale, so it is only a fallback.
+ */
+export function resolvePlayerClassIdForLiveEvent(
+  userClassIds: string[],
+  event: LiveEventEligibilityShape,
+  legacyClassId?: string | null
+): string | null {
+  const normalized = normalizeLiveEventEligibility(event);
+  const enrolled = (Array.isArray(userClassIds) ? userClassIds : [])
+    .map((id) => (typeof id === 'string' ? id.trim() : ''))
+    .filter((id) => id.length > 0);
+  const enrolledSet = new Set(enrolled);
+  if (normalized.classId && enrolledSet.has(normalized.classId)) return normalized.classId;
+  const invited = normalized.classIds.find((id) => enrolledSet.has(id));
+  if (invited) return invited;
+  const legacy = typeof legacyClassId === 'string' ? legacyClassId.trim() : '';
+  if (legacy && enrolledSet.has(legacy)) return legacy;
+  return enrolled[0] || legacy || null;
+}
+
 export function canUserJoinLiveEvent(userClassIds: string[], event: LiveEventEligibilityShape): boolean {
   const normalized = normalizeLiveEventEligibility(event);
   if (normalized.inviteAllClasses) return true;
