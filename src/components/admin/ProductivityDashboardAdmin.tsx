@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { collection, getDocs, query, where, limit } from 'firebase/firestore';
-import { db } from '../../firebase';
+import { auth, db } from '../../firebase';
+import { syncExamScoresToAssessment } from '../../utils/liveEventExamService';
 import type { ProductivityRankLabel, ProductivityStatDoc } from '../../utils/productivityTracking';
 import {
   getProductivityRank,
@@ -342,6 +343,45 @@ const ProductivityDashboardAdmin: React.FC<{
       setLiveEventExamsLoading(false);
     }
   }, [liveEventSessionId]);
+
+  const [examAssessmentSyncing, setExamAssessmentSyncing] = useState(false);
+  const [examAssessmentSyncNote, setExamAssessmentSyncNote] = useState<string | null>(null);
+  const linkedExamAssessmentIds = useMemo(
+    () => Array.from(new Set(liveEventExams.map((ex) => ex.assessmentId || '').filter(Boolean))),
+    [liveEventExams]
+  );
+
+  const syncLiveEventExamsToAssessment = useCallback(async () => {
+    const gradedBy = auth.currentUser?.uid;
+    if (!gradedBy || linkedExamAssessmentIds.length === 0) return;
+    setExamAssessmentSyncing(true);
+    setExamAssessmentSyncNote(null);
+    let saved = 0;
+    let unchanged = 0;
+    let failed = 0;
+    try {
+      for (const assessmentId of linkedExamAssessmentIds) {
+        const res = await syncExamScoresToAssessment({
+          assessmentId,
+          gradedBy,
+          rows: liveEventExams
+            .filter((ex) => ex.assessmentId === assessmentId)
+            .map((ex) => ({ studentId: ex.userId, scorePercent: ex.scorePercent })),
+        });
+        saved += res.saved;
+        unchanged += res.unchanged;
+        failed += res.failed;
+      }
+      setExamAssessmentSyncNote(
+        `${saved} saved, ${unchanged} already up to date${failed ? `, ${failed} failed` : ''}.`
+      );
+    } catch (e) {
+      console.warn('[ProductivityDashboard] exam assessment sync', e);
+      setExamAssessmentSyncNote('Could not save scores to the linked assessment.');
+    } finally {
+      setExamAssessmentSyncing(false);
+    }
+  }, [linkedExamAssessmentIds, liveEventExams]);
 
   const studentClassLabel = useCallback(
     (studentId: string) => {
@@ -726,7 +766,31 @@ const ProductivityDashboardAdmin: React.FC<{
               >
                 {liveEventExamsLoading ? 'Loading…' : 'Load results'}
               </button>
+              {linkedExamAssessmentIds.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => void syncLiveEventExamsToAssessment()}
+                  disabled={examAssessmentSyncing}
+                  title="Writes each submitted exam score into the assessment linked when Exam Mode started"
+                  style={{
+                    padding: '0.45rem 1rem',
+                    background: 'white',
+                    color: '#5b21b6',
+                    border: '1px solid #7c3aed',
+                    borderRadius: 8,
+                    fontWeight: 700,
+                    cursor: examAssessmentSyncing ? 'wait' : 'pointer',
+                  }}
+                >
+                  {examAssessmentSyncing ? 'Saving…' : 'Send scores to linked assessment'}
+                </button>
+              ) : null}
             </div>
+            {examAssessmentSyncNote ? (
+              <p style={{ margin: '0.5rem 0 0', fontSize: 12, color: '#5b21b6', fontWeight: 600 }}>
+                {examAssessmentSyncNote}
+              </p>
+            ) : null}
             {liveEventSessionId.trim() ? (
               <p style={{ margin: '0.5rem 0 0', fontSize: 12, color: '#6b7280' }}>
                 Session: <code style={{ fontSize: 11 }}>{liveEventSessionId.trim()}</code>

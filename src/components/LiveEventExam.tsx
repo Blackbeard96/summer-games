@@ -15,8 +15,8 @@ import {
   ensureExamProgressDoc,
   getPlayerExamProgress,
   mergeExamSettings,
-  saveExamToAssessment,
   subscribeExamProgressCollection,
+  syncExamScoresToAssessment,
   subscribePlayerExamProgress,
   submitExamAnswer,
 } from '../utils/liveEventExamService';
@@ -314,20 +314,6 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
         examSettings,
         startedAtMs: examStartedAtMs ?? examStartMs,
       });
-      if (examAssessmentId) {
-        const max = linkedAssessment?.maxScore ?? 100;
-        const hostUid =
-          (typeof room?.teacherId === 'string' && room.teacherId) ||
-          (typeof room?.hostUid === 'string' && room.hostUid) ||
-          currentUser.uid;
-        await saveExamToAssessment({
-          assessmentId: examAssessmentId,
-          studentId: currentUser.uid,
-          scorePercent: finalProgress.scorePercent,
-          maxScore: max,
-          gradedBy: hostUid,
-        });
-      }
       setProgress(finalProgress);
       setMessage(timeExpired ? 'Time is up — your exam was submitted automatically.' : null);
     } catch (e) {
@@ -349,7 +335,6 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
     examSettings,
     examStartedAtMs,
     examStartMs,
-    room,
     timeExpired,
   ]);
 
@@ -514,7 +499,12 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
   };
 
   const handleEndExamMode = async () => {
-    if (!window.confirm('End Exam Mode and return this room to Class Flow?')) return;
+    const unfinished = allProgress.filter((p) => !p.completed).length;
+    const prompt =
+      unfinished > 0
+        ? `${unfinished} player(s) have not submitted yet. Ending now leaves their exams unsubmitted (no score is recorded). End Exam Mode anyway?`
+        : 'End Exam Mode and return this room to Class Flow?';
+    if (!window.confirm(prompt)) return;
     try {
       await updateDoc(doc(db, 'inSessionRooms', sessionId), {
         liveEventMode: 'class_flow',
@@ -536,6 +526,50 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
     allProgress.forEach((p) => map.set(p.playerId, p));
     return map;
   }, [allProgress]);
+
+  const assessmentSyncedRef = useRef<Set<string>>(new Set());
+  const assessmentSyncBusyRef = useRef(false);
+  const [assessmentSyncNote, setAssessmentSyncNote] = useState<string | null>(null);
+  const [assessmentSyncRound, setAssessmentSyncRound] = useState(0);
+
+  useEffect(() => {
+    if (!isSessionHost || !examAssessmentId || !currentUser || assessmentSyncBusyRef.current) return;
+    const pending = allProgress.filter(
+      (p) =>
+        p.completed &&
+        !assessmentSyncedRef.current.has(`${examAssessmentId}:${p.playerId}:${p.scorePercent}`)
+    );
+    if (pending.length === 0) return;
+    assessmentSyncBusyRef.current = true;
+    let allSaved = false;
+    void syncExamScoresToAssessment({
+      assessmentId: examAssessmentId,
+      gradedBy: currentUser.uid,
+      rows: pending.map((p) => ({ studentId: p.playerId, scorePercent: p.scorePercent })),
+    })
+      .then((res) => {
+        if (res.failed === 0) {
+          allSaved = true;
+          pending.forEach((p) =>
+            assessmentSyncedRef.current.add(`${examAssessmentId}:${p.playerId}:${p.scorePercent}`)
+          );
+        }
+        setAssessmentSyncNote(
+          res.failed > 0
+            ? `${res.failed} score(s) could not be saved to the linked assessment — will retry.`
+            : `Linked assessment updated (${assessmentSyncedRef.current.size} score(s) saved).`
+        );
+      })
+      .catch((e) => {
+        console.warn('[LiveEventExam] assessment sync', e);
+        setAssessmentSyncNote('Could not save scores to the linked assessment — will retry.');
+      })
+      .finally(() => {
+        assessmentSyncBusyRef.current = false;
+        // Picks up submissions that arrived mid-sync; failures wait for the next progress snapshot.
+        if (allSaved) setAssessmentSyncRound((n) => n + 1);
+      });
+  }, [isSessionHost, examAssessmentId, currentUser, allProgress, assessmentSyncRound]);
 
   const refreshProductivityExams = useCallback(async () => {
     if (!sessionId) return;
@@ -795,7 +829,15 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
             <p style={{ marginTop: '1rem', color: '#64748b', fontSize: '0.85rem' }}>
               Students see a full-screen exam only — combat and skills are disabled. Submitted scores sync to MST
               Productivity (Admin → Productivity → Live Event Exam Results).
+              {examAssessmentId
+                ? ' Scores are also saved to the linked assessment while this dashboard is open.'
+                : ''}
             </p>
+            {examAssessmentId && assessmentSyncNote ? (
+              <p style={{ marginTop: '0.35rem', color: '#4338ca', fontSize: '0.85rem', fontWeight: 600 }}>
+                {assessmentSyncNote}
+              </p>
+            ) : null}
             {productivityExamRows.length > 0 ? (
               <div style={{ marginTop: '1.25rem' }}>
                 <div

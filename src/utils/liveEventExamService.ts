@@ -476,33 +476,58 @@ export async function completeExamAttempt(args: {
 
   if (args.examSettings.awardPP || args.examSettings.awardXP) {
     if (scored.alignedAnswers.length > 0 && bank.length > 0) {
-      const { grantQuizRewards, calculateQuizRewards } = await import('./trainingGroundsRewards');
-      const computed = calculateQuizRewards(bank, scored.alignedAnswers);
-      await grantQuizRewards(args.playerId, {
-        ppGained: args.examSettings.awardPP ? computed.ppGained : 0,
-        xpGained: args.examSettings.awardXP ? computed.xpGained : 0,
-        bonuses: computed.bonuses,
-        breakdown: computed.breakdown,
-      });
+      try {
+        const { grantQuizRewards, calculateQuizRewards } = await import('./trainingGroundsRewards');
+        const computed = calculateQuizRewards(bank, scored.alignedAnswers);
+        await grantQuizRewards(args.playerId, {
+          ppGained: args.examSettings.awardPP ? computed.ppGained : 0,
+          xpGained: args.examSettings.awardXP ? computed.xpGained : 0,
+          bonuses: computed.bonuses,
+          breakdown: computed.breakdown,
+        });
+      } catch (e) {
+        console.warn('[liveEventExam] exam rewards', e);
+      }
     }
   }
 
   return finalProgress;
 }
 
-export async function saveExamToAssessment(args: {
+export type ExamAssessmentSyncRow = { studentId: string; scorePercent: number };
+
+/**
+ * Writes exam scores into the linked assessment's results. Staff only (assessmentResults rules),
+ * so this runs on the host / admin client, never the student's.
+ */
+export async function syncExamScoresToAssessment(args: {
   assessmentId: string;
-  studentId: string;
-  scorePercent: number;
-  maxScore: number;
   gradedBy: string;
-}): Promise<void> {
-  const actualScore = Math.round((args.scorePercent / 100) * args.maxScore);
-  const { setAssessmentResult } = await import('./assessmentGoalsFirestore');
-  await setAssessmentResult(
-    args.assessmentId,
-    args.studentId,
-    actualScore,
-    args.gradedBy
+  rows: ExamAssessmentSyncRow[];
+}): Promise<{ saved: number; unchanged: number; failed: number }> {
+  const result = { saved: 0, unchanged: 0, failed: 0 };
+  if (!args.assessmentId || args.rows.length === 0) return result;
+  const { getAssessment, getAssessmentResult, setAssessmentResult } = await import(
+    './assessmentGoalsFirestore'
   );
+  const assessment = await getAssessment(args.assessmentId);
+  if (!assessment) throw new Error('Linked assessment not found');
+  const maxScore = assessment.maxScore || 100;
+
+  for (const row of args.rows) {
+    const actualScore = Math.round((row.scorePercent / 100) * maxScore);
+    try {
+      const existing = await getAssessmentResult(args.assessmentId, row.studentId);
+      if (existing && existing.actualScore === actualScore) {
+        result.unchanged += 1;
+        continue;
+      }
+      await setAssessmentResult(args.assessmentId, row.studentId, actualScore, args.gradedBy);
+      result.saved += 1;
+    } catch (e) {
+      console.warn('[liveEventExam] assessment sync', row.studentId, e);
+      result.failed += 1;
+    }
+  }
+  return result;
 }

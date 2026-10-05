@@ -481,10 +481,15 @@ export async function setAssessmentResult(
   
   // Increment numGraded on assessment
   const assessmentRef = doc(db, 'assessments', assessmentId);
-  await updateDoc(assessmentRef, {
-    numGraded: increment(1),
-    gradingStatus: 'graded' as const
-  });
+  try {
+    await updateDoc(assessmentRef, {
+      numGraded: increment(1),
+      gradingStatus: 'graded' as const
+    });
+  } catch (e) {
+    // Assessment doc writes are limited to fewer accounts than assessmentResults; the result above is saved.
+    console.warn('[setAssessmentResult] numGraded update', e);
+  }
 
   const pts = Math.max(0, Math.round(typeof ppChange === 'number' ? ppChange : 0));
   void bumpAssessmentWorkStats({
