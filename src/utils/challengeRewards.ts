@@ -18,6 +18,7 @@ import {
 import { db } from '../firebase';
 import { ChallengeReward } from '../types/chapters';
 import { mirrorProfileXpToProgressionSystems } from './playerProgressionRewards';
+import { applyPlayerPPDelta } from './playerPowerPoints';
 
 export interface RewardGrantResult {
   success: boolean;
@@ -190,12 +191,10 @@ export async function grantChallengeRewards(
       // Read current user state
       const userRef = doc(db, 'users', userId);
       const studentRef = doc(db, 'students', userId);
-      const vaultRef = doc(db, 'vaults', userId);
 
-      const [userDoc, studentDoc, vaultDoc] = await Promise.all([
+      const [userDoc, studentDoc] = await Promise.all([
         transaction.get(userRef),
-        transaction.get(studentRef),
-        transaction.get(vaultRef)
+        transaction.get(studentRef)
       ]);
 
       if (!userDoc.exists() && !studentDoc.exists()) {
@@ -204,20 +203,14 @@ export async function grantChallengeRewards(
 
       const userData = userDoc.exists() ? userDoc.data() : {};
       const studentData = studentDoc.exists() ? studentDoc.data() : {};
-      const vaultData = vaultDoc.exists() ? vaultDoc.data() : {};
 
       // Get current values
-      const currentUserPP = userData.powerPoints || studentData.powerPoints || 0;
       const currentUserXP = userData.xp || studentData.xp || 0;
       const currentUserTruthMetal = userData.truthMetal || studentData.truthMetal || 0;
-      const currentVaultPP = vaultData.currentPP || currentUserPP;
-      const vaultCapacity = vaultData.capacity || 1000;
 
       // Calculate new values
-      const newUserPP = currentUserPP + ppReward;
       const newUserXP = currentUserXP + xpReward;
       const newUserTruthMetal = currentUserTruthMetal + truthMetalReward;
-      const newVaultPP = Math.min(vaultCapacity, currentVaultPP + ppReward);
 
       // Prepare artifact updates
       const currentStudentArtifacts = studentData.artifacts || {};
@@ -288,12 +281,9 @@ export async function grantChallengeRewards(
       const updatedUserArtifacts = [...currentUserArtifacts, ...newUserArtifacts];
 
       console.log(`🎁 grantChallengeRewards: Transaction - Preparing updates:`, {
-        currentUserPP,
-        newUserPP,
+        ppReward,
         currentUserXP,
         newUserXP,
-        currentVaultPP,
-        newVaultPP,
         artifactsToGrant: artifactIds,
         newArtifactsCount: newUserArtifacts.length
       });
@@ -301,7 +291,6 @@ export async function grantChallengeRewards(
       // Update all documents atomically
       if (userDoc.exists()) {
         const userUpdates: any = {
-          powerPoints: increment(ppReward),
           xp: increment(xpReward)
         };
         
@@ -319,7 +308,6 @@ export async function grantChallengeRewards(
         }
         
         console.log(`🎁 grantChallengeRewards: Updating users document:`, {
-          ppIncrement: ppReward,
           xpIncrement: xpReward,
           truthMetalIncrement: truthMetalReward,
           artifactsCount: updatedUserArtifacts.length
@@ -332,7 +320,6 @@ export async function grantChallengeRewards(
 
       if (studentDoc.exists()) {
         const studentUpdates: any = {
-          powerPoints: increment(ppReward),
           xp: increment(xpReward)
         };
         
@@ -350,7 +337,6 @@ export async function grantChallengeRewards(
         }
         
         console.log(`🎁 grantChallengeRewards: Updating students document:`, {
-          ppIncrement: ppReward,
           xpIncrement: xpReward,
           truthMetalIncrement: truthMetalReward,
           artifactsCount: Object.keys(updatedStudentArtifacts).filter(k => !k.endsWith('_purchase')).length
@@ -359,12 +345,6 @@ export async function grantChallengeRewards(
         transaction.update(studentRef, studentUpdates);
       } else {
         console.warn(`⚠️ grantChallengeRewards: Student document does not exist for ${userId}`);
-      }
-
-      if (vaultDoc.exists() && ppReward > 0) {
-        transaction.update(vaultRef, {
-          currentPP: newVaultPP
-        });
       }
 
       // Create claim record (idempotency)
@@ -399,6 +379,13 @@ export async function grantChallengeRewards(
         }
       };
     });
+
+    if (result.success && !result.alreadyClaimed && ppReward > 0) {
+      await applyPlayerPPDelta(userId, ppReward, {
+        mode: 'earn',
+        meta: { sourceType: 'other', sourceId: challengeId, notes: 'Challenge reward' },
+      });
+    }
 
     if (result.success && !result.alreadyClaimed) {
       const bpXp = Math.max(0, Math.floor(Number(result.rewardsGranted?.xp) || 0));

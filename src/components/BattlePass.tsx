@@ -11,6 +11,7 @@ import {
   runTransaction,
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { applyPlayerPPDelta } from '../utils/playerPowerPoints';
 import BattlePassRewardModal from './BattlePassRewardModal';
 
 interface BattlePassTier {
@@ -280,8 +281,10 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
       const studentUpdates: any = {};
 
       if (reward.type === 'pp') {
-        userUpdates.powerPoints = increment(reward.amount);
-        studentUpdates.powerPoints = increment(reward.amount);
+        await applyPlayerPPDelta(currentUser.uid, reward.amount, {
+          mode: 'earn',
+          meta: { sourceType: 'battlePass', sourceId: `season${season}_${tierKey}`, notes: 'Battle Pass reward' },
+        });
       } else if (reward.type === 'xp') {
         userUpdates.xp = increment(reward.amount);
         studentUpdates.xp = increment(reward.amount);

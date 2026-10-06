@@ -32,7 +32,7 @@ import {
   findPlayerUidByEmail,
   normalizeStudentEmail,
 } from '../utils/classroomEnrollment';
-import { setPlayerPowerPoints, adjustPlayerPowerPoints } from '../utils/playerPowerPoints';
+import { setPlayerPowerPoints, adjustPlayerPowerPoints, applyPlayerPPDelta, getPlayerPowerPoints } from '../utils/playerPowerPoints';
 
 // Classroom interface
 interface Classroom {
@@ -686,7 +686,7 @@ const ClassroomManagement: React.FC = () => {
       console.log('Student not found:', studentId);
       return;
     }
-    const previousAmount = student.powerPoints || 0;
+    const previousAmount = await getPlayerPowerPoints(studentId);
     const newPP = await setPlayerPowerPoints(studentId, amount, {
       previousAmount,
       meta: {
@@ -727,64 +727,34 @@ const ClassroomManagement: React.FC = () => {
       const selectedIds = Array.from(ppViewSelectedStudents);
       const updatedStudents: { id: string; newPP: number; oldPP: number; displayName: string }[] = [];
 
-      // Process in batches of 400 (Firestore limit is 500)
-      const batchSize = 400;
-      for (let i = 0; i < selectedIds.length; i += batchSize) {
-        const chunk = selectedIds.slice(i, i + batchSize);
-        const chunkBatch = writeBatch(db);
-        
-        for (const studentId of chunk) {
-          const student = classStudents.find(s => s.id === studentId);
-          if (!student) continue;
+      const notes =
+        ppViewBulkReason?.trim() ||
+        (ppViewBulkPPAmount >= 0
+          ? `Classroom bulk +${ppViewBulkPPAmount} PP`
+          : `Classroom bulk ${ppViewBulkPPAmount} PP`);
+      const failed: string[] = [];
 
-          const oldPP = student.powerPoints || 0;
-          const newPP = Math.max(0, oldPP + ppViewBulkPPAmount); // Prevent negative PP
-
-          const studentRef = doc(db, 'students', studentId);
-          chunkBatch.update(studentRef, {
-            powerPoints: newPP,
-            lastUpdated: serverTimestamp()
+      for (const studentId of selectedIds) {
+        const student = classStudents.find(s => s.id === studentId);
+        if (!student) continue;
+        try {
+          const result = await applyPlayerPPDelta(studentId, ppViewBulkPPAmount, {
+            mode: 'award',
+            meta: { sourceType: 'classroom', sourceId: 'classroom-bulk', notes },
           });
-
-          const userRef = doc(db, 'users', studentId);
-          chunkBatch.set(userRef, { powerPoints: newPP }, { merge: true });
-
-          // Also update vault if it exists
-          const vaultRef = doc(db, 'vaults', studentId);
-          const vaultDoc = await getDoc(vaultRef);
-          if (vaultDoc.exists()) {
-            chunkBatch.update(vaultRef, {
-              currentPP: newPP
-            });
-          }
-
-          updatedStudents.push({ id: studentId, newPP, oldPP, displayName: student.displayName });
+          updatedStudents.push({
+            id: studentId,
+            newPP: result.next,
+            oldPP: result.previous,
+            displayName: student.displayName,
+          });
+        } catch (applyErr) {
+          console.error('Classroom bulk PP failed for', studentId, applyErr);
+          failed.push(student.displayName || studentId);
         }
-
-        // Commit batch for this chunk
-        await chunkBatch.commit();
       }
-
-      // Record PP history for Profile (non-fatal)
-      try {
-        const { recordPPChange } = await import('../utils/ppLedgerService');
-        await Promise.all(
-          updatedStudents.map((u) =>
-            recordPPChange({
-              studentId: u.id,
-              amount: u.newPP - u.oldPP,
-              sourceType: 'classroom',
-              sourceId: 'classroom-bulk',
-              notes:
-                ppViewBulkReason?.trim() ||
-                (ppViewBulkPPAmount >= 0
-                  ? `Classroom bulk +${ppViewBulkPPAmount} PP`
-                  : `Classroom bulk ${ppViewBulkPPAmount} PP`),
-            })
-          )
-        );
-      } catch (ledgerErr) {
-        console.warn('Classroom bulk PP ledger write failed (non-fatal)', ledgerErr);
+      if (failed.length > 0) {
+        alert(`Could not update PP for: ${failed.join(', ')}. Try again for those students.`);
       }
 
       // Update local state

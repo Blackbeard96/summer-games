@@ -3164,26 +3164,27 @@ const Profile = () => {
                                           ? currentInventory.filter((item: string, index: number) => index !== artifactIndex)
                                           : currentInventory;
                                         
-                                        // Calculate new PP (add 50% of original price)
-                                        const currentPP = studentsData.powerPoints || 0;
-                                        const newPP = currentPP + returnPrice;
+                                        // Update both collections
+                                        await updateDoc(userRef, {
+                                          artifacts: updatedArtifacts
+                                        });
+                                        
+                                        await updateDoc(studentsRef, {
+                                          inventory: updatedInventory
+                                        });
+                                        
+                                        // Refund 50% of original price
+                                        const { applyPlayerPPDelta } = await import('../utils/playerPowerPoints');
+                                        const { previous: currentPP, next: newPP } = await applyPlayerPPDelta(currentUser.uid, returnPrice, {
+                                          mode: 'award',
+                                          meta: { sourceType: 'marketplace', sourceId: enhancedArtifact.id, notes: `Artifact return: ${enhancedArtifact.name}` },
+                                        });
                                         
                                         console.log('[Profile] Returning artifact:', {
                                           artifactName: enhancedArtifact.name,
                                           currentPP,
                                           returnPrice,
                                           newPP
-                                        });
-                                        
-                                        // Update both collections
-                                        await updateDoc(userRef, {
-                                          artifacts: updatedArtifacts
-                                        });
-                                        
-                                        // Update students collection with new PP
-                                        await updateDoc(studentsRef, {
-                                          inventory: updatedInventory,
-                                          powerPoints: newPP
                                         });
                                         
                                         // Also update vault directly to ensure consistency
@@ -3197,7 +3198,6 @@ const Profile = () => {
                                             : Math.min(newPP, maxVaultHealth);
                                           
                                           await updateDoc(vaultRef, {
-                                            currentPP: newPP,
                                             vaultHealth: correctVaultHealth
                                           });
                                           

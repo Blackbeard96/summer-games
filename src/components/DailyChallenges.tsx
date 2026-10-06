@@ -10,6 +10,7 @@ import {
   scaledDailyChallengeRewardXP,
 } from '../utils/dailyChallengeShared';
 import { mirrorProfileXpToProgressionSystems } from '../utils/playerProgressionRewards';
+import { applyPlayerPPDelta } from '../utils/playerPowerPoints';
 
 interface DailyChallenge {
   id: string;
@@ -119,19 +120,19 @@ const DailyChallenges: React.FC = () => {
       const studentRef = doc(db, 'students', currentUser.uid);
       
       // Use transaction to ensure idempotency
-      const grantedXp = await runTransaction(db, async (transaction) => {
+      const { grantedXp, grantedPP } = await runTransaction(db, async (transaction) => {
         // Re-read within transaction
         const challengeDoc = await transaction.get(doc(db, 'adminSettings', 'dailyChallenges', 'challenges', challengeId));
         if (!challengeDoc.exists()) {
           console.error('[Daily Challenges] Challenge not found:', challengeId);
-          return 0;
+          return { grantedXp: 0, grantedPP: 0 };
         }
         const challengeData = challengeDoc.data() as DailyChallenge;
 
         const progressDoc = await transaction.get(playerChallengesRef);
         if (!progressDoc.exists()) {
           console.warn('[Daily Challenges] Progress document not found');
-          return 0;
+          return { grantedXp: 0, grantedPP: 0 };
         }
 
         const progressData = progressDoc.data();
@@ -141,10 +142,10 @@ const DailyChallenges: React.FC = () => {
         // IDEMPOTENCY CHECK: If already claimed, do nothing
         if (!challengeProgress || challengeProgress.claimed) {
           console.log(`[Daily Challenges] Rewards already claimed for challenge ${challengeId}`);
-          return 0;
+          return { grantedXp: 0, grantedPP: 0 };
         }
         if (!challengeProgress.completed) {
-          return 0;
+          return { grantedXp: 0, grantedPP: 0 };
         }
 
         const ppGrant = scaledDailyChallengeRewardPP(challengeData.rewardPP);
@@ -155,7 +156,6 @@ const DailyChallenges: React.FC = () => {
 
         // Grant rewards using atomic increments
         const updateData: any = {
-          powerPoints: increment(ppGrant),
           xp: increment(xpGrant),
         };
         if (tmGrant > 0) {
@@ -172,8 +172,14 @@ const DailyChallenges: React.FC = () => {
         });
         
         console.log(`[Daily Challenges] ✅ Auto-granted rewards for challenge "${challengeData.title}": ${challengeData.rewardPP} PP, ${challengeData.rewardXP} XP${challengeData.rewardTruthMetal ? `, ${challengeData.rewardTruthMetal} Truth Metal` : ''}`);
-        return xpGrant;
+        return { grantedXp: xpGrant, grantedPP: ppGrant };
       });
+      if (grantedPP > 0) {
+        await applyPlayerPPDelta(currentUser.uid, grantedPP, {
+          mode: 'earn',
+          meta: { sourceType: 'other', sourceId: challengeId, notes: 'Daily challenge' },
+        });
+      }
       if (grantedXp > 0) {
         await mirrorProfileXpToProgressionSystems(currentUser.uid, grantedXp, 'daily_challenge');
       }
@@ -307,10 +313,15 @@ const DailyChallenges: React.FC = () => {
         ? scaledDailyChallengeRewardTruthMetal(challenge.rewardTruthMetal)
         : 0;
       await updateDoc(studentRef, {
-        powerPoints: increment(ppGrant),
         xp: increment(xpGrant),
         ...(tmGrant > 0 ? { truthMetal: increment(tmGrant) } : {}),
       });
+      if (ppGrant > 0) {
+        await applyPlayerPPDelta(currentUser.uid, ppGrant, {
+          mode: 'earn',
+          meta: { sourceType: 'other', sourceId: challenge.id, notes: 'Daily challenge' },
+        });
+      }
 
       if (xpGrant > 0) {
         await mirrorProfileXpToProgressionSystems(currentUser.uid, xpGrant, 'daily_challenge');

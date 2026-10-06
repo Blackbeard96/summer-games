@@ -3,9 +3,10 @@
  * Firestore txs require all reads before all writes.
  */
 
-import { doc, getDoc, increment, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { PlayerMission } from '../types/missions';
+import { applyPlayerPPDelta } from './playerPowerPoints';
 
 export async function grantMissionSkillsMasteryPp(args: {
   userId: string;
@@ -19,18 +20,10 @@ export async function grantMissionSkillsMasteryPp(args: {
   }
 
   const playerMissionRef = doc(db, 'playerMissions', args.playerMissionId);
-  const vaultRef = doc(db, 'vaults', args.userId);
-  const studentRef = doc(db, 'students', args.userId);
-  const userRef = doc(db, 'users', args.userId);
 
-  return runTransaction(db, async (tx) => {
+  const result = await runTransaction(db, async (tx) => {
     // --- all reads first ---
-    const [pmSnap, vaultSnap, studentSnap, userSnap] = await Promise.all([
-      tx.get(playerMissionRef),
-      tx.get(vaultRef),
-      tx.get(studentRef),
-      tx.get(userRef),
-    ]);
+    const pmSnap = await tx.get(playerMissionRef);
 
     if (!pmSnap.exists()) {
       throw new Error('Player mission not found.');
@@ -52,23 +45,6 @@ export async function grantMissionSkillsMasteryPp(args: {
     }
 
     // --- all writes after reads ---
-    if (vaultSnap.exists()) {
-      const vaultData = vaultSnap.data();
-      const capacity = typeof vaultData.capacity === 'number' ? vaultData.capacity : 1000;
-      const current = typeof vaultData.currentPP === 'number' ? vaultData.currentPP : 0;
-      tx.update(vaultRef, { currentPP: Math.min(capacity, current + amount) });
-    } else {
-      tx.set(vaultRef, { currentPP: amount, capacity: 1000 }, { merge: true });
-    }
-
-    if (studentSnap.exists()) {
-      tx.update(studentRef, { powerPoints: increment(amount) });
-    }
-
-    if (userSnap.exists()) {
-      tx.update(userRef, { powerPoints: increment(amount) });
-    }
-
     tx.update(playerMissionRef, {
       [`sequenceStepCompletion.${args.stepId}`]: {
         completedAt: serverTimestamp(),
@@ -79,6 +55,19 @@ export async function grantMissionSkillsMasteryPp(args: {
 
     return { granted: amount, alreadyClaimed: false };
   });
+
+  if (!result.alreadyClaimed) {
+    await applyPlayerPPDelta(args.userId, amount, {
+      mode: 'earn',
+      meta: {
+        sourceType: 'other',
+        sourceId: `${args.playerMissionId}:${args.stepId}`,
+        notes: 'Mission skills mastery',
+      },
+    });
+  }
+
+  return result;
 }
 
 /** Mark Skills & Mastery step visited without granting PP (e.g. grantPP = 0). */

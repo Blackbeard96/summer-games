@@ -6,6 +6,7 @@ import { db } from '../firebase';
 import BattleEngine from './BattleEngine';
 import { trackMoveUsage } from '../utils/manifestTracking';
 import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
+import { applyPlayerPPDelta } from '../utils/playerPowerPoints';
 
 interface MindforgeProps {
   onBack: () => void;
@@ -782,7 +783,6 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
         
         // Update PP, XP, and Truth Metal using atomic increments
         await updateDoc(userRef, {
-          powerPoints: increment(rewards.pp),
           xp: increment(rewards.xp),
           truthMetal: increment(truthMetalEarned), // Add TM Shards to Truth Metal currency
           mindforgeStats: {
@@ -796,6 +796,12 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
             totalMatches: (userData.mindforgeStats?.totalMatches || 0) + 1
           }
         });
+        if (rewards.pp) {
+          await applyPlayerPPDelta(currentUser.uid, rewards.pp, {
+            mode: 'earn',
+            meta: { sourceType: 'other', notes: 'Mindforge' },
+          });
+        }
 
         const mfXp = Math.max(0, Math.floor(Number(rewards.xp) || 0));
         if (mfXp > 0) {

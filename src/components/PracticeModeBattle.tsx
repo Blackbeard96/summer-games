@@ -9,6 +9,7 @@ import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 import { getLevelFromXP } from '../utils/leveling';
 import PracticeWaitingRoomModal from './PracticeWaitingRoomModal';
 import { mirrorProfileXpToProgressionSystems, trackPlayerAction } from '../utils/playerProgressionRewards';
+import { applyPlayerPPDelta } from '../utils/playerPowerPoints';
 
 interface CPUOpponent {
   id: string;
@@ -653,7 +654,6 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
                 
                 // Update Firestore with new stats and practice rewards using atomic increments
                 const updateData: any = {
-                  powerPoints: increment(finalPP),
                   xp: increment(selectedOpponent.rewards.xp),
                   practiceModeRewards: updatedPracticeRewards,
                   lastUpdated: serverTimestamp()
@@ -665,6 +665,10 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
                 }
                 
                 await updateDoc(userRef, updateData);
+                const ppResult = await applyPlayerPPDelta(currentUser.uid, finalPP, {
+                  mode: 'earn',
+                  meta: { sourceType: 'other', sourceId: selectedOpponent.id, notes: 'Practice battle' },
+                });
 
                 const practiceXp = Math.max(0, Math.floor(Number(selectedOpponent.rewards.xp) || 0));
                 if (practiceXp > 0) {
@@ -675,13 +679,13 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
                 const verifyDoc = await getDoc(userRef);
                 if (verifyDoc.exists()) {
                   const verifyData = verifyDoc.data();
-                  console.log('[PracticeMode] ✅ Verification - PP in DB:', verifyData.powerPoints, '(expected:', expectedNewPP, ')');
+                  console.log('[PracticeMode] ✅ Verification - PP in DB:', verifyData.powerPoints, '(expected:', ppResult.next, ')');
                   console.log('[PracticeMode] ✅ Verification - XP in DB:', verifyData.xp, '(expected:', expectedNewXP, ')');
                   
-                  if (verifyData.powerPoints === expectedNewPP && verifyData.xp === expectedNewXP) {
+                  if (verifyData.powerPoints === ppResult.next && verifyData.xp === expectedNewXP) {
                     console.log('[PracticeMode] ✅ Stats successfully updated in Firestore!');
                   } else {
-                    console.error('[PracticeMode] ❌ Stats mismatch! Expected PP:', expectedNewPP, 'Got:', verifyData.powerPoints);
+                    console.error('[PracticeMode] ❌ Stats mismatch! Expected PP:', ppResult.next, 'Got:', verifyData.powerPoints);
                     console.error('[PracticeMode] ❌ Stats mismatch! Expected XP:', expectedNewXP, 'Got:', verifyData.xp);
                   }
                 }

@@ -30,6 +30,7 @@ import { detectManifest, logManifestDetection } from '../utils/manifestDetection
 import { updateProgressOnChallengeComplete } from '../utils/chapterProgression';
 import { grantChallengeRewards } from '../utils/challengeRewards';
 import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
+import { applyPlayerPPDelta } from '../utils/playerPowerPoints';
 import { mergeUserAndStudentForJourney } from '../utils/mergeChapterProgress';
 import { isChapter2ChallengeEffectivelyComplete } from '../utils/chapter2ProgressInference';
 import { isUidInSquad } from '../utils/squadMemberUtils';
@@ -1355,16 +1356,21 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter: baseChapter, onB
           const userDocRewards = await getDoc(userRef);
           const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
           await updateDoc(userRef, {
-            xp: (userDataRewards.xp || 0) + xpGained,
-            powerPoints: (userDataRewards.powerPoints || 0) + ppGained
+            xp: (userDataRewards.xp || 0) + xpGained
           });
 
           const studentDocRewards = await getDoc(studentRef);
           if (studentDocRewards.exists()) {
             const studentDataRewards = studentDocRewards.data();
             await updateDoc(studentRef, {
-              xp: (studentDataRewards.xp || 0) + xpGained,
-              powerPoints: (studentDataRewards.powerPoints || 0) + ppGained
+              xp: (studentDataRewards.xp || 0) + xpGained
+            });
+          }
+
+          if (ppGained > 0) {
+            await applyPlayerPPDelta(currentUser.uid, ppGained, {
+              mode: 'earn',
+              meta: { sourceType: 'other', sourceId: challengeId, notes: `Chapter CPU battle: ${challengeName}` },
             });
           }
 
@@ -1421,16 +1427,21 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter: baseChapter, onB
       const userDocRewards = await getDoc(userRef);
       const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
       await updateDoc(userRef, {
-        xp: (userDataRewards.xp || 0) + xpReward,
-        powerPoints: (userDataRewards.powerPoints || 0) + ppReward
+        xp: (userDataRewards.xp || 0) + xpReward
       });
 
       const studentDocRewards = await getDoc(studentRef);
       if (studentDocRewards.exists()) {
         const studentDataRewards = studentDocRewards.data();
         await updateDoc(studentRef, {
-          xp: (studentDataRewards.xp || 0) + xpReward,
-          powerPoints: (studentDataRewards.powerPoints || 0) + ppReward
+          xp: (studentDataRewards.xp || 0) + xpReward
+        });
+      }
+
+      if (ppReward > 0) {
+        await applyPlayerPPDelta(currentUser.uid, ppReward, {
+          mode: 'earn',
+          meta: { sourceType: 'other', sourceId: 'ep1-portal-sequence', notes: 'Story: Navigate the Portal tutorial' },
         });
       }
 
@@ -1525,16 +1536,21 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter: baseChapter, onB
       const userDocRewards = await getDoc(userRef);
       const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
       await updateDoc(userRef, {
-        xp: (userDataRewards.xp || 0) + xpReward,
-        powerPoints: (userDataRewards.powerPoints || 0) + ppReward
+        xp: (userDataRewards.xp || 0) + xpReward
       });
 
       const studentDocRewards = await getDoc(studentRef);
       if (studentDocRewards.exists()) {
         const studentDataRewards = studentDocRewards.data();
         await updateDoc(studentRef, {
-          xp: (studentDataRewards.xp || 0) + xpReward,
-          powerPoints: (studentDataRewards.powerPoints || 0) + ppReward
+          xp: (studentDataRewards.xp || 0) + xpReward
+        });
+      }
+
+      if (ppReward > 0) {
+        await applyPlayerPPDelta(currentUser.uid, ppReward, {
+          mode: 'earn',
+          meta: { sourceType: 'other', sourceId: 'ep1-view-mst-ui', notes: 'Story: MST Interface Tutorial' },
         });
       }
 
@@ -1875,16 +1891,21 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter: baseChapter, onB
       const userDocRewards = await getDoc(userRef);
       const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
       await updateDoc(userRef, {
-        xp: (userDataRewards.xp || 0) + xpReward,
-        powerPoints: (userDataRewards.powerPoints || 0) + ppReward
+        xp: (userDataRewards.xp || 0) + xpReward
       });
 
       const studentDocRewards = await getDoc(studentRef);
       if (studentDocRewards.exists()) {
         const studentDataRewards = studentDocRewards.data();
         await updateDoc(studentRef, {
-          xp: (studentDataRewards.xp || 0) + xpReward,
-          powerPoints: (studentDataRewards.powerPoints || 0) + ppReward
+          xp: (studentDataRewards.xp || 0) + xpReward
+        });
+      }
+
+      if (ppReward > 0) {
+        await applyPlayerPPDelta(currentUser.uid, ppReward, {
+          mode: 'earn',
+          meta: { sourceType: 'other', sourceId: 'ep1-get-letter', notes: 'Story: Get Letter' },
         });
       }
 
@@ -2774,9 +2795,15 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter: baseChapter, onB
           await updateDoc(studentRef, {
             challenges: updatedChallenges,
             xp: (studentData.xp || 0) + xpReward,
-            powerPoints: (studentData.powerPoints || 0) + ppReward,
             artifacts: updatedArtifacts
           });
+
+          if (ppReward > 0) {
+            await applyPlayerPPDelta(currentUser.uid, ppReward, {
+              mode: 'earn',
+              meta: { sourceType: 'other', sourceId: 'ep1-view-power-card', notes: 'Story: Icy Death cutscene (View Power Card)' },
+            });
+          }
 
           if (xpReward > 0) {
             await awardBattlePassXpForDeployedSeason(currentUser.uid, Math.floor(xpReward));

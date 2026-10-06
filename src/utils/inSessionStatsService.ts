@@ -519,98 +519,44 @@ export function estimateEliminationPpFromStats(stats: SessionStats): number {
 async function deductPPFromStudentUserVault(userId: string, amount: number): Promise<void> {
   if (amount <= 0) return;
   try {
-    const studentRef = doc(db, 'students', userId);
-    const userRef = doc(db, 'users', userId);
-    const vaultRef = doc(db, 'vaults', userId);
-    const studentDoc = await getDoc(studentRef);
-    if (studentDoc.exists()) {
-      const cur = (studentDoc.data() as { powerPoints?: number }).powerPoints ?? 0;
-      await updateDoc(studentRef, { powerPoints: Math.max(0, cur - amount) });
-    }
-    const userDoc = await getDoc(userRef);
-    if (userDoc.exists()) {
-      const cur = (userDoc.data() as { powerPoints?: number }).powerPoints ?? 0;
-      await updateDoc(userRef, { powerPoints: Math.max(0, cur - amount) });
-    }
-    const vaultDoc = await getDoc(vaultRef);
-    if (vaultDoc.exists()) {
-      const v = vaultDoc.data() as { currentPP?: number };
-      const cur = v?.currentPP ?? 0;
-      await updateDoc(vaultRef, { currentPP: Math.max(0, cur - amount) });
-    }
-    try {
-      const { recordPPChange } = await import('./ppLedgerService');
-      await recordPPChange({
-        studentId: userId,
-        amount: -amount,
+    const { applyPlayerPPDelta } = await import('./playerPowerPoints');
+    await applyPlayerPPDelta(userId, -amount, {
+      mode: 'award',
+      meta: {
         sourceType: 'liveEvent',
         sourceId: 'live-event-elimination',
         notes: 'Live Event elimination PP loss',
-      });
-    } catch (_) {
-      /* non-fatal */
-    }
+      },
+    });
     debug('inSessionStats', `Elimination PP penalty: deducted ${amount} PP from accounts for ${userId}`);
   } catch (e) {
     debugError('inSessionStats', `deductPPFromStudentUserVault failed for ${userId}`, e);
   }
 }
 
-/** Credits PP to students / users / vault (vault currentPP clamped to capacity). */
+/**
+ * Credits PP to vault / students / users atomically. Teacher award: not capped at vault capacity
+ * (overflow is trimmed at the next generator grant). Throws on failure so callers can retry.
+ */
 export async function creditPPToStudentUserVault(
   userId: string,
   amount: number,
   notes?: string
 ): Promise<void> {
   if (amount <= 0) return;
-  const studentRef = doc(db, 'students', userId);
-  const userRef = doc(db, 'users', userId);
-  const vaultRef = doc(db, 'vaults', userId);
-
-  // Students doc is authoritative — fail fast before vault/users so a host permission
-  // denial does not partially credit and still leave session-end to double-pay vault.
   try {
-    const studentDoc = await getDoc(studentRef);
-    if (studentDoc.exists()) {
-      await updateDoc(studentRef, { powerPoints: increment(amount) });
-    }
-  } catch (e) {
-    debugError('inSessionStats', `creditPP students failed for ${userId}`, e);
-    throw e;
-  }
-
-  try {
-    const userDoc = await getDoc(userRef);
-    if (userDoc.exists()) {
-      await updateDoc(userRef, { powerPoints: increment(amount) });
-    }
-  } catch (e) {
-    debugError('inSessionStats', `creditPP users failed for ${userId} (students already credited)`, e);
-  }
-
-  try {
-    const vaultDoc = await getDoc(vaultRef);
-    if (vaultDoc.exists()) {
-      const v = vaultDoc.data();
-      const cur = v?.currentPP ?? 0;
-      const cap = v?.capacity ?? 1000;
-      await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + amount) });
-    }
-  } catch (e) {
-    debugError('inSessionStats', `creditPP vault failed for ${userId} (students already credited)`, e);
-  }
-
-  try {
-    const { recordPPChange } = await import('./ppLedgerService');
-    await recordPPChange({
-      studentId: userId,
-      amount,
-      sourceType: 'liveEvent',
-      sourceId: 'live-event-credit',
-      notes: notes || 'Live Event PP credit',
+    const { applyPlayerPPDelta } = await import('./playerPowerPoints');
+    await applyPlayerPPDelta(userId, amount, {
+      mode: 'award',
+      meta: {
+        sourceType: 'liveEvent',
+        sourceId: 'live-event-credit',
+        notes: notes || 'Live Event PP credit',
+      },
     });
-  } catch (_) {
-    /* non-fatal */
+  } catch (e) {
+    debugError('inSessionStats', `creditPP failed for ${userId}`, e);
+    throw e;
   }
 
   debug('inSessionStats', `Credited ${amount} PP to accounts for ${userId}`);

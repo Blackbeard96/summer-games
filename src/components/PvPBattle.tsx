@@ -9,6 +9,7 @@ import { getLevelFromXP } from '../utils/leveling';
 import PvPRewardSpin from './PvPRewardSpin';
 import WaitingRoomModal from './WaitingRoomModal';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
+import { applyPlayerPPDelta } from '../utils/playerPowerPoints';
 import { initializeSpacesModeBattle } from '../utils/spacesModeBattle';
 import { SpacesModeState } from '../types/battleSession';
 
@@ -927,7 +928,6 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
 
       if (winnerVaultDoc.exists() && loserVaultDoc.exists()) {
         const loserVault = loserVaultDoc.data();
-        const winnerVault = winnerVaultDoc.data();
         const loserTotalPP = loserVault.capacity || 1000;
         const loserCurrentPP = loserVault.currentPP || 0;
         
@@ -956,13 +956,6 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         // Transfer PP from loser to winner immediately (base amount only)
         // Loser loses the base amount, winner receives the base amount
         // The wheel spin bonus will be added on top for the winner later
-        const loserRef = doc(db, 'vaults', loserId);
-        const winnerRef = doc(db, 'vaults', winnerId);
-        
-        const newLoserPP = Math.max(0, (loserVault.currentPP || 0) - baseReward);
-        const winnerCurrentPP = winnerVault.currentPP || 0;
-        const winnerCapacity = winnerVault.capacity || 1000;
-        
         // Apply PP boost to winner's reward if active
         let finalReward = baseReward;
         try {
@@ -975,18 +968,16 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
           console.error('Error applying PP boost to PvP reward:', error);
         }
         
-        const newWinnerPP = Math.min(winnerCapacity, winnerCurrentPP + finalReward);
-        
-        // Update both vaults (loser loses base, winner gets boosted amount)
+        // Update both players (loser loses base, winner gets boosted amount)
         await Promise.all([
-          updateDoc(loserRef, { currentPP: newLoserPP }),
-          updateDoc(winnerRef, { currentPP: newWinnerPP })
-        ]);
-        
-        // Update student documents
-        await Promise.all([
-          updateDoc(doc(db, 'students', loserId), { currentPP: newLoserPP }),
-          updateDoc(doc(db, 'students', winnerId), { currentPP: newWinnerPP })
+          applyPlayerPPDelta(loserId, -baseReward, {
+            mode: 'earn',
+            meta: { sourceType: 'other', sourceId: currentRoom.id, notes: 'PvP battle loss' },
+          }),
+          applyPlayerPPDelta(winnerId, finalReward, {
+            mode: 'earn',
+            meta: { sourceType: 'other', sourceId: currentRoom.id, notes: 'PvP battle win' },
+          })
         ]);
         
         // Mark battle as completed in Firestore to prevent restoration

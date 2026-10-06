@@ -13,6 +13,7 @@ import {
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { getLevelFromXP } from '../utils/leveling';
 import { mirrorProfileXpToProgressionSystems } from '../utils/playerProgressionRewards';
+import { applyPlayerPPDelta } from '../utils/playerPowerPoints';
 
 interface DailyChallenge {
   id: string;
@@ -320,22 +321,22 @@ const DailyChallengesCompact: React.FC = () => {
       const playerChallengesRef = doc(db, 'students', currentUser.uid, 'dailyChallenges', 'current');
       const studentRef = doc(db, 'students', currentUser.uid);
 
-      const grantedXp = await runTransaction(db, async (transaction) => {
+      const { grantedXp, grantedPP } = await runTransaction(db, async (transaction) => {
         const challengeDefDoc = await transaction.get(
           doc(db, 'adminSettings', 'dailyChallenges', 'challenges', challengeId)
         );
-        if (!challengeDefDoc.exists()) return 0;
+        if (!challengeDefDoc.exists()) return { grantedXp: 0, grantedPP: 0 };
 
         const challengeData = challengeDefDoc.data() as DailyChallenge;
         const progressDoc = await transaction.get(playerChallengesRef);
-        if (!progressDoc.exists()) return 0;
+        if (!progressDoc.exists()) return { grantedXp: 0, grantedPP: 0 };
 
         const progressData = progressDoc.data();
         const list: PlayerChallengeProgress[] = progressData.challenges || [];
         const challengeProgress = list.find(c => c.challengeId === challengeId);
 
         if (!challengeProgress || !challengeProgress.completed || challengeProgress.claimed) {
-          return 0;
+          return { grantedXp: 0, grantedPP: 0 };
         }
 
         const ppGrant = scaledDailyChallengeRewardPP(challengeData.rewardPP);
@@ -345,7 +346,6 @@ const DailyChallengesCompact: React.FC = () => {
           : 0;
 
         const updateData: Record<string, ReturnType<typeof increment>> = {
-          powerPoints: increment(ppGrant),
           xp: increment(xpGrant),
         };
         if (tmGrant > 0) {
@@ -360,8 +360,14 @@ const DailyChallengesCompact: React.FC = () => {
         transaction.update(playerChallengesRef, {
           challenges: updatedChallenges,
         });
-        return xpGrant;
+        return { grantedXp: xpGrant, grantedPP: ppGrant };
       });
+      if (grantedPP > 0) {
+        await applyPlayerPPDelta(currentUser.uid, grantedPP, {
+          mode: 'earn',
+          meta: { sourceType: 'other', sourceId: challengeId, notes: 'Daily challenge' },
+        });
+      }
       if (grantedXp > 0) {
         await mirrorProfileXpToProgressionSystems(currentUser.uid, grantedXp, 'daily_challenge');
       }
@@ -378,23 +384,23 @@ const DailyChallengesCompact: React.FC = () => {
       const studentRef = doc(db, 'students', currentUser.uid);
       const playerChallengesRef = doc(db, 'students', currentUser.uid, 'dailyChallenges', 'current');
       
-      const claimXp = await runTransaction(db, async (transaction) => {
+      const { claimXp, claimPP } = await runTransaction(db, async (transaction) => {
         const studentDoc = await transaction.get(studentRef);
         const challengesDoc = await transaction.get(playerChallengesRef);
         
-        if (!studentDoc.exists() || !challengesDoc.exists()) return 0;
+        if (!studentDoc.exists() || !challengesDoc.exists()) return { claimXp: 0, claimPP: 0 };
 
         const challengesData = challengesDoc.data();
         const today = getTodayDateStringEastern();
         
-        if (challengesData.assignedDate !== today) return 0;
+        if (challengesData.assignedDate !== today) return { claimXp: 0, claimPP: 0 };
 
         const challengeProgress = challengesData.challenges?.find(
           (c: PlayerChallengeProgress) => c.challengeId === challenge.id
         );
         
         if (!challengeProgress || !challengeProgress.completed || challengeProgress.claimed) {
-          return 0;
+          return { claimXp: 0, claimPP: 0 };
         }
 
         const ppGrant = scaledDailyChallengeRewardPP(challenge.rewardPP);
@@ -404,7 +410,6 @@ const DailyChallengesCompact: React.FC = () => {
           : 0;
 
         const updates: Record<string, ReturnType<typeof increment>> = {
-          powerPoints: increment(ppGrant),
           xp: increment(xpGrant),
         };
 
@@ -424,9 +429,15 @@ const DailyChallengesCompact: React.FC = () => {
         transaction.update(playerChallengesRef, {
           challenges: updatedChallenges
         });
-        return xpGrant;
+        return { claimXp: xpGrant, claimPP: ppGrant };
       });
 
+      if (claimPP > 0) {
+        await applyPlayerPPDelta(currentUser.uid, claimPP, {
+          mode: 'earn',
+          meta: { sourceType: 'other', sourceId: challenge.id, notes: 'Daily challenge' },
+        });
+      }
       if (claimXp > 0) {
         await mirrorProfileXpToProgressionSystems(currentUser.uid, claimXp, 'daily_challenge');
       }

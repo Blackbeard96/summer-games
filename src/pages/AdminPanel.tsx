@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { db, storage } from '../firebase';
+import { applyPlayerPPDelta, resolveCanonicalPP } from '../utils/playerPowerPoints';
 import { collection, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc, query, where, writeBatch, addDoc, serverTimestamp, onSnapshot, deleteField } from 'firebase/firestore';
 import { ref, deleteObject, getDownloadURL } from 'firebase/storage';
 import {
@@ -1512,12 +1513,14 @@ const AdminPanel: React.FC = () => {
     const xpChange = !completed ? 10 : -10;
     const ppChange = !completed ? 5 : -5;
     const newXP = (student.xp || 0) + xpChange;
-    const newPP = (student.powerPoints || 0) + ppChange;
 
     await updateDoc(studentRef, {
       challenges: updatedChallenges,
       xp: newXP,
-      powerPoints: newPP
+    });
+    const { next: newPP } = await applyPlayerPPDelta(studentId, ppChange, {
+      mode: 'award',
+      meta: { sourceType: 'other', sourceId: `admin-challenge:${challenge}` },
     });
 
     setStudents(prev =>
@@ -1553,12 +1556,14 @@ const AdminPanel: React.FC = () => {
       const xpChange = -10; // Remove points for completed challenge
       const ppChange = -5;
       const newXP = Math.max(0, (student.xp || 0) + xpChange);
-      const newPP = Math.max(0, (student.powerPoints || 0) + ppChange);
 
       await updateDoc(studentRef, {
         challenges: updatedChallenges,
         xp: newXP,
-        powerPoints: newPP
+      });
+      const { next: newPP } = await applyPlayerPPDelta(studentId, ppChange, {
+        mode: 'award',
+        meta: { sourceType: 'other', sourceId: `admin-challenge-delete:${challenge}` },
       });
 
       // Update local state
@@ -1624,29 +1629,12 @@ const AdminPanel: React.FC = () => {
   const adjustPowerPoints = async (studentId: string, delta: number) => {
     const student = students.find(s => s.id === studentId);
     if (!student) return;
-    const newPP = Math.max(0, (student.powerPoints || 0) + delta);
     
     try {
-      const studentRef = doc(db, 'students', studentId);
-      const userRef = doc(db, 'users', studentId);
-      const vaultRef = doc(db, 'vaults', studentId);
-      
-      const vaultDoc = await getDoc(vaultRef);
-      const vaultData = vaultDoc.exists() ? vaultDoc.data() : null;
-      const maxPP = vaultData?.capacity || 1000;
-      const maxVaultHealth = Math.floor(maxPP * 0.1);
-      const newVaultHealth = Math.min(newPP, maxVaultHealth);
-      
-      await setDoc(studentRef, { powerPoints: newPP }, { merge: true });
-      await setDoc(userRef, { powerPoints: newPP }, { merge: true });
-      if (vaultDoc.exists()) {
-        await updateDoc(vaultRef, {
-          currentPP: newPP,
-          vaultHealth: newVaultHealth
-        });
-      } else {
-        console.warn(`[AdminPanel] Skipping vault creation for ${studentId} during PP adjust (vault missing)`);
-      }
+      const { next: newPP } = await applyPlayerPPDelta(studentId, delta, {
+        mode: 'award',
+        meta: { sourceType: 'other', sourceId: 'admin-panel', notes: `Admin panel ${delta >= 0 ? '+' : ''}${delta} PP` },
+      });
       
       setStudents(prev =>
         prev.map(s =>
@@ -1748,7 +1736,7 @@ const AdminPanel: React.FC = () => {
         continue;
       }
 
-      const oldPP = Math.max(
+      const fallbackPP = Math.max(
         0,
         Number(
           (studentSnap.exists() ? studentSnap.data()?.powerPoints : undefined) ??
@@ -1757,6 +1745,12 @@ const AdminPanel: React.FC = () => {
             0
         ) || 0
       );
+      const vaultRecord = vaultSnap.exists() ? (vaultSnap.data() as { currentPP?: number } | undefined) : undefined;
+      const oldPP = resolveCanonicalPP({
+        vaultExists: vaultSnap.exists(),
+        vaultPP: vaultRecord?.currentPP,
+        studentPP: fallbackPP,
+      });
       const newPP = Math.max(0, resolveNewPP(oldPP));
       pending.push({
         studentId,
@@ -2370,7 +2364,6 @@ const AdminPanel: React.FC = () => {
           const xpReward = sub.xpReward || 10;
           const ppReward = sub.ppReward || 5;
           const newXP = (studentData.xp || 0) + xpReward;
-          const newPP = (studentData.powerPoints || 0) + ppReward;
           
           // Check if this challenge completion should advance to next chapter
           const currentChapter = studentData.storyChapter || 1;
@@ -2378,7 +2371,6 @@ const AdminPanel: React.FC = () => {
           let updateData: any = {
             challenges,
             xp: newXP,
-            powerPoints: newPP
           };
           
           if (chapter) {
@@ -2404,6 +2396,10 @@ const AdminPanel: React.FC = () => {
           }
           
           await updateDoc(studentRef, updateData);
+          await applyPlayerPPDelta(sub.userId, ppReward, {
+            mode: 'award',
+            meta: { sourceType: 'other', sourceId: `submission:${sub.id}`, notes: sub.challengeName },
+          });
         }
       }
       

@@ -14,6 +14,7 @@ import {
 import { doc, getDoc, updateDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp, onSnapshot, increment } from 'firebase/firestore';
 import { db } from '../firebase';
 import { debug } from '../utils/debug';
+import { computeNextPP } from '../utils/playerPowerPoints';
 import { 
   calculateDamageRange, 
   calculateShieldBoostRange, 
@@ -1537,7 +1538,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             universalLawEffects
           );
           await updateVault({
-            currentPP: Math.min(vault.capacity || 1000, vault.currentPP + boostedGain)
+            currentPP: computeNextPP({
+              current: vault.currentPP,
+              delta: boostedGain,
+              capacity: vault.capacity || 1000,
+              mode: 'earn',
+            })
           });
           await refreshVaultData();
         }
@@ -2663,7 +2669,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         } else {
           const cap = vault.capacity || 1000;
           const cur = Math.max(0, Number(vault.currentPP) || 0);
-          const next = Math.min(cap, cur + regen);
+          const next = computeNextPP({ current: cur, delta: regen, capacity: cap, mode: 'earn' });
           if (next <= cur || cancelled) return;
           await updateVault({ currentPP: next });
           await refreshVaultData();
@@ -7122,7 +7128,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         equippableCatalogRaw,
         universalLawEffects
       );
-      newVault.currentPP = Math.min(vaultCapacity, vExec.currentPP + healPP);
+      newVault.currentPP = computeNextPP({
+        current: vExec.currentPP,
+        delta: healPP,
+        capacity: vaultCapacity,
+        mode: 'earn',
+      });
     }
     
     // Execute the actual vault siege attack in the database
@@ -7450,7 +7461,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       if (finalPPReward > 0) {
         // Add accumulated PP + defeated opponent's remaining PP
         const vaultCapacity = vExec.capacity || 1000;
-        const newPP = Math.min(vaultCapacity, vExec.currentPP + finalPPReward);
+        const newPP = computeNextPP({
+          current: vExec.currentPP,
+          delta: finalPPReward,
+          capacity: vaultCapacity,
+          mode: 'earn',
+        });
         
         try {
           await updateVault({

@@ -42,6 +42,7 @@ import {
 } from './assessmentTypeHelpers';
 import { arrayUnion, runTransaction } from 'firebase/firestore';
 import { updateHeroJourneyProgress } from './heroJourneyProgress';
+import { computeNextPP, resolveCanonicalPP } from './playerPowerPoints';
 
 /** Work / energy stats when a student sets or updates a goal (Assessment Goals UI or live goal-setting). */
 export async function bumpAssessmentWorkStats(params: {
@@ -1397,29 +1398,37 @@ export async function applyHabitPP(
       return { success: false, error: 'Verification is required' };
     }
     
-    // Read student and user docs
-    const [studentDoc, userDoc] = await Promise.all([
+    const vaultRef = doc(db, 'vaults', studentId);
+    const [studentDoc, userDoc, vaultDoc] = await Promise.all([
       transaction.get(studentRef),
-      transaction.get(userRef)
+      transaction.get(userRef),
+      transaction.get(vaultRef)
     ]);
     
     if (!studentDoc.exists()) {
       throw new Error('Student document not found');
     }
     
-    // Update PP balance
+    // Same balance on vault (canonical) + students + users; teacher award, not capped.
     const ppChange = submission.ppImpact || 0;
-    
-    // Update student PP
-    transaction.update(studentRef, {
-      powerPoints: increment(ppChange)
+    const previousPP = resolveCanonicalPP({
+      vaultExists: vaultDoc.exists(),
+      vaultPP: vaultDoc.exists() ? vaultDoc.data()?.currentPP : undefined,
+      studentPP: studentDoc.data()?.powerPoints,
+    });
+    const nextPP = computeNextPP({
+      current: previousPP,
+      delta: ppChange,
+      capacity: vaultDoc.exists() ? Number(vaultDoc.data()?.capacity) || 0 : 0,
+      mode: 'award',
     });
     
-    // Update user PP (keep in sync)
+    transaction.update(studentRef, { powerPoints: nextPP });
+    if (vaultDoc.exists()) {
+      transaction.update(vaultRef, { currentPP: nextPP });
+    }
     if (userDoc.exists()) {
-      transaction.update(userRef, {
-        powerPoints: increment(ppChange)
-      });
+      transaction.update(userRef, { powerPoints: nextPP });
     }
     
     // Mark habit as applied

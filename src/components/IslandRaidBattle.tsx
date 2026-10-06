@@ -18,6 +18,7 @@ import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { grantArtifactToPlayer } from '../utils/artifactCompensation';
 import { mirrorProfileXpToProgressionSystems, trackPlayerAction } from '../utils/playerProgressionRewards';
+import { applyPlayerPPDelta } from '../utils/playerPowerPoints';
 import CoopBattleRosterPanel from './coop/CoopBattleRosterPanel';
 import { transactionLeaveIslandRaidBattleRoom } from '../services/coopBattleRoomService';
 import {
@@ -2300,7 +2301,6 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 }
                 
                 const updates: any = {
-                  powerPoints: increment(rewards.pp),
                   xp: increment(rewards.xp),
                   truthMetal: increment(rewards.truthMetal)
                 };
@@ -2311,13 +2311,18 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 }
                 if (!isMissionBattle) {
                   await updateDoc(studentRef, updates);
+                  if (rewards.pp) {
+                    await applyPlayerPPDelta(playerId, rewards.pp, {
+                      mode: 'earn',
+                      meta: { sourceType: 'other', notes: 'Island Raid' },
+                    });
+                  }
                   await mirrorProfileXpToProgressionSystems(playerId, rewards.xp, 'island_raid');
 
                   const userRef = doc(db, 'users', playerId);
                   const userDoc = await getDoc(userRef);
                   if (userDoc.exists()) {
                     await updateDoc(userRef, {
-                      powerPoints: increment(rewards.pp),
                       xp: increment(rewards.xp),
                       truthMetal: increment(rewards.truthMetal)
                     });

@@ -14,6 +14,7 @@ import CPUChallenger from './CPUChallenger';
 import PortalTutorial from './PortalTutorial';
 import LetterModal from './LetterModal';
 import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
+import { applyPlayerPPDelta } from '../utils/playerPowerPoints';
 
 interface GoogleClassroomAssignment {
   id: string;
@@ -1050,8 +1051,11 @@ const ensureChaptersInitialized = async () => {
               completionDate: new Date()
             }
           },
-          xp: (studentData.xp || 0) + 20,
-          powerPoints: (studentData.powerPoints || 0) + 10
+          xp: (studentData.xp || 0) + 20
+        });
+        await applyPlayerPPDelta(currentUser.uid, 10, {
+          mode: 'earn',
+          meta: { sourceType: 'other', sourceId: 'ch2-rival-selection', notes: 'Story: Choose Your Rival' },
         });
         await awardBattlePassXpForDeployedSeason(currentUser.uid, 20);
       }

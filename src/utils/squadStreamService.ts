@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore';
 import { syncPrimarySquadIdOnUser } from './squadPrimarySquadProfile';
 import { squadMemberUid } from './squadMemberUtils';
+import { applyPlayerPPDelta } from './playerPowerPoints';
 
 /** User-facing message for Firestore failures (check-in, squad stream, etc.). */
 export function formatSquadFirestoreError(
@@ -119,27 +120,28 @@ export async function createSystemMessage(
   });
 }
 
-/** Apply PP to the caller's own users + students docs (wallet uses powerPoints). */
+/** Increment the legacy `pp` field on the caller's own users doc. */
 function applySelfPpIncrements(
   transaction: Transaction,
   userId: string,
   ppDelta: number,
-  userExists: boolean,
-  studentExists: boolean
+  userExists: boolean
 ): void {
   if (ppDelta <= 0) return;
   if (userExists) {
     transaction.update(doc(db, 'users', userId), {
-      powerPoints: increment(ppDelta),
       // Legacy field some older clients read
       pp: increment(ppDelta),
     });
   }
-  if (studentExists) {
-    transaction.update(doc(db, 'students', userId), {
-      powerPoints: increment(ppDelta),
-    });
-  }
+}
+
+async function applySquadCheckInPP(userId: string, ppDelta: number | undefined): Promise<void> {
+  if (!ppDelta || ppDelta <= 0) return;
+  await applyPlayerPPDelta(userId, ppDelta, {
+    mode: 'earn',
+    meta: { sourceType: 'other', notes: 'Squad check-in' },
+  });
 }
 
 /**
@@ -163,12 +165,10 @@ export async function checkInToSquad(
     const dateKey = getDateKey();
     const checkInRef = doc(db, 'squads', squadId, 'dailyCheckins', dateKey);
     const userRef = doc(db, 'users', userId);
-    const studentRef = doc(db, 'students', userId);
 
-    return await runTransaction(db, async (transaction) => {
+    const { ppDelta: checkInPpDelta, ...result } = await runTransaction(db, async (transaction) => {
       const checkInDoc = await transaction.get(checkInRef);
       const userDoc = await transaction.get(userRef);
-      const studentDoc = await transaction.get(studentRef);
 
       const checkInData = checkInDoc.exists() ? checkInDoc.data() : null;
       const checkedInUserIds: string[] = Array.isArray(checkInData?.checkedInUserIds)
@@ -178,7 +178,8 @@ export async function checkInToSquad(
       if (checkedInUserIds.includes(userId)) {
         return {
           success: false,
-          error: 'You have already checked in today'
+          error: 'You have already checked in today',
+          ppDelta: 0
         };
       }
 
@@ -211,16 +212,18 @@ export async function checkInToSquad(
         transaction,
         userId,
         ppDelta,
-        userDoc.exists(),
-        studentDoc.exists()
+        userDoc.exists()
       );
 
       return {
         success: true,
         count: newCount,
-        checkedInUserIds: newCheckedInUserIds
+        checkedInUserIds: newCheckedInUserIds,
+        ppDelta
       };
     });
+    await applySquadCheckInPP(userId, checkInPpDelta);
+    return result;
   } catch (error: unknown) {
     console.error('Error checking in:', error);
     return {
@@ -242,9 +245,8 @@ export async function claimSquadCheckInPpCatchUp(
     const dateKey = getDateKey();
     const checkInRef = doc(db, 'squads', squadId, 'dailyCheckins', dateKey);
     const userRef = doc(db, 'users', userId);
-    const studentRef = doc(db, 'students', userId);
 
-    return await runTransaction(db, async (transaction) => {
+    const result = await runTransaction(db, async (transaction) => {
       const checkInDoc = await transaction.get(checkInRef);
       if (!checkInDoc.exists()) {
         return { claimed: false };
@@ -270,7 +272,6 @@ export async function claimSquadCheckInPpCatchUp(
       awardedMilestones[userId] = count;
 
       const userDoc = await transaction.get(userRef);
-      const studentDoc = await transaction.get(studentRef);
 
       transaction.update(checkInRef, {
         awardedMilestones,
@@ -281,12 +282,15 @@ export async function claimSquadCheckInPpCatchUp(
         transaction,
         userId,
         ppDelta,
-        userDoc.exists(),
-        studentDoc.exists()
+        userDoc.exists()
       );
 
       return { claimed: true, ppDelta };
     });
+    if (result.claimed) {
+      await applySquadCheckInPP(userId, result.ppDelta);
+    }
+    return result;
   } catch (error: unknown) {
     console.error('Error claiming squad check-in PP catch-up:', error);
     return { claimed: false, error: formatSquadFirestoreError(error, 'checkin') };
@@ -303,21 +307,14 @@ export async function awardPPToUser(
   amount: number
 ): Promise<void> {
   const userRef = doc(db, 'users', userId);
-  const studentRef = doc(db, 'students', userId);
 
   await runTransaction(db, async (transaction) => {
     const userDoc = await transaction.get(userRef);
-    const studentDoc = await transaction.get(studentRef);
     if (userDoc.exists()) {
       transaction.update(userRef, {
-        powerPoints: increment(amount),
         pp: increment(amount),
       });
     }
-    if (studentDoc.exists()) {
-      transaction.update(studentRef, {
-        powerPoints: increment(amount),
-      });
-    }
   });
+  await applySquadCheckInPP(userId, amount);
 }

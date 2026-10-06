@@ -10,6 +10,7 @@ import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import { CHAPTERS } from '../types/chapters';
 import RivalSelectionModal from './RivalSelectionModal';
 import { isUidInSquad } from '../utils/squadMemberUtils';
+import { applyPlayerPPDelta } from '../utils/playerPowerPoints';
 
 interface Badge {
   id: string;
@@ -600,15 +601,18 @@ const ChallengeTracker = () => {
       const xpLoss = 10;
       const ppLoss = 5;
       const newXP = Math.max(0, xp - xpLoss);
-      const newPP = Math.max(0, powerPoints - ppLoss);
       
       setChallenges(updated);
       setXP(newXP);
-      setPowerPoints(newPP);
       setLevel(Math.floor(newXP / 50) + 1);
       updateUnlocks(Math.floor(newXP / 50) + 1);
       const userRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(userRef, { challenges: updated, xp: newXP, powerPoints: newPP });
+      await updateDoc(userRef, { challenges: updated, xp: newXP });
+      const { next } = await applyPlayerPPDelta(currentUser.uid, -ppLoss, {
+        mode: 'earn',
+        meta: { sourceType: 'other', sourceId: id, notes: 'Challenge marked incomplete' },
+      });
+      setPowerPoints(next);
       return;
     }
   };
@@ -728,13 +732,16 @@ const ChallengeTracker = () => {
       
       setChallenges(updated);
       const newXP = Math.max(0, xp - xpLoss);
-      const newPP = Math.max(0, powerPoints - ppLoss);
       setXP(newXP);
-      setPowerPoints(newPP);
       setLevel(Math.floor(newXP / 50) + 1);
 
       const userRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(userRef, { challenges: updated, xp: newXP, powerPoints: newPP });
+      await updateDoc(userRef, { challenges: updated, xp: newXP });
+      const { next } = await applyPlayerPPDelta(currentUser.uid, -ppLoss, {
+        mode: 'earn',
+        meta: { sourceType: 'other', sourceId: challengeName, notes: 'Challenge submission removed' },
+      });
+      setPowerPoints(next);
       
       setTimeout(async () => {
         const docSnap = await getDoc(userRef);

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db, storage } from '../firebase';
 import { collection, addDoc, getDocs, doc, getDoc, updateDoc, increment, serverTimestamp } from 'firebase/firestore';
 import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
+import { applyPlayerPPDelta } from '../utils/playerPowerPoints';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 interface Badge {
@@ -407,8 +408,11 @@ const BadgeManager: React.FC = () => {
           await updateDoc(studentRef, {
             badges: [...currentBadges, newBadgeEntry],
             xp: increment(xpReward),
-            powerPoints: increment(ppReward),
             ...(artifactRewards.length > 0 && { artifacts: updatedStudentArtifacts })
+          });
+          const ppResult = await applyPlayerPPDelta(studentId, ppReward, {
+            mode: 'award',
+            meta: { sourceType: 'other', sourceId: badge.id, notes: 'Badge reward' },
           });
 
           if (xpReward > 0) {
@@ -444,8 +448,7 @@ const BadgeManager: React.FC = () => {
             }
 
             const userUpdates: any = {
-              xp: increment(xpReward),
-              powerPoints: increment(ppReward)
+              xp: increment(xpReward)
             };
 
             if (newUserArtifacts.length > 0) {
@@ -458,8 +461,8 @@ const BadgeManager: React.FC = () => {
           }
 
           // Get current student data for accurate PP tracking
-          const currentStudentPP = studentData.powerPoints || 0;
-          const newStudentPP = currentStudentPP + ppReward;
+          const currentStudentPP = ppResult.previous;
+          const newStudentPP = ppResult.next;
           
           // Create milestone event for badge earning
           try {
@@ -524,7 +527,7 @@ const BadgeManager: React.FC = () => {
                   ...s, 
                   badges: [...(s.badges || []), newBadgeEntry],
                   xp: (s.xp || 0) + xpReward,
-                  powerPoints: (s.powerPoints || 0) + ppReward
+                  powerPoints: ppResult.next
                 }
               : s
           ));

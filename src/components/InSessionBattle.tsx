@@ -2256,27 +2256,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     }
 
     try {
-      // Update student document
-      const studentRef = doc(db, 'students', userId);
-      const studentDoc = await getDoc(studentRef);
-      
-      if (!studentDoc.exists()) return;
-
-      const currentPP = studentDoc.data().powerPoints || 0;
-      const newPP = Math.max(0, currentPP + amount);
-
-      await updateDoc(studentRef, {
-        powerPoints: newPP
+      const { applyPlayerPPDelta } = await import('../utils/playerPowerPoints');
+      const { next: newPP } = await applyPlayerPPDelta(userId, amount, {
+        mode: 'award',
+        meta: { sourceType: 'liveEvent', sourceId: sessionId, notes: 'Live Event PP Tools adjustment' },
       });
-
-      // Update vault if it exists
-      const vaultRef = doc(db, 'vaults', userId);
-      const vaultDoc = await getDoc(vaultRef);
-      if (vaultDoc.exists()) {
-        await updateDoc(vaultRef, {
-          currentPP: newPP
-        });
-      }
 
       // Update session players
       const sessionRef = doc(db, 'inSessionRooms', sessionId);

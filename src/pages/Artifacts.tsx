@@ -33,6 +33,7 @@ import {
   hasElementalAccessPerkEquipped,
 } from '../utils/artifactPerkEffects';
 import { isRingCatalogSlot, normalizeEquippableCatalogSlot } from '../utils/equippableArtifactSlot';
+import { applyPlayerPPDelta, getPlayerPowerPoints } from '../utils/playerPowerPoints';
 
 // Artifact price definitions for refund calculations
 /** Ownership: catalog key may be magical-paintbrush while student has magical_paintbrush_purchase. */
@@ -1016,10 +1017,6 @@ const Artifacts: React.FC = () => {
         ? currentInventory.filter((item: string, index: number) => index !== artifactIndex)
         : currentInventory;
 
-      // Calculate new PP (add 50% of original price)
-      const currentPP = studentData.powerPoints || 0;
-      const newPP = currentPP + returnPrice;
-
       // Remove artifact from users.artifacts array
       const usersArtifacts = userData.artifacts || [];
       let foundOne = false;
@@ -1046,12 +1043,17 @@ const Artifacts: React.FC = () => {
       // Update both collections
       await updateDoc(studentRef, {
         artifacts: updatedArtifacts,
-        inventory: updatedInventory,
-        powerPoints: newPP
+        inventory: updatedInventory
       });
 
       await updateDoc(userRef, {
         artifacts: updatedUsersArtifacts
+      });
+
+      // Refund 50% of original price
+      const { next: newPP } = await applyPlayerPPDelta(currentUser.uid, returnPrice, {
+        mode: 'award',
+        meta: { sourceType: 'marketplace', sourceId: artifact.id, notes: `Artifact return: ${artifact.name}` },
       });
 
       // Also update vault directly to ensure consistency
@@ -1065,7 +1067,6 @@ const Artifacts: React.FC = () => {
           : Math.min(newPP, maxVaultHealth);
         
         await updateDoc(vaultRef, {
-          currentPP: newPP,
           vaultHealth: correctVaultHealth
         });
       }
@@ -1313,11 +1314,6 @@ const Artifacts: React.FC = () => {
       return;
     }
 
-    if (powerPoints < upgradeCost.pp) {
-      alert(`Insufficient Power Points! Need ${upgradeCost.pp} PP, have ${powerPoints} PP.`);
-      return;
-    }
-
     if (truthMetal < upgradeCost.truthMetal) {
       alert(`Insufficient Truth Metal! Need ${upgradeCost.truthMetal} shard(s), have ${truthMetal} shard(s).`);
       return;
@@ -1382,12 +1378,22 @@ const Artifacts: React.FC = () => {
         [slot]: updatedArtifact,
       };
 
-      const newPowerPoints = (studentData.powerPoints || 0) - upgradeCost.pp;
+      const latestPP = await getPlayerPowerPoints(currentUser.uid);
+      if (latestPP < upgradeCost.pp) {
+        setPowerPoints(latestPP);
+        alert(`Insufficient Power Points! Need ${upgradeCost.pp} PP, have ${latestPP} PP.`);
+        return;
+      }
+
       const newTruthMetal = (studentData.truthMetal || 0) - upgradeCost.truthMetal;
+
+      const { next: newPowerPoints } = await applyPlayerPPDelta(currentUser.uid, -upgradeCost.pp, {
+        mode: 'earn',
+        meta: { sourceType: 'marketplace', sourceId: artifact.id, notes: `Artifact upgrade to Level ${newLevel}: ${artifact.name}` },
+      });
 
       await updateDoc(studentRef, {
         equippedArtifacts: updatedEquipped,
-        powerPoints: newPowerPoints,
         truthMetal: newTruthMetal,
         artifacts: {
           ...prevArtifacts,

@@ -20,6 +20,7 @@ import type { ClassFlowSprintState, EnergyType } from '../types/season1';
 import { addVaultPpGrantedMidSessionStat, trackParticipation } from './inSessionStatsService';
 import { isGlobalHost } from './inSessionService';
 import { mirrorProfileXpToProgressionSystems } from './playerProgressionRewards';
+import { applyPlayerPPDelta } from './playerPowerPoints';
 import { recordSprintMarkedCompleteForPlayer, recordSprintOpportunityForPlayers } from './weeklyGoalsService';
 import {
   recordHabitLiveEventSprintCompletion,
@@ -368,26 +369,10 @@ async function bumpSessionPlayerVaultPPDelta(sessionId: string, uid: string, del
 
 async function deductVaultPPFromPlayerClamped(playerUid: string, penalty: number): Promise<void> {
   if (penalty <= 0) return;
-  const studentRef = doc(db, 'students', playerUid);
-  const userRef = doc(db, 'users', playerUid);
-  const vaultRef = doc(db, 'vaults', playerUid);
-
-  const studentDoc = await getDoc(studentRef);
-  if (studentDoc.exists()) {
-    const cur = Number(studentDoc.data()?.powerPoints) || 0;
-    await updateDoc(studentRef, { powerPoints: Math.max(0, cur - penalty) });
-  }
-  const userDoc = await getDoc(userRef);
-  if (userDoc.exists()) {
-    const cur = Number(userDoc.data()?.powerPoints) || 0;
-    await updateDoc(userRef, { powerPoints: Math.max(0, cur - penalty) });
-  }
-  const vaultDoc = await getDoc(vaultRef);
-  if (vaultDoc.exists()) {
-    const v = vaultDoc.data();
-    const cur = v?.currentPP ?? 0;
-    await updateDoc(vaultRef, { currentPP: Math.max(0, cur - penalty) });
-  }
+  await applyPlayerPPDelta(playerUid, -penalty, {
+    mode: 'award',
+    meta: { sourceType: 'liveEvent', sourceId: 'live-event-sprint-penalty', notes: 'Live Event sprint penalty' },
+  });
 }
 
 type SessionPlayerRow = {
@@ -504,15 +489,16 @@ export async function grantSprintRewardForSinglePlayer(
     if (vaultPP > 0 || xpAmt > 0) {
       const studentRef = doc(db, 'students', playerUid);
       const userRef = doc(db, 'users', playerUid);
-      const vaultRef = doc(db, 'vaults', playerUid);
       let accountCreditOk = false;
       try {
+        if (vaultPP > 0) {
+          await applyPlayerPPDelta(playerUid, vaultPP, {
+            mode: 'award',
+            meta: { sourceType: 'liveEvent', sourceId: sessionId, notes: 'Live Event sprint reward' },
+          });
+        }
         const studentUpdates: UpdateData<DocumentData> = {};
         const userUpdates: UpdateData<DocumentData> = {};
-        if (vaultPP > 0) {
-          studentUpdates.powerPoints = increment(vaultPP);
-          userUpdates.powerPoints = increment(vaultPP);
-        }
         if (xpAmt > 0) {
           studentUpdates.xp = increment(xpAmt);
           userUpdates.xp = increment(xpAmt);
@@ -540,17 +526,6 @@ export async function grantSprintRewardForSinglePlayer(
           }
         }
         if (vaultPP > 0 && accountCreditOk) {
-          try {
-            const vaultDoc = await getDoc(vaultRef);
-            if (vaultDoc.exists()) {
-              const v = vaultDoc.data();
-              const cur = v?.currentPP ?? 0;
-              const cap = v?.capacity ?? 1000;
-              await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + vaultPP) });
-            }
-          } catch (vaultErr) {
-            console.warn('[liveEventSprint] vault credit failed (students ok)', vaultErr);
-          }
           await bumpSessionPlayerVaultPP(sessionId, playerUid, vaultPP);
           await addVaultPpGrantedMidSessionStat(sessionId, playerUid, vaultPP);
         }

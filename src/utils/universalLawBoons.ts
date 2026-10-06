@@ -9,6 +9,7 @@ import {
 } from '../data/universalLawTrees';
 import type { PlayerSkillState } from '../types/skillSystem';
 import { MAX_EQUIPPED_SKILLS } from '../constants/loadout';
+import { resolveCanonicalPP } from './playerPowerPoints';
 
 export interface PlayerUniversalLawProgress {
   unlockedNodeIds: string[];
@@ -360,10 +361,11 @@ export async function unlockUniversalLawBoonNode(
           );
       const currency: UniversalLawCurrencySnapshot = {
         powerPoints: Math.floor(
-          Math.max(
-            0,
-            asNumber(studentsData.powerPoints, asNumber(vaultSnap.data()?.currentPP, 0))
-          )
+          resolveCanonicalPP({
+            vaultExists: vaultSnap.exists(),
+            vaultPP: vaultSnap.exists() ? vaultSnap.data()?.currentPP : undefined,
+            studentPP: studentsData.powerPoints,
+          })
         ),
         truthMetalShards: Math.floor(
           Math.max(

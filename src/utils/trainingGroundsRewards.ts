@@ -6,6 +6,7 @@
 import { doc, getDoc, updateDoc, increment, runTransaction } from 'firebase/firestore';
 import { db } from '../firebase';
 import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
+import { applyPlayerPPDelta } from './playerPowerPoints';
 import { TrainingAttempt, TrainingAnswer, TrainingQuestion, DEFAULT_REWARDS } from '../types/trainingGrounds';
 import { getPlayerUniversalLawEffects } from './universalLawBoons';
 import { questionPointsPossible, quizPointTotals } from './quizMatching';
@@ -117,17 +118,14 @@ export async function grantQuizRewards(
   };
   const userRef = doc(db, 'users', userId);
   const studentRef = doc(db, 'students', userId);
-  const vaultRef = doc(db, 'vaults', userId);
   
   await runTransaction(db, async (transaction) => {
     const userDoc = await transaction.get(userRef);
     const studentDoc = await transaction.get(studentRef);
-    const vaultDoc = await transaction.get(vaultRef);
     
     // Update users collection
     if (userDoc.exists()) {
       transaction.update(userRef, {
-        powerPoints: increment(adjustedRewards.ppGained),
         xp: increment(rewards.xpGained),
       });
     }
@@ -135,23 +133,17 @@ export async function grantQuizRewards(
     // Update students collection
     if (studentDoc.exists()) {
       transaction.update(studentRef, {
-        powerPoints: increment(adjustedRewards.ppGained),
         xp: increment(rewards.xpGained),
       });
     }
-    
-    // Update vault collection (primary source of truth for PP)
-    if (vaultDoc.exists()) {
-      const vaultData = vaultDoc.data();
-      const vaultCapacity = vaultData.capacity || 1000;
-      const currentVaultPP = vaultData.currentPP || 0;
-      const newVaultPP = Math.min(vaultCapacity, currentVaultPP + adjustedRewards.ppGained);
-      
-      transaction.update(vaultRef, {
-        currentPP: newVaultPP,
-      });
-    }
   });
+
+  if (adjustedRewards.ppGained > 0) {
+    await applyPlayerPPDelta(userId, adjustedRewards.ppGained, {
+      mode: 'earn',
+      meta: { sourceType: 'other', notes: 'Training Grounds quiz' },
+    });
+  }
 
   const xpGain = Math.max(0, Math.floor(Number(rewards.xpGained) || 0));
   if (xpGain > 0) {

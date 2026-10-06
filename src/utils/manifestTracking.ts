@@ -2,6 +2,7 @@ import { db } from '../firebase';
 import { doc, updateDoc, getDoc, increment, runTransaction } from 'firebase/firestore';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
+import { applyPlayerPPDelta } from './playerPowerPoints';
 
 /**
  * Track the usage of a manifest ability
@@ -459,7 +460,8 @@ export const claimMilestoneRewards = async (
       return;
     }
     
-    let powerPoints = userData.powerPoints || 0;
+    const prevPowerPoints = userData.powerPoints || 0;
+    let powerPoints = prevPowerPoints;
     const prevProfileXp = userData.xp || 0;
     let xp = prevProfileXp;
     let truthMetal = Math.floor(userData.truthMetal || 0);
@@ -543,7 +545,6 @@ export const claimMilestoneRewards = async (
       }
     });
     
-    updateData.powerPoints = powerPoints;
     updateData.xp = xp;
     if (truthMetal > Math.floor(userData.truthMetal || 0)) {
       updateData.truthMetal = truthMetal;
@@ -573,6 +574,14 @@ export const claimMilestoneRewards = async (
       ...updateData,
       manifest: playerManifest
     });
+
+    const ppDelta = powerPoints - prevPowerPoints;
+    if (ppDelta > 0) {
+      await applyPlayerPPDelta(userId, ppDelta, {
+        mode: 'earn',
+        meta: { sourceType: 'other', sourceId: moveName, notes: 'Manifest milestone' },
+      });
+    }
 
     const profileXpDelta = Math.max(0, Math.floor(xp - prevProfileXp));
     if (profileXpDelta > 0) {

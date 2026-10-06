@@ -15,7 +15,8 @@ import {
 } from 'firebase/firestore';
 import { UserRole } from '../types/roles';
 import { logger } from '../utils/debugLogger';
-import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
+import { getActivePPBoost, applyPPBoost, type PPBoost } from '../utils/ppBoost';
+import { resolveCanonicalPP } from '../utils/playerPowerPoints';
 import SearchBar from './SearchBar';
 import ClassScorekeeperAssignment from './ClassScorekeeperAssignment';
 import { searchStudents } from '../utils/searchUtils';
@@ -47,7 +48,7 @@ const ScorekeeperInterface: React.FC = () => {
   const [ppInputValues, setPPInputValues] = useState<Record<string, number | undefined>>({});
   const [pendingChanges, setPendingChanges] = useState<Record<string, number>>({});
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [ppBoostStatuses, setPpBoostStatuses] = useState<{ [studentId: string]: boolean }>({});
+  const [activeBoosts, setActiveBoosts] = useState<Record<string, PPBoost | null>>({});
   const [availableClassrooms, setAvailableClassrooms] = useState<Array<{ id: string; name: string }>>([]);
   
   // Sorting state
@@ -377,21 +378,38 @@ const ScorekeeperInterface: React.FC = () => {
           }
         }
         
-        setStudents(finalStudents);
-        setFilteredStudents(finalStudents);
+        // Show the canonical balance (vault) so scorekeepers see the same PP as players.
+        const canonicalStudents = await Promise.all(
+          finalStudents.map(async (student) => {
+            try {
+              const vaultSnap = await getDoc(doc(db, 'vaults', student.id));
+              const powerPoints = resolveCanonicalPP({
+                vaultExists: vaultSnap.exists(),
+                vaultPP: vaultSnap.exists() ? vaultSnap.data()?.currentPP : undefined,
+                studentPP: student.powerPoints,
+              });
+              return { ...student, powerPoints };
+            } catch {
+              return student;
+            }
+          })
+        );
+
+        setStudents(canonicalStudents);
+        setFilteredStudents(canonicalStudents);
         
-        // Load PP boost statuses for all students
-        const boostStatuses: { [studentId: string]: boolean } = {};
-        for (const student of finalStudents) {
-          try {
-            const activeBoost = await getActivePPBoost(student.id);
-            boostStatuses[student.id] = activeBoost !== null;
-          } catch (error) {
-            console.error(`Error checking PP boost for student ${student.id}:`, error);
-            boostStatuses[student.id] = false;
-          }
-        }
-        setPpBoostStatuses(boostStatuses);
+        const boosts: Record<string, PPBoost | null> = {};
+        await Promise.all(
+          canonicalStudents.map(async (student) => {
+            try {
+              boosts[student.id] = await getActivePPBoost(student.id);
+            } catch (error) {
+              console.error(`Error checking PP boost for student ${student.id}:`, error);
+              boosts[student.id] = null;
+            }
+          })
+        );
+        setActiveBoosts(boosts);
       } catch (error) {
         logger.roster.error('ScorekeeperInterface: Error loading students:', error);
       }
@@ -419,63 +437,18 @@ const ScorekeeperInterface: React.FC = () => {
   const [originalPendingChanges, setOriginalPendingChanges] = useState<{ [studentId: string]: number }>({});
 
   // Handle PP adjustment (now tracks pending changes)
-  const handleAdjustPP = async (studentId: string, change: number) => {
-    const student = students.find(s => s.id === studentId);
-    if (!student) return;
+  // students[].powerPoints is always the saved balance; pending changes are layered on top for display.
+  const boostedAmount = (studentId: string, change: number) =>
+    change > 0 ? applyPPBoost(change, studentId, activeBoosts[studentId] ?? null) : change;
 
-    const currentPP = student.powerPoints || 0;
-    const currentOriginalChange = originalPendingChanges[studentId] || 0;
-    const newOriginalChange = currentOriginalChange + change;
-    
-    // Apply PP boost if student has one active (for display only)
-    let boostedChange = change;
-    try {
-      const activeBoost = await getActivePPBoost(studentId);
-      if (activeBoost && change > 0) {
-        boostedChange = applyPPBoost(change, studentId, activeBoost);
-        logger.roster.info('ScorekeeperInterface: PP boost applied for display:', {
-          studentId,
-          originalChange: change,
-          boostedChange,
-          boostMultiplier: activeBoost.multiplier
-        });
-      }
-    } catch (error) {
-      logger.roster.error('ScorekeeperInterface: Error checking PP boost:', error);
-    }
-    
-    // Calculate displayed PP using boosted changes
-    const currentPendingBoosted = pendingChanges[studentId] || 0;
-    const newPendingBoosted = currentPendingBoosted + boostedChange;
-    const newDisplayPP = Math.max(0, currentPP + newPendingBoosted);
+  const displayPP = (student: Student) =>
+    Math.max(0, (student.powerPoints || 0) + (pendingChanges[student.id] || 0));
 
-    // Store original (unboosted) change amount
-    setOriginalPendingChanges(prev => ({
-      ...prev,
-      [studentId]: newOriginalChange
-    }));
-
-    // Store boosted change amount for display
-    setPendingChanges(prev => ({
-      ...prev,
-      [studentId]: newPendingBoosted
-    }));
-
-    // Update local display (but not database)
-    setStudents(prev => prev.map(s => 
-      s.id === studentId ? { ...s, powerPoints: newDisplayPP } : s
-    ));
-
-    logger.roster.info('ScorekeeperInterface: Pending PP change:', {
-      studentId,
-      studentName: student.displayName,
-      originalChange: change,
-      boostedChange,
-      currentPP,
-      originalPendingChange: newOriginalChange,
-      boostedPendingChange: newPendingBoosted,
-      newDisplayPP
-    });
+  const handleAdjustPP = (studentId: string, change: number) => {
+    if (!students.some(s => s.id === studentId) || !change) return;
+    const boostedChange = boostedAmount(studentId, change);
+    setOriginalPendingChanges(prev => ({ ...prev, [studentId]: (prev[studentId] || 0) + change }));
+    setPendingChanges(prev => ({ ...prev, [studentId]: (prev[studentId] || 0) + boostedChange }));
   };
 
   // Submit pending changes for admin approval
@@ -500,16 +473,14 @@ const ScorekeeperInterface: React.FC = () => {
         changes: changesToSubmit.map(([studentId, originalChange]) => {
           const student = students.find(s => s.id === studentId);
           const currentPP = student?.powerPoints || 0;
-          const boostedChange = pendingChanges[studentId] || 0;
-          const originalPP = currentPP - boostedChange; // Original PP before any changes
           
           return {
             studentId,
             studentName: student?.displayName || 'Unknown',
             studentEmail: student?.email || '',
-            currentPP: originalPP,
+            currentPP,
             changeAmount: originalChange, // Store original (unboosted) amount
-            newPP: currentPP // Current displayed PP (includes boost for display)
+            newPP: Math.max(0, currentPP + (pendingChanges[studentId] || 0))
           };
         }),
         submittedAt: serverTimestamp(),
@@ -542,13 +513,6 @@ const ScorekeeperInterface: React.FC = () => {
         changesCount: changesToSubmit.length
       });
 
-      // Reset student PP to original values before clearing
-      setStudents(prev => prev.map(s => {
-        const boostedChange = pendingChanges[s.id] || 0;
-        const originalPP = (s.powerPoints || 0) - boostedChange;
-        return { ...s, powerPoints: originalPP };
-      }));
-      
       // Clear pending changes
       setPendingChanges({});
       setOriginalPendingChanges({});
@@ -570,73 +534,28 @@ const ScorekeeperInterface: React.FC = () => {
 
     setIsApplyingBulk(true);
     try {
-      const selectedIds = Array.from(selectedStudents);
       const originalChangeAmount = bulkPPAmount;
+      const selectedIds = Array.from(selectedStudents).filter(id => students.some(s => s.id === id));
+      const boostedById: Record<string, number> = {};
+      selectedIds.forEach(id => {
+        boostedById[id] = boostedAmount(id, originalChangeAmount);
+      });
 
-      // Track changes for each selected student (similar to handleAdjustPP)
-      const updatedPendingChanges: { [studentId: string]: number } = { ...pendingChanges };
-      const updatedOriginalPendingChanges: { [studentId: string]: number } = { ...originalPendingChanges };
-      const updatedStudents: { id: string; newPP: number; oldPP: number; displayName: string }[] = [];
-
-      for (const studentId of selectedIds) {
-        const student = students.find(s => s.id === studentId);
-        if (!student) continue;
-
-        const currentPP = student.powerPoints || 0;
-        
-        // Get current pending changes (may include boost)
-        const currentPendingBoosted = pendingChanges[studentId] || 0;
-        const currentOriginalChange = originalPendingChanges[studentId] || 0;
-        
-        // Calculate new original (unboosted) change
-        const newOriginalChange = currentOriginalChange + originalChangeAmount;
-        
-        // Apply PP boost if student has one active (for display only)
-        let boostedChange = originalChangeAmount;
-        try {
-          const activeBoost = await getActivePPBoost(studentId);
-          if (activeBoost && originalChangeAmount > 0) {
-            boostedChange = applyPPBoost(originalChangeAmount, studentId, activeBoost);
-            logger.roster.info('ScorekeeperInterface: PP boost applied for bulk adjustment:', {
-              studentId,
-              originalChange: originalChangeAmount,
-              boostedChange,
-              boostMultiplier: activeBoost.multiplier
-            });
-          }
-        } catch (error) {
-          logger.roster.error('ScorekeeperInterface: Error checking PP boost:', error);
-        }
-        
-        // Calculate new pending boosted change
-        const newPendingBoosted = currentPendingBoosted + boostedChange;
-        
-        // Calculate displayed PP
-        const newDisplayPP = Math.max(0, currentPP + newPendingBoosted);
-
-        // Store original (unboosted) change amount
-        updatedOriginalPendingChanges[studentId] = newOriginalChange;
-
-        // Store boosted change amount for display
-        updatedPendingChanges[studentId] = newPendingBoosted;
-
-        updatedStudents.push({ 
-          id: studentId, 
-          newPP: newDisplayPP, 
-          oldPP: currentPP,
-          displayName: student.displayName 
+      setOriginalPendingChanges(prev => {
+        const next = { ...prev };
+        selectedIds.forEach(id => {
+          next[id] = (next[id] || 0) + originalChangeAmount;
         });
-      }
-
-      // Update state with tracked changes
-      setOriginalPendingChanges(updatedOriginalPendingChanges);
-      setPendingChanges(updatedPendingChanges);
-
-      // Update local display (but not database)
-      setStudents(prev => prev.map(s => {
-        const found = updatedStudents.find(u => u.id === s.id);
-        return found ? { ...s, powerPoints: found.newPP } : s;
-      }));
+        return next;
+      });
+      setPendingChanges(prev => {
+        const next = { ...prev };
+        selectedIds.forEach(id => {
+          next[id] = (next[id] || 0) + boostedById[id];
+        });
+        return next;
+      });
+      const updatedStudents = selectedIds;
 
       logger.roster.info('ScorekeeperInterface: Bulk PP changes tracked for approval:', {
         studentCount: updatedStudents.length,
@@ -791,7 +710,7 @@ const ScorekeeperInterface: React.FC = () => {
     );
   }
 
-  const totalPP = students.reduce((sum, student) => sum + (student.powerPoints || 0), 0);
+  const totalPP = students.reduce((sum, student) => sum + displayPP(student), 0);
   const averagePP = students.length > 0 ? Math.round(totalPP / students.length) : 0;
 
   return (
@@ -1271,7 +1190,7 @@ const ScorekeeperInterface: React.FC = () => {
                       {student.displayName}
                     </h3>
                     {/* PP Boost Indicator */}
-                    {ppBoostStatuses[student.id] && (
+                    {activeBoosts[student.id] && (
                       <span
                         style={{
                           background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
@@ -1325,8 +1244,14 @@ const ScorekeeperInterface: React.FC = () => {
                   color: '#8b5cf6',
                   marginBottom: '0.25rem'
                 }}>
-                  {student.powerPoints} PP
+                  {displayPP(student)} PP
                 </div>
+                {!!pendingChanges[student.id] && (
+                  <div style={{ fontSize: '0.8rem', color: '#475569' }}>
+                    Saved {student.powerPoints || 0} · pending {pendingChanges[student.id] > 0 ? '+' : ''}
+                    {pendingChanges[student.id]}
+                  </div>
+                )}
               </div>
 
               {/* PP Controls */}

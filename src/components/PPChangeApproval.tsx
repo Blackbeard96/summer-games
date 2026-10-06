@@ -4,16 +4,19 @@ import { db } from '../firebase';
 import { 
   collection, 
   getDocs, 
-  getDoc,
   doc, 
   updateDoc, 
   serverTimestamp,
   query,
   where,
-  addDoc
+  addDoc,
+  arrayUnion,
+  runTransaction
 } from 'firebase/firestore';
 import { logger } from '../utils/debugLogger';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
+
+const APPROVAL_CLAIM_TTL_MS = 2 * 60 * 1000;
 
 interface PPChangeRequest {
   id: string;
@@ -30,7 +33,7 @@ interface PPChangeRequest {
     newPP: number;
   }>;
   submittedAt: any;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approving' | 'approved' | 'rejected';
   reviewedBy: string | null;
   reviewedAt: any;
 }
@@ -61,7 +64,7 @@ const PPChangeApproval: React.FC = () => {
       try {
         const q = query(
           collection(db, 'ppChangeRequests'),
-          where('status', '==', 'pending')
+          where('status', 'in', ['pending', 'approving'])
         );
         
         const snapshot = await getDocs(q);
@@ -115,18 +118,28 @@ const PPChangeApproval: React.FC = () => {
       // Store final PP values for notifications
       const finalPPValues: { [studentId: string]: { originalPP: number; finalPP: number; changeAmount: number } } = {};
       
-      // Update student PP values in database
+      // Claim the request so a double click or a second admin cannot apply it twice.
+      const requestRef = doc(db, 'ppChangeRequests', request.id);
+      const alreadyApplied = await runTransaction(db, async (tx): Promise<string[] | null> => {
+        const snap = await tx.get(requestRef);
+        if (!snap.exists()) return null;
+        const data = snap.data();
+        const staleApproval =
+          data.status === 'approving' && Date.now() - (Number(data.approvingAt) || 0) > APPROVAL_CLAIM_TTL_MS;
+        if (data.status !== 'pending' && !staleApproval) return null;
+        tx.update(requestRef, { status: 'approving', approvingAt: Date.now(), reviewedBy: currentUser.uid });
+        return Array.isArray(data.appliedStudentIds) ? data.appliedStudentIds : [];
+      });
+      if (!alreadyApplied) {
+        setChangeRequests(prev => prev.filter(r => r.id !== request.id));
+        return { appliedCount: 0, requestId: request.id, className: request.className };
+      }
+
+      const { applyPlayerPPDelta } = await import('../utils/playerPowerPoints');
+      const appliedIds = new Set(alreadyApplied);
+      const failedNames: string[] = [];
       for (const change of request.changes) {
-        // Fetch current PP from database to ensure accuracy (student's PP may have changed since submission)
-        const studentRef = doc(db, 'students', change.studentId);
-        const studentDoc = await getDoc(studentRef);
-        
-        if (!studentDoc.exists()) {
-          logger.roster.error('PPChangeApproval: Student not found:', change.studentId);
-          continue;
-        }
-        
-        const currentPPFromDB = studentDoc.data().powerPoints || 0;
+        if (appliedIds.has(change.studentId)) continue;
         
         // IMPORTANT: The stored changeAmount is now the original (unboosted) amount
         // We should always apply boost during approval if boost is active
@@ -143,71 +156,45 @@ const PPChangeApproval: React.FC = () => {
               studentId: change.studentId,
               originalChange: change.changeAmount,
               boostedAmount,
-              finalPP: currentPPFromDB + boostedAmount
             });
           }
         } catch (error) {
           logger.roster.error('PPChangeApproval: Error checking/applying PP boost:', error);
         }
         
-        // Calculate final PP using current database value + change amount
-        // CRITICAL: Always use current database PP, not stored currentPP, because
-        // the student's PP may have changed between submission and approval
-        // This ensures accuracy even if the student's PP changed (e.g., from battles, purchases, etc.)
-        const finalPP = Math.max(0, currentPPFromDB + changeAmountToApply);
-        
-        // Store values for notifications
-        finalPPValues[change.studentId] = {
-          originalPP: currentPPFromDB,
-          finalPP: finalPP,
-          changeAmount: changeAmountToApply
-        };
-        
-        logger.roster.info('PPChangeApproval: Updating PP:', {
-          studentId: change.studentId,
-          studentName: change.studentName,
-          currentPPFromDB,
-          changeAmountToApply,
-          finalPP,
-          storedCurrentPP: change.currentPP,
-          storedChangeAmount: change.changeAmount,
-          storedNewPP: change.newPP
-        });
-        
-        // Mirror vault + students + users and record Profile PP history
+        // Delta on the live canonical balance (vault), mirrored to all stores in one transaction.
         try {
-          const { setPlayerPowerPoints } = await import('../utils/playerPowerPoints');
-          await setPlayerPowerPoints(change.studentId, finalPP, {
-            previousAmount: currentPPFromDB,
+          const result = await applyPlayerPPDelta(change.studentId, changeAmountToApply, {
+            mode: 'award',
             meta: {
               sourceType: 'scorekeeper',
               sourceId: request.id,
               notes: `Scorekeeper (${request.scorekeeperEmail || 'staff'}) · ${request.className}`,
             },
           });
-        } catch (mirrorErr) {
-          logger.roster.error('PPChangeApproval: setPlayerPowerPoints failed, falling back to students update', mirrorErr);
-          await updateDoc(studentRef, {
-            powerPoints: finalPP,
-            lastUpdated: serverTimestamp()
+          finalPPValues[change.studentId] = {
+            originalPP: result.previous,
+            finalPP: result.next,
+            changeAmount: result.applied,
+          };
+          appliedIds.add(change.studentId);
+          await updateDoc(requestRef, { appliedStudentIds: arrayUnion(change.studentId) });
+        } catch (applyErr) {
+          failedNames.push(change.studentName || change.studentId);
+          logger.roster.error('PPChangeApproval: Failed to apply PP change', {
+            studentId: change.studentId,
+            applyErr,
           });
-          try {
-            const { recordPPChange } = await import('../utils/ppLedgerService');
-            await recordPPChange({
-              studentId: change.studentId,
-              amount: changeAmountToApply,
-              sourceType: 'scorekeeper',
-              sourceId: request.id,
-              notes: `Scorekeeper (${request.scorekeeperEmail || 'staff'}) · ${request.className}`,
-            });
-          } catch (_) {
-            /* non-fatal */
-          }
         }
       }
 
-      // Update the change request status
-      await updateDoc(doc(db, 'ppChangeRequests', request.id), {
+      if (failedNames.length > 0) {
+        // Back to pending; a retry skips students already in appliedStudentIds.
+        await updateDoc(requestRef, { status: 'pending', approvingAt: null });
+        throw new Error(`Could not update PP for ${failedNames.join(', ')}. Others were applied; approve again to retry.`);
+      }
+
+      await updateDoc(requestRef, {
         status: 'approved',
         reviewedBy: currentUser.uid,
         reviewedAt: serverTimestamp()
@@ -260,7 +247,7 @@ const PPChangeApproval: React.FC = () => {
         requestId: request.id,
         changesCount: request.changes.length
       });
-      return { appliedCount: request.changes.length, requestId: request.id, className: request.className };
+      return { appliedCount: Object.keys(finalPPValues).length, requestId: request.id, className: request.className };
   };
 
   const handleApprove = async (requestId: string) => {
@@ -274,7 +261,7 @@ const PPChangeApproval: React.FC = () => {
       alert(`Approved ${result.appliedCount} changes for ${result.className}`);
     } catch (error) {
       logger.roster.error('PPChangeApproval: Error approving changes:', error);
-      alert('Error approving changes. Please try again.');
+      alert(error instanceof Error ? error.message : 'Error approving changes. Please try again.');
     } finally {
       setProcessing(null);
     }
@@ -295,14 +282,23 @@ const PPChangeApproval: React.FC = () => {
       let approvedRequests = 0;
       let approvedChanges = 0;
 
+      const failures: string[] = [];
+
       for (const request of requestsToApprove) {
-        const result = await approveRequest(request);
-        approvedRequests += 1;
-        approvedChanges += result.appliedCount;
+        try {
+          const result = await approveRequest(request);
+          approvedRequests += 1;
+          approvedChanges += result.appliedCount;
+        } catch (requestError) {
+          failures.push(
+            `${request.className}: ${requestError instanceof Error ? requestError.message : String(requestError)}`
+          );
+        }
       }
 
       alert(
-        `Approved ${approvedRequests} request${approvedRequests === 1 ? '' : 's'} and ${approvedChanges} student PP change${approvedChanges === 1 ? '' : 's'} across all classes.`
+        `Approved ${approvedRequests} request${approvedRequests === 1 ? '' : 's'} and ${approvedChanges} student PP change${approvedChanges === 1 ? '' : 's'} across all classes.` +
+          (failures.length ? `\n\nNeeds retry:\n${failures.join('\n')}` : '')
       );
     } catch (error) {
       logger.roster.error('PPChangeApproval: Error approving all changes:', error);

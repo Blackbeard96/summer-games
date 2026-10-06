@@ -51,6 +51,12 @@ import {
 import { getMoveDamage, getMoveNameSync } from '../utils/moveOverrides';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 import {
+  applyPlayerPPDelta,
+  computeNextPP,
+  DEFAULT_VAULT_CAPACITY,
+  resolveCanonicalPP,
+} from '../utils/playerPowerPoints';
+import {
   getElementalRingLevel,
   getArtifactDamageMultiplier,
   getEffectiveMasteryLevel,
@@ -1044,45 +1050,29 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch (err) {
         console.error('Error initializing battle data:', err);
         
-        // CRITICAL FIX: Even on error, try to fetch student PP and sync it
+        // Recover the PP balance read-only: vault is canonical, students is only a fallback when
+        // no vault exists. Never write PP here; a partial load must not overwrite the balance.
         let fallbackPP = 0;
         let fallbackVaultFromDb: Vault | null = null;
         try {
-          const studentRef = doc(db, 'students', ownerUid);
-          const studentDoc = await getDoc(studentRef);
-          if (studentDoc.exists()) {
-            const studentData = studentDoc.data();
-            fallbackPP = studentData.powerPoints || 0;
-            console.log('BattleContext: Error recovery - fetched student PP:', fallbackPP);
-            
-            // Try to update vault with student PP
-            const vaultRef = doc(db, 'vaults', currentUser.uid);
-            const vaultDoc = await getDoc(vaultRef);
-            
-            if (vaultDoc.exists()) {
-              const vaultData = vaultDoc.data();
-              const existingCapacity = Number(vaultData.capacity) || 1000;
-              const existingMaxVaultHealth = Number(vaultData.maxVaultHealth) || Math.floor(existingCapacity * 0.1);
-              const vaultHealth = Math.min(fallbackPP, existingMaxVaultHealth);
-              await updateDoc(vaultRef, {
-                currentPP: fallbackPP,
-                vaultHealth: vaultHealth
-              });
-              fallbackVaultFromDb = {
-                ...(vaultData as Vault),
-                currentPP: fallbackPP,
-                vaultHealth,
-                maxVaultHealth: existingMaxVaultHealth,
-              } as Vault;
-            } else {
-              // Never create a level-1 fallback vault in error recovery.
-              // This can overwrite progression when reads fail transiently.
-              console.warn('BattleContext: Error recovery skipped vault creation because vault doc is missing');
-            }
-            console.log('BattleContext: Successfully synced PP in error recovery');
+          const [studentDoc, vaultDoc] = await Promise.all([
+            getDoc(doc(db, 'students', ownerUid)),
+            getDoc(doc(db, 'vaults', currentUser.uid)),
+          ]);
+          fallbackPP = resolveCanonicalPP({
+            vaultPP: vaultDoc.exists() ? vaultDoc.data().currentPP : null,
+            studentPP: studentDoc.exists() ? studentDoc.data().powerPoints : null,
+            vaultExists: vaultDoc.exists(),
+          });
+          if (vaultDoc.exists()) {
+            fallbackVaultFromDb = { ...(vaultDoc.data() as Vault), currentPP: fallbackPP } as Vault;
+          } else {
+            // Never create a level-1 fallback vault in error recovery.
+            // This can overwrite progression when reads fail transiently.
+            console.warn('BattleContext: Error recovery skipped vault creation because vault doc is missing');
           }
         } catch (syncError) {
-          console.error('BattleContext: Error syncing PP in error recovery:', syncError);
+          console.error('BattleContext: Error reading PP in error recovery:', syncError);
         }
         
         // TEMPORARY FIX: Don't show error to user for Firestore assertion errors
@@ -1148,50 +1138,29 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     initializeBattleData();
   }, [currentUser, isSwitchingIdentity]);
 
-  // CRITICAL FIX: Additional PP sync effect that runs after initialization
-  // This ensures PP is synced even if initialization had errors
+  // Vault is the canonical PP balance; mirror it outward so rosters and leaderboards that read
+  // students/users show the same number. Never copy in the other direction.
+  const vaultCurrentPP = vault?.currentPP;
   useEffect(() => {
-    if (!currentUser || !vault || isSwitchingIdentity) return;
+    if (!currentUser || isSwitchingIdentity || typeof vaultCurrentPP !== 'number') return;
+    const uid = currentUser.uid;
 
-    const syncPPFromStudent = async () => {
+    const mirrorVaultPP = async () => {
       try {
-        // Get student PP
-        const studentRef = doc(db, 'students', currentUser.uid);
+        const studentRef = doc(db, 'students', uid);
         const studentDoc = await getDoc(studentRef);
-        const studentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
-        
-        // If vault PP is 0 but student has PP, sync it
-        if (vault.currentPP === 0 && studentPP > 0) {
-          console.log('BattleContext: PP Sync Effect - Syncing PP from', vault.currentPP, 'to', studentPP);
-          
-          const vaultRef = doc(db, 'vaults', currentUser.uid);
-          const maxPP = vault.capacity || 1000;
-          const maxVaultHealth = Math.floor(maxPP * 0.1);
-          const newVaultHealth = Math.min(studentPP, maxVaultHealth);
-          
-          await updateDoc(vaultRef, {
-            currentPP: studentPP,
-            vaultHealth: newVaultHealth
-          });
-          
-          // Update local state
-          setVault(prevVault => prevVault ? {
-            ...prevVault,
-            currentPP: studentPP,
-            vaultHealth: newVaultHealth
-          } : null);
-          
-          console.log('BattleContext: PP Sync Effect - Successfully synced PP to', studentPP);
+        if (studentDoc.exists() && studentDoc.data().powerPoints !== vaultCurrentPP) {
+          await updateDoc(studentRef, { powerPoints: vaultCurrentPP });
         }
+        await setDoc(doc(db, 'users', uid), { powerPoints: vaultCurrentPP }, { merge: true });
       } catch (error) {
-        console.error('BattleContext: PP Sync Effect - Error syncing PP:', error);
+        console.warn('BattleContext: could not mirror vault PP to profile docs:', error);
       }
     };
 
-    // Run sync after a short delay to ensure vault state is set
-    const timeoutId = setTimeout(syncPPFromStudent, 500);
+    const timeoutId = setTimeout(mirrorVaultPP, 1500);
     return () => clearTimeout(timeoutId);
-  }, [currentUser, vault, isSwitchingIdentity]);
+  }, [currentUser, vaultCurrentPP, isSwitchingIdentity]);
 
   // Listen for vault updates and sync with player PP
   useEffect(() => {
@@ -1210,9 +1179,6 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
              errorString.includes('ID: ca9') ||
              errorString.includes('ID: b815');
     };
-    
-    // Debounce timer for vault PP sync
-    let vaultSyncTimeout: NodeJS.Timeout | null = null;
     
     // Listen to battleMoves collection for real-time updates (including RR Candy moves)
     // Safeguard: never accept a snapshot that would downgrade a move's level or masteryLevel (prevents reset bugs)
@@ -1308,8 +1274,6 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         try {
           if (studentDoc.exists()) {
             const studentData = studentDoc.data();
-            const studentPP = studentData.powerPoints || 0;
-            
             // Extract manifest ID properly - do NOT default to 'reading' if manifest is missing
             let currentManifest: string | null = null;
             if (studentData.manifest && typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
@@ -1366,41 +1330,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               console.warn('BattleContext: No valid manifest found in snapshot, skipping move updates');
             }
             
-            // Sync vault PP with student PP in real-time
-            // Use a debounce to prevent circular updates
-            // Clear any pending sync
-            if (vaultSyncTimeout) {
-              clearTimeout(vaultSyncTimeout);
-            }
-            
-            // Only sync if there's a difference
-            const vaultRef = doc(db, 'vaults', currentUser.uid);
-            const vaultDoc = await getDoc(vaultRef);
-            
-            if (vaultDoc.exists()) {
-              const vaultData = vaultDoc.data();
-              const currentVaultPP = vaultData.currentPP || 0;
-              
-              // Only update if they differ to avoid unnecessary writes
-              if (currentVaultPP !== studentPP) {
-                // Use setTimeout to debounce and prevent circular updates
-                vaultSyncTimeout = setTimeout(async () => {
-                  try {
-                    await updateDoc(vaultRef, {
-                      currentPP: studentPP,
-                      lastUpdated: serverTimestamp()
-                    });
-                    console.log('[BattleContext] Synced vault PP with student PP:', studentPP);
-                  } catch (updateError) {
-                    if (isFirestoreInternalError(updateError)) {
-                      console.warn('[BattleContext] Firestore internal assertion error during vault sync - ignoring');
-                      return;
-                    }
-                    console.error('[BattleContext] Error syncing vault PP:', updateError);
-                  }
-                }, 500); // Increased debounce time to 500ms
-              }
-            }
+            // PP is never copied students → vault: vault is canonical and every PP write goes
+            // through applyPlayerPPDelta, which keeps both in step.
           }
         } catch (error) {
           if (isFirestoreInternalError(error)) {
@@ -1442,9 +1373,6 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     );
 
     return () => {
-      if (vaultSyncTimeout) {
-        clearTimeout(vaultSyncTimeout);
-      }
       unsubscribeVault();
       unsubscribeStudent();
       unsubscribeMoves();
@@ -2116,21 +2044,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
     
     try {
-      const vaultRef = doc(db, 'vaults', currentUser.uid);
-      const studentRef = doc(db, 'students', currentUser.uid);
-      
-      // Get current PP from student document to ensure accuracy
-      const studentDoc = await getDoc(studentRef);
-      const currentStudentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
-      const newPP = Math.min(vault.capacity, currentStudentPP + pendingPP);
-      
-      await updateDoc(vaultRef, {
-        currentPP: newPP,
-        generatorPendingPP: 0
-      });
-      
-      await updateDoc(studentRef, {
-        powerPoints: newPP
+      const { applyPlayerPPDelta } = await import('../utils/playerPowerPoints');
+      const { next: newPP } = await applyPlayerPPDelta(currentUser.uid, pendingPP, {
+        mode: 'generatorGrant',
+        extraVaultFields: { generatorPendingPP: 0 },
+        meta: { sourceType: 'generator', sourceId: 'pp-generator', notes: 'PP Generator collect' },
       });
       
       setVault(prevVault => prevVault ? { 
@@ -2192,17 +2110,18 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const studentRef = doc(db, 'students', currentUser.uid);
       const usersRef = doc(db, 'users', currentUser.uid);
 
+      let grantedPP: number | null = null;
       await runTransaction(db, async (transaction) => {
-        // Read current state
+        // Firestore transactions require every read before any write.
         const vaultDoc = await transaction.get(vaultRef);
         const studentDoc = await transaction.get(studentRef);
+        const usersDoc = await transaction.get(usersRef);
         
         if (!vaultDoc.exists() || !studentDoc.exists()) {
           throw new Error('Vault or student document not found');
         }
 
         const vaultData = vaultDoc.data();
-        const studentData = studentDoc.data();
 
         // Re-check days away based on transaction-time state (idempotency check)
         let txLastClaimedAt: Date | null = null;
@@ -2227,15 +2146,19 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         const { ppEarned: txPPEarned, shieldsEarned: txShieldsEarned } = calculateEarnings(txDaysAway, rates.ppPerDay, rates.shieldsPerDay);
 
-        // Get current values
         const currentVaultPP = vaultData.currentPP || 0;
-        const currentStudentPP = studentData.powerPoints || 0;
         const currentShieldStrength = vaultData.shieldStrength || 0;
         const maxShieldStrength = vaultData.maxShieldStrength || 50;
 
-        // Calculate new values (cap PP at vault capacity, shields at max)
-        const newVaultPP = Math.min(vaultData.capacity || 1000, currentVaultPP + txPPEarned);
-        const newStudentPP = Math.min(vaultData.capacity || 1000, currentStudentPP + txPPEarned);
+        // Generator grant trims award overflow back to capacity; every store gets the same balance.
+        const newVaultPP = computeNextPP({
+          current: currentVaultPP,
+          delta: txPPEarned,
+          capacity: vaultData.capacity || DEFAULT_VAULT_CAPACITY,
+          mode: 'generatorGrant',
+        });
+        const newStudentPP = newVaultPP;
+        grantedPP = newVaultPP;
         const newShieldStrength = Math.min(maxShieldStrength, currentShieldStrength + txShieldsEarned);
 
         // Update timestamp to start of current UTC day
@@ -2253,20 +2176,22 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           powerPoints: newStudentPP
         });
 
-        // Update users collection PP if it exists
-        const usersDoc = await transaction.get(usersRef);
         if (usersDoc.exists()) {
-          const currentUsersPP = usersDoc.data().powerPoints || 0;
-          transaction.update(usersRef, {
-            powerPoints: Math.min(vaultData.capacity || 1000, currentUsersPP + txPPEarned)
-          });
+          transaction.update(usersRef, { powerPoints: newVaultPP });
         }
       });
 
       // Update local vault state
       setVault(prevVault => {
         if (!prevVault) return null;
-        const newPP = Math.min(prevVault.capacity, (prevVault.currentPP || 0) + ppEarned);
+        const newPP =
+          grantedPP ??
+          computeNextPP({
+            current: prevVault.currentPP || 0,
+            delta: ppEarned,
+            capacity: prevVault.capacity,
+            mode: 'generatorGrant',
+          });
         const newShields = Math.min(prevVault.maxShieldStrength, (prevVault.shieldStrength || 0) + shieldsEarned);
         return {
           ...prevVault,
@@ -2320,16 +2245,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       // Only charge for the actual shields restored, not the full cost
       const actualCost = Math.round((actualRestored / amount) * cost);
-      const newPP = vault.currentPP - actualCost;
-      
-      await updateDoc(vaultRef, {
-        shieldStrength: newShieldStrength,
-        currentPP: newPP
+      const { next: newPP } = await applyPlayerPPDelta(currentUser.uid, -actualCost, {
+        mode: 'award',
+        extraVaultFields: { shieldStrength: newShieldStrength },
+        meta: { sourceType: 'other', sourceId: 'shield-restore', notes: `Restored ${actualRestored} shields` },
       });
-      
-      // Also update student PP
-      const studentRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(studentRef, { powerPoints: newPP });
       
       setVault(prevVault => prevVault ? { 
         ...prevVault, 
@@ -4304,22 +4224,18 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         totalPPStolenToday += attackData.ppStolenFromTarget || 0;
       });
       
-      // Calculate restoration amount (restore all PP stolen today)
-      const restorationAmount = Math.min(totalPPStolenToday, vault.maxShieldStrength - vault.currentPP);
+      // Restore PP stolen today as a gameplay earning (up to vault capacity).
+      const restorationAmount =
+        totalPPStolenToday > 0
+          ? (
+              await applyPlayerPPDelta(currentUser.uid, totalPPStolenToday, {
+                mode: 'earn',
+                meta: { sourceType: 'siege', sourceId: 'pp-restore', notes: 'PP Restore action card' },
+              })
+            ).applied
+          : 0;
       
       if (restorationAmount > 0) {
-        // Update vault with restored PP
-        const newPP = Math.min(vault.maxShieldStrength, vault.currentPP + restorationAmount);
-        
-        await updateDoc(doc(db, 'vaults', currentUser.uid), {
-          currentPP: newPP
-        });
-        
-        // Update student document
-        await updateDoc(doc(db, 'students', currentUser.uid), {
-          powerPoints: newPP
-        });
-        
         console.log(`PP Restore: Restored ${restorationAmount} PP (${totalPPStolenToday} stolen today)`);
         
         // Record the PP restore action
@@ -4483,13 +4399,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         overshield: targetVaultData.overshield
       });
       
-      // Sync target vault PP FROM student PP (student PP is the source of truth)
-      // If vault PP doesn't match student PP, update vault to match student
-      if (targetVaultData.currentPP !== targetStudentPP) {
-        console.log(`🔄 Syncing target vault PP from ${targetVaultData.currentPP} to ${targetStudentPP} (from student PP)`);
-        await updateDoc(targetVaultRef, { currentPP: targetStudentPP });
-        targetVaultData.currentPP = targetStudentPP; // Update local copy for calculations
-      }
+      // Vault PP is canonical for the target; never overwrite it from students.
 
       // Vault Siege: attacker is frozen — skip this attack (consumes one freeze stack + one daily attempt)
       const attackerVaultRefForFreeze = doc(db, 'vaults', currentUser.uid);
@@ -5038,15 +4948,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         // Add stolen PP to attacker's vault (with boost if active)
         // This is the actual PP the attacker gains, converted from vault health damage
-        const newAttackerPP = vault.currentPP + finalPPStolen;
-        
-        await updateDoc(doc(db, 'vaults', currentUser.uid), {
-          currentPP: newAttackerPP
-        });
-        
-        // Also update the student document to sync PP
-        await updateDoc(doc(db, 'students', currentUser.uid), {
-          powerPoints: newAttackerPP
+        const { next: newAttackerPP } = await applyPlayerPPDelta(currentUser.uid, finalPPStolen, {
+          mode: 'earn',
         });
         
         // Note: We don't update target's student PP - only vault health is affected

@@ -6,6 +6,7 @@
 import { db } from '../firebase';
 import { doc, getDoc, runTransaction, Timestamp, serverTimestamp } from 'firebase/firestore';
 import { getCurrentUTCDayStart, calculateDaysAway, calculateEarnings } from './generatorEarnings';
+import { computeNextPP } from './playerPowerPoints';
 
 export interface DailyGeneratorResult {
   daysAway: number;
@@ -84,8 +85,6 @@ export async function checkAndCreditDailyGenerator(
 
       const vaultData = vaultDoc.data();
       const usersData = usersDoc.exists() ? usersDoc.data() : {};
-      const studentData = studentDoc.exists() ? studentDoc.data() : {};
-
       // Check if modal was already shown today
       const lastModalDate = usersData.lastDailyGeneratorModalDate || null;
       if (!shouldShowDailyGeneratorModal(lastModalDate)) {
@@ -145,8 +144,6 @@ export async function checkAndCreditDailyGenerator(
 
       // Get current values for display (even if no earnings)
       const currentVaultPP = vaultData.currentPP || 0;
-      const currentStudentPP = studentData.powerPoints || 0;
-      const currentUsersPP = usersData.powerPoints || 0;
       const currentShieldStrength = vaultData.shieldStrength || 0;
 
       // If no days away, still show modal but with 0 earnings (first login of day)
@@ -189,10 +186,15 @@ export async function checkAndCreditDailyGenerator(
       // Calculate earnings
       const { ppEarned, shieldsEarned } = calculateEarnings(daysAway, ppPerDay, shieldsPerDay);
 
-      // Calculate new values (capped at max) - current values already retrieved above
-      const newVaultPP = Math.min(vaultCapacity, currentVaultPP + ppEarned);
-      const newStudentPP = Math.min(vaultCapacity, currentStudentPP + ppEarned);
-      const newUsersPP = Math.min(vaultCapacity, currentUsersPP + ppEarned);
+      // Generator grant trims award overflow back to capacity; every store gets the vault balance.
+      const newVaultPP = computeNextPP({
+        current: currentVaultPP,
+        delta: ppEarned,
+        capacity: vaultCapacity,
+        mode: 'generatorGrant',
+      });
+      const newStudentPP = newVaultPP;
+      const newUsersPP = newVaultPP;
       const newShieldStrength = Math.min(maxShieldStrength, currentShieldStrength + shieldsEarned);
 
       // Update timestamp to start of current UTC day

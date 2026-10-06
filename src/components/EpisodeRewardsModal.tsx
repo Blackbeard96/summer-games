@@ -7,6 +7,7 @@ import { doc, updateDoc, increment, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
+import { applyPlayerPPDelta } from '../utils/playerPowerPoints';
 
 interface EpisodeRewardsModalProps {
   episode: StoryEpisode;
@@ -156,14 +157,19 @@ const EpisodeRewardsModal: React.FC<EpisodeRewardsModalProps> = ({ episode, onCl
       const studentRef = doc(db, 'students', currentUser.uid);
 
       await updateDoc(userRef, {
-        powerPoints: increment(finalPP),
         xp: increment(episode.rewards.xp)
       });
 
       await updateDoc(studentRef, {
-        powerPoints: increment(finalPP),
         xp: increment(episode.rewards.xp)
       });
+
+      if (finalPP) {
+        await applyPlayerPPDelta(currentUser.uid, finalPP, {
+          mode: 'earn',
+          meta: { sourceType: 'other', sourceId: episode.id, notes: 'Episode rewards' },
+        });
+      }
 
       const storyXp = Math.max(0, Math.floor(Number(episode.rewards.xp) || 0));
       if (storyXp > 0) {

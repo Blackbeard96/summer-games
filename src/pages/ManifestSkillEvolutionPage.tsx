@@ -5,10 +5,11 @@ import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { MANIFEST_EVOLUTION_LEVELS } from '../data/manifestSkillEvolution';
 import { mergeSeason1FromStudentData } from '../utils/season1PlayerHydration';
+import { applyPlayerPPDelta, getPlayerPowerPoints } from '../utils/playerPowerPoints';
 
 /**
  * Player-facing manifest evolution (BG3-style tiers).
- * Purchasing deducts PP from students doc and records level in season1.unlockedManifestSkillLevels.
+ * Purchasing deducts PP from the canonical balance and records level in season1.unlockedManifestSkillLevels.
  */
 const ManifestSkillEvolutionPage: React.FC = () => {
   const { currentUser } = useAuth();
@@ -24,7 +25,7 @@ const ManifestSkillEvolutionPage: React.FC = () => {
       const snap = await getDoc(doc(db, 'students', currentUser.uid));
       if (!snap.exists()) return;
       const d = snap.data();
-      setPp(d.powerPoints || 0);
+      setPp(await getPlayerPowerPoints(currentUser.uid));
       const s1 = mergeSeason1FromStudentData(d.season1 as Record<string, unknown>);
       const prog = s1.unlockedManifestSkillLevels[manifestKey];
       setUnlocked(prog?.currentLevel ?? 1);
@@ -41,20 +42,26 @@ const ManifestSkillEvolutionPage: React.FC = () => {
     if (!currentUser) return;
     const cfg = MANIFEST_EVOLUTION_LEVELS.find((c) => c.level === targetLevel);
     if (!cfg || targetLevel <= unlocked) return;
-    if (pp < cfg.unlockCostPP) {
-      setMsg(`Need ${cfg.unlockCostPP} PP (have ${pp}).`);
-      return;
-    }
     setMsg('Processing…');
     try {
+      const currentPP = await getPlayerPowerPoints(currentUser.uid);
+      if (currentPP < cfg.unlockCostPP) {
+        setPp(currentPP);
+        setMsg(`Need ${cfg.unlockCostPP} PP (have ${currentPP}).`);
+        return;
+      }
       const ref = doc(db, 'students', currentUser.uid);
       const snap = await getDoc(ref);
       const d = snap.data() || {};
       const s1 = mergeSeason1FromStudentData(d.season1 as Record<string, unknown>);
       const prevLvls = s1.unlockedManifestSkillLevels[manifestKey]?.unlockedLevels || [];
       const nextLevels = Array.from(new Set([...prevLvls, targetLevel])).sort((a, b) => a - b);
+      const { next } = await applyPlayerPPDelta(currentUser.uid, -cfg.unlockCostPP, {
+        mode: 'earn',
+        meta: { sourceType: 'skillUpgrade', sourceId: `${manifestKey}:${targetLevel}`, notes: `Manifest evolution level ${targetLevel}` },
+      });
+      setPp(next);
       await updateDoc(ref, {
-        powerPoints: (d.powerPoints || 0) - cfg.unlockCostPP,
         season1: {
           ...s1,
           unlockedManifestSkillLevels: {

@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
+import { applyPlayerPPDelta } from '../utils/playerPowerPoints';
 
 interface PvPRewardSpinProps {
   isOpen: boolean;
@@ -20,7 +19,7 @@ const PvPRewardSpin: React.FC<PvPRewardSpinProps> = ({
   riskPercentage 
 }) => {
   const { currentUser } = useAuth();
-  const { vault, syncVaultPP } = useBattle();
+  const { vault } = useBattle();
   const [spinning, setSpinning] = useState(false);
   const [spinResult, setSpinResult] = useState<number | null>(null);
   const [finalReward, setFinalReward] = useState<number | null>(null);
@@ -105,23 +104,10 @@ const PvPRewardSpin: React.FC<PvPRewardSpinProps> = ({
     if (!currentUser || !vault) return;
 
     try {
-      const vaultRef = doc(db, 'vaults', currentUser.uid);
-      const currentPP = vault.currentPP || 0;
-      const capacity = vault.capacity || 1000;
-      const newPP = Math.min(currentPP + reward, capacity);
-
-      await updateDoc(vaultRef, {
-        currentPP: newPP
+      await applyPlayerPPDelta(currentUser.uid, reward, {
+        mode: 'earn',
+        meta: { sourceType: 'other', notes: 'PvP victory spin bonus' },
       });
-
-      // Update student document
-      const studentRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(studentRef, {
-        currentPP: newPP
-      });
-
-      // Sync local state
-      syncVaultPP();
     } catch (error) {
       console.error('Error applying winner reward:', error);
     }
@@ -131,23 +117,10 @@ const PvPRewardSpin: React.FC<PvPRewardSpinProps> = ({
     if (!currentUser || !vault) return;
 
     try {
-      const vaultRef = doc(db, 'vaults', currentUser.uid);
-      const currentPP = vault.currentPP || 0;
-      const capacity = vault.capacity || 1000;
-      const newPP = Math.min(currentPP + recovered, capacity);
-
-      await updateDoc(vaultRef, {
-        currentPP: newPP
+      await applyPlayerPPDelta(currentUser.uid, recovered, {
+        mode: 'earn',
+        meta: { sourceType: 'other', notes: 'PvP loss recovery spin' },
       });
-
-      // Update student document
-      const studentRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(studentRef, {
-        currentPP: newPP
-      });
-
-      // Sync local state
-      syncVaultPP();
     } catch (error) {
       console.error('Error applying loser recovery:', error);
     }

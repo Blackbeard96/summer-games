@@ -36,6 +36,7 @@ import type {
 } from '../types/liveQuiz';
 import { getQuizSet, getQuestions } from './trainingGroundsService';
 import { mirrorProfileXpToProgressionSystems } from './playerProgressionRewards';
+import { applyPlayerPPDelta } from './playerPowerPoints';
 import { calculateLiveQuizPoints, computeBattleRoyaleStreakRewards } from './liveQuizScoring';
 import { applyFlowPpRewardMultiplier, applyFlowQuestionPointMultiplier, parseFlowStateFromPlayerRow } from './liveEventFlowBoons';
 import { mstLiveLog, mstLiveError } from './mstLiveDebug';
@@ -499,16 +500,11 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
         const { uid } = sorted[i];
         const studentRef = doc(db, 'students', uid);
         const userRef = doc(db, 'users', uid);
-        const vaultRef = doc(db, 'vaults', uid);
         let didGrant = false;
         const studentUpdates: UpdateData<DocumentData> = {};
         const userUpdates: UpdateData<DocumentData> = {};
         const ppGrant = config.rewardTypes.pp && config.ppAmount > 0 ? scaledFlowPp(uid, config.ppAmount) : 0;
-        if (ppGrant > 0) {
-          studentUpdates.powerPoints = increment(ppGrant);
-          userUpdates.powerPoints = increment(ppGrant);
-          didGrant = true;
-        }
+        if (ppGrant > 0) didGrant = true;
         if (config.rewardTypes.xp && config.xpAmount > 0) {
           studentUpdates.xp = increment(config.xpAmount);
           userUpdates.xp = increment(config.xpAmount);
@@ -532,13 +528,10 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
           if (userDoc.exists()) await updateDoc(userRef, userUpdates);
         }
         if (ppGrant > 0) {
-          const vaultDoc = await getDoc(vaultRef);
-          if (vaultDoc.exists()) {
-            const v = vaultDoc.data();
-            const cur = v?.currentPP ?? 0;
-            const cap = v?.capacity ?? 1000;
-            await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + ppGrant) });
-          }
+          await applyPlayerPPDelta(uid, ppGrant, {
+            mode: 'award',
+            meta: { sourceType: 'liveEvent', sourceId: sessionId, notes: `Live Event quiz rank ${rank}` },
+          });
         }
         if (didGrant) {
           grantedCount++;
@@ -578,17 +571,12 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
       const { uid } = sorted[i];
       const studentRef = doc(db, 'students', uid);
       const userRef = doc(db, 'users', uid);
-      const vaultRef = doc(db, 'vaults', uid);
       let didGrant = false;
       const studentUpdates: UpdateData<DocumentData> = {};
       const userUpdates: UpdateData<DocumentData> = {};
       const ppAmount = scaledFlowPp(uid, reward.pp ?? 0);
       const xpAmount = reward.xp ?? 0;
-      if (ppAmount > 0) {
-        studentUpdates.powerPoints = increment(ppAmount);
-        userUpdates.powerPoints = increment(ppAmount);
-        didGrant = true;
-      }
+      if (ppAmount > 0) didGrant = true;
       if (xpAmount > 0) {
         studentUpdates.xp = increment(xpAmount);
         userUpdates.xp = increment(xpAmount);
@@ -637,13 +625,10 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
         if (userDoc.exists()) await updateDoc(userRef, userUpdates);
       }
       if (ppAmount > 0) {
-        const vaultDoc = await getDoc(vaultRef);
-        if (vaultDoc.exists()) {
-          const v = vaultDoc.data();
-          const cur = v?.currentPP ?? 0;
-          const cap = v?.capacity ?? 1000;
-          await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + ppAmount) });
-        }
+        await applyPlayerPPDelta(uid, ppAmount, {
+          mode: 'award',
+          meta: { sourceType: 'liveEvent', sourceId: sessionId, notes: `Live Event quiz rank ${rank}` },
+        });
       }
       if (didGrant) {
         grantedCount++;
