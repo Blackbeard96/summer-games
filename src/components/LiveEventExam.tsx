@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { doc, onSnapshot, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { ENERGY_TYPES, battleEnergyDisplayLabel } from '../constants/energyTypes';
@@ -506,7 +506,17 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
         : 'End Exam Mode and return this room to Class Flow?';
     if (!window.confirm(prompt)) return;
     try {
-      await updateDoc(doc(db, 'inSessionRooms', sessionId), {
+      const roomRef = doc(db, 'inSessionRooms', sessionId);
+      try {
+        const roomSnap = await getDoc(roomRef);
+        if (roomSnap.exists()) {
+          const { archiveLiveEventExam } = await import('../utils/liveEventHistoryService');
+          await archiveLiveEventExam(sessionId, roomSnap.data() as Record<string, unknown>);
+        }
+      } catch (archiveErr) {
+        console.warn('Live Event History: exam archive failed (non-fatal)', archiveErr);
+      }
+      await updateDoc(roomRef, {
         liveEventMode: 'class_flow',
         examQuizSetId: null,
         examAssessmentId: null,

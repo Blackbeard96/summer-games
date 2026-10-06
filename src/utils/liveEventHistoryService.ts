@@ -33,11 +33,14 @@ import type {
   LiveEventSkillAggregate,
   LiveEventTimelineEntry,
 } from '../types/liveEventHistory';
-import { getQuestions } from './trainingGroundsService';
+import { getQuestions, getQuizSet } from './trainingGroundsService';
+import { getAssessment } from './assessmentGoalsFirestore';
+import { parsePlayerExamProgress } from './liveEventExamService';
 import { enrichAnswersWithSkills, recordSkillEvidenceFromAttempt } from './masteryService';
 import { listAcademicSkills } from './academicSkillService';
 import type { TrainingAnswer } from '../types/trainingGrounds';
 import {
+  answerPointsEarned,
   liveRowPartialCredit,
   liveRowPointsEarned,
   liveRowPointsPossible,
@@ -122,7 +125,8 @@ export function resolveLiveEventHistoryType(
   if (gameMode === 'regular') return 'quiz';
 
   const mode = String(room.liveEventMode || room.mode || '').toLowerCase();
-  if (mode.includes('exam')) return 'exam';
+  // Exam results get their own `{roomId}_exam` entry; the room entry covers the rest of the session.
+  if (mode.includes('exam')) return 'in_session';
   if (mode.includes('reflect')) return 'reflection';
   if (mode.includes('goal')) return 'goals';
   if (mode.includes('neutral')) return 'neutral_flow';
@@ -269,16 +273,33 @@ async function buildQuestionAndSkillAnalytics(
     skillNameById = {};
   }
 
-  const byId = new Map(bankQuestions.map((q) => [q.id, q]));
-  const per = quizSession.perQuestionResults || {};
-  const allResults = Object.values(per).flat();
+  const allResults = Object.values(quizSession.perQuestionResults || {}).flat();
+  return {
+    ...summarizeQuestionsAndSkills(
+      quizSession.questionOrder,
+      bankQuestions,
+      allResults,
+      participantCount,
+      skillNameById
+    ),
+    skillNameById,
+  };
+}
 
+function summarizeQuestionsAndSkills(
+  questionOrder: string[],
+  bankQuestions: Awaited<ReturnType<typeof getQuestions>>,
+  allResults: Array<{ questionId: string; isCorrect: boolean }>,
+  participantCount: number,
+  skillNameById: Record<string, string>
+): { questions: LiveEventQuestionRecord[]; skills: LiveEventSkillAggregate[] } {
+  const byId = new Map(bankQuestions.map((q) => [q.id, q]));
   const qAgg = new Map<
     string,
     { correct: number; incorrect: number; answered: number; orderIndex: number }
   >();
 
-  quizSession.questionOrder.forEach((qid, idx) => {
+  questionOrder.forEach((qid, idx) => {
     qAgg.set(qid, { correct: 0, incorrect: 0, answered: 0, orderIndex: idx });
   });
 
@@ -287,7 +308,7 @@ async function buildQuestionAndSkillAnalytics(
       correct: 0,
       incorrect: 0,
       answered: 0,
-      orderIndex: quizSession.questionOrder.indexOf(row.questionId),
+      orderIndex: questionOrder.indexOf(row.questionId),
     };
     cur.answered += 1;
     if (row.isCorrect) cur.correct += 1;
@@ -338,7 +359,7 @@ async function buildQuestionAndSkillAnalytics(
     }))
     .sort((a, b) => a.accuracy - b.accuracy);
 
-  return { questions, skills, skillNameById };
+  return { questions, skills };
 }
 
 function buildParticipantRecords(
@@ -606,6 +627,223 @@ export async function upsertLiveEventSessionStub(
   await setDoc(sessionRef(sessionId), payload, { merge: true });
 }
 
+async function countAssignedStudents(classIds: string[]): Promise<number> {
+  try {
+    const ids = new Set<string>();
+    for (const cid of classIds.slice(0, 8)) {
+      const c = await getDoc(doc(db, 'classrooms', cid));
+      if (c.exists()) {
+        for (const s of ((c.data().students as string[]) || []).filter(Boolean)) ids.add(s);
+      }
+    }
+    return ids.size;
+  } catch {
+    return 0;
+  }
+}
+
+function roomClassIds(room: Record<string, unknown>, fallbackClassId?: string): string[] {
+  if (Array.isArray(room.classIds)) return (room.classIds as string[]).filter(Boolean);
+  if (fallbackClassId) return [fallbackClassId];
+  return room.classId ? [String(room.classId)] : [];
+}
+
+const EXAM_START_TOLERANCE_MS = 5000;
+
+/** One history entry per exam launch: `{roomId}_exam_{startMs}` (rules key off the `{roomId}_exam` prefix). */
+export function examHistoryId(sessionId: string, examStartedMs: number | null): string {
+  return examStartedMs != null ? `${sessionId}_exam_${Math.round(examStartedMs)}` : `${sessionId}_exam`;
+}
+
+/**
+ * Archive the Exam Mode run inside a Live Event room as its own history entry.
+ * Ending Exam Mode clears the room's exam fields, so the quiz set and start time fall back to the
+ * newest launch recorded on players' examProgress docs.
+ */
+export async function archiveLiveEventExam(
+  sessionId: string,
+  room: Record<string, unknown>
+): Promise<LiveEventSessionRecord | null> {
+  const hostIds = new Set([String(room.hostUid || ''), String(room.teacherId || '')].filter(Boolean));
+  const progressSnap = await getDocs(collection(db, 'inSessionRooms', sessionId, 'examProgress'));
+  const allProgress = progressSnap.docs
+    .map((d) => parsePlayerExamProgress(d.id, d.data() as Record<string, unknown>))
+    .filter((p) => !hostIds.has(p.playerId) && (p.answeredCount > 0 || p.completed));
+
+  let examQuizSetId = typeof room.examQuizSetId === 'string' ? room.examQuizSetId.trim() : '';
+  let examStartedMs = toMs(room.examStartedAt);
+  if (!examQuizSetId) {
+    const newest = [...allProgress]
+      .filter((p) => p.examQuizSetId)
+      .sort((a, b) => (toMs(b.examSessionStartedAt) ?? 0) - (toMs(a.examSessionStartedAt) ?? 0))[0];
+    if (!newest?.examQuizSetId) return null;
+    examQuizSetId = newest.examQuizSetId;
+    examStartedMs = toMs(newest.examSessionStartedAt);
+  }
+
+  const progress = allProgress.filter((p) => {
+    if (p.examQuizSetId && p.examQuizSetId !== examQuizSetId) return false;
+    const startMs = toMs(p.examSessionStartedAt);
+    if (examStartedMs != null && startMs != null && Math.abs(startMs - examStartedMs) > EXAM_START_TOLERANCE_MS) {
+      return false;
+    }
+    return true;
+  });
+  if (progress.length === 0) return null;
+
+  const [bank, quizSet, assessment] = await Promise.all([
+    getQuestions(examQuizSetId).catch(() => []),
+    getQuizSet(examQuizSetId).catch(() => null),
+    typeof room.examAssessmentId === 'string' && room.examAssessmentId
+      ? getAssessment(room.examAssessmentId).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  let skillNameById: Record<string, string> = {};
+  try {
+    const skillList = await listAcademicSkills({ activeOnly: false });
+    skillNameById = Object.fromEntries(skillList.map((s) => [s.id, s.name]));
+  } catch {
+    skillNameById = {};
+  }
+
+  const totalQuestions = bank.length || Math.max(0, ...progress.map((p) => p.totalQuestions));
+  const ranked = [...progress].sort((a, b) => b.scorePercent - a.scorePercent);
+  const players = (Array.isArray(room.players) ? room.players : []) as Array<{ userId?: string; displayName?: string; level?: number }>;
+  const playerById = new Map(players.map((p) => [p.userId || '', p]));
+
+  const bankById = new Map(bank.map((q) => [q.id, q]));
+  const participants: LiveEventParticipantRecord[] = progress.map((p) => {
+    const player = playerById.get(p.playerId);
+    const pointsEarned = (p.answers || []).reduce(
+      (sum, a) => sum + answerPointsEarned(a, bankById.get(a.questionId)),
+      0
+    );
+    return stripUndefined({
+      userId: p.playerId,
+      playerName: p.playerName || player?.displayName || p.playerId,
+      levelSnapshot: typeof player?.level === 'number' ? player.level : undefined,
+      finishedAt: p.submittedAt || undefined,
+      placement: p.completed ? ranked.filter((r) => r.completed).indexOf(p) + 1 : undefined,
+      score: Math.round(pointsEarned * 10) / 10,
+      questionsSeen: totalQuestions || undefined,
+      questionsAnswered: p.answeredCount,
+      questionsCorrect: p.correctCount,
+      questionsIncorrect: Math.max(0, p.answeredCount - p.correctCount),
+      questionsUnanswered: totalQuestions ? Math.max(0, totalQuestions - p.answeredCount) : undefined,
+      accuracy: p.scorePercent,
+      completedEvent: p.completed,
+      leftEarly: !p.completed,
+    }) as LiveEventParticipantRecord;
+  });
+
+  const answerRows = progress.flatMap((p) =>
+    (p.answers || []).map((a) => ({ questionId: a.questionId, isCorrect: Boolean(a.isCorrect) }))
+  );
+  const { questions, skills } = summarizeQuestionsAndSkills(
+    bank.map((q) => q.id),
+    bank,
+    answerRows,
+    participants.length,
+    skillNameById
+  );
+
+  const classIds = roomClassIds(room);
+  const assignedCount = await countAssignedStudents(classIds);
+  const overview = buildOverview(
+    participants,
+    { stats: {} } as unknown as SessionSummary,
+    skills,
+    'exam',
+    assignedCount
+  );
+  overview.questionCount = totalQuestions || undefined;
+  overview.studentsLeftEarly = participants.filter((p) => p.leftEarly).length || undefined;
+
+  const submittedMs = progress.map((p) => toMs(p.submittedAt)).filter((v): v is number => v != null);
+  const endedMs = submittedMs.length ? Math.max(...submittedMs) : toMs(room.endedAt);
+  const title = assessment?.title?.trim() || quizSet?.title?.trim() || '';
+  const winners = participants.filter((p) => p.placement === 1);
+  const id = examHistoryId(sessionId, examStartedMs);
+
+  const draft: LiveEventSessionRecord = {
+    eventSessionId: id,
+    eventId: id,
+    eventType: 'exam',
+    eventName: `Exam — ${title || String(room.className || 'Class')}`,
+    hostId: String(room.hostUid || room.teacherId || ''),
+    classId: String(room.classId || classIds[0] || ''),
+    classIds,
+    className: String(room.className || ''),
+    quizId: examQuizSetId,
+    cfuId: examQuizSetId,
+    quizTitle: quizSet?.title,
+    startedAt:
+      examStartedMs != null ? Timestamp.fromMillis(examStartedMs) : room.startedAt || room.createdAt,
+    endedAt: endedMs != null ? Timestamp.fromMillis(endedMs) : serverTimestamp(),
+    duration:
+      examStartedMs != null && endedMs != null
+        ? Math.max(0, Math.round((endedMs - examStartedMs) / 1000))
+        : undefined,
+    participantCount: participants.length,
+    questionCount: overview.questionCount,
+    status: 'completed',
+    winnerIds: winners.length ? winners.map((w) => w.userId) : undefined,
+    winnerNames: winners.length ? winners.map((w) => w.playerName || w.userId) : undefined,
+    settingsSnapshot: stripUndefined({
+      liveEventMode: 'exam',
+      quizId: examQuizSetId,
+      quizTitle: quizSet?.title,
+      examAssessmentId: typeof room.examAssessmentId === 'string' ? room.examAssessmentId : undefined,
+      examSettings: (room.examSettings as Record<string, unknown> | null) || undefined,
+      classIds,
+    }),
+    overview,
+    skillPerformance: skills.length ? skills : undefined,
+    insights: [],
+    archived: false,
+    sourceRoomId: sessionId,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  draft.insights = buildLiveEventInsights(draft, questions, skills);
+
+  const existing = await getDoc(sessionRef(id));
+  const existingData = existing.exists() ? (existing.data() as LiveEventSessionRecord) : null;
+  await setDoc(
+    sessionRef(id),
+    stripUndefined({
+      ...draft,
+      ...(existingData?.archived ? { status: 'archived', archived: true } : {}),
+      createdAt: existingData && toMs(existingData.createdAt) != null ? existingData.createdAt : serverTimestamp(),
+    } as unknown as DocumentData),
+    { merge: true }
+  );
+
+  let batch = writeBatch(db);
+  let ops = 0;
+  for (const p of participants) {
+    batch.set(doc(participantsCol(id), p.userId), stripUndefined(p as unknown as DocumentData), { merge: true });
+    ops += 1;
+    if (ops >= BATCH_LIMIT) {
+      await batch.commit();
+      batch = writeBatch(db);
+      ops = 0;
+    }
+  }
+  for (const q of questions) {
+    batch.set(doc(questionsCol(id), q.questionId), stripUndefined(q as unknown as DocumentData), { merge: true });
+    ops += 1;
+    if (ops >= BATCH_LIMIT) {
+      await batch.commit();
+      batch = writeBatch(db);
+      ops = 0;
+    }
+  }
+  if (ops > 0) await batch.commit();
+
+  return draft;
+}
+
 /**
  * Archive a completed Live Event from finalize output + room/quiz state.
  * Idempotent for mastery via masteryAppliedAt.
@@ -623,35 +861,9 @@ export async function archiveLiveEventSession(
 
     const quizSession = await loadQuizSession(sessionId);
     const eventType = resolveLiveEventHistoryType(room, quizSession);
-    const classIds = Array.isArray(room.classIds)
-      ? (room.classIds as string[]).filter(Boolean)
-      : summary.classId
-        ? [summary.classId]
-        : room.classId
-          ? [String(room.classId)]
-          : [];
+    const classIds = roomClassIds(room, summary.classId);
 
-    let assignedCount = 0;
-    try {
-      if (classIds.length === 1) {
-        const c = await getDoc(doc(db, 'classrooms', classIds[0]));
-        if (c.exists()) {
-          const students = (c.data().students as string[]) || [];
-          assignedCount = students.filter(Boolean).length;
-        }
-      } else if (classIds.length > 1) {
-        const ids = new Set<string>();
-        for (const cid of classIds.slice(0, 8)) {
-          const c = await getDoc(doc(db, 'classrooms', cid));
-          if (c.exists()) {
-            for (const s of ((c.data().students as string[]) || []).filter(Boolean)) ids.add(s);
-          }
-        }
-        assignedCount = ids.size;
-      }
-    } catch {
-      assignedCount = 0;
-    }
+    const assignedCount = await countAssignedStudents(classIds);
 
     const bank = quizSession?.quizId ? await getQuestions(quizSession.quizId).catch(() => []) : [];
     const questionTotal = quizSession
@@ -777,6 +989,12 @@ export async function archiveLiveEventSession(
       } catch (e) {
         console.warn('[liveEventHistory] mastery apply failed (non-fatal)', e);
       }
+    }
+
+    try {
+      await archiveLiveEventExam(sessionId, room);
+    } catch (e) {
+      console.warn('[liveEventHistory] exam archive failed (non-fatal)', e);
     }
 
     return draft;
@@ -1137,7 +1355,7 @@ export async function backfillLiveEventHistoryFromRoom(
   const room = roomSnap.data() as Record<string, unknown>;
   const summary =
     (room.sessionSummary as SessionSummary | undefined) || (await rebuildSummaryFromRoom(sessionId, room));
-  if (!summary) return null;
+  if (!summary) return archiveLiveEventExam(sessionId, room);
   return archiveLiveEventSession(sessionId, summary, room);
 }
 
@@ -1168,7 +1386,22 @@ export async function backfillMissingLiveEventHistory(options: {
       })
       .map((d) => d.id)
   );
-  const missing = roomsSnap.docs.filter((d) => d.data().status === 'ended' && !completed.has(d.id));
+  const roomsWithExamHistory = new Set(
+    historySnap.docs.filter((d) => d.data().eventType === 'exam').map((d) => String(d.data().sourceRoomId || ''))
+  );
+  const ended = roomsSnap.docs.filter((d) => d.data().status === 'ended');
+  const missing = ended.filter((d) => !completed.has(d.id));
+  const missingIds = new Set(missing.map((d) => d.id));
+  // Rooms already in history whose exam has no entry yet (archiving a missing room covers its exam).
+  const missingExams = ended.filter((d) => {
+    const data = d.data();
+    return (
+      (data.hadExamMode === true || !!data.examQuizSetId) &&
+      !missingIds.has(d.id) &&
+      !roomsWithExamHistory.has(d.id)
+    );
+  });
+  const total = missing.length + missingExams.length;
 
   let imported = 0;
   let skipped = 0;
@@ -1181,7 +1414,8 @@ export async function backfillMissingLiveEventHistory(options: {
         (room.sessionSummary as SessionSummary | undefined) ||
         (await rebuildSummaryFromRoom(roomDoc.id, room));
       if (!summary) {
-        skipped += 1;
+        if (!roomsWithExamHistory.has(roomDoc.id) && (await archiveLiveEventExam(roomDoc.id, room))) imported += 1;
+        else skipped += 1;
       } else if (await archiveLiveEventSession(roomDoc.id, summary, room)) {
         imported += 1;
       } else {
@@ -1191,7 +1425,17 @@ export async function backfillMissingLiveEventHistory(options: {
       failed += 1;
       console.warn('[liveEventHistory] backfill failed for', roomDoc.id, e);
     }
-    options.onProgress?.(i + 1, missing.length);
+    options.onProgress?.(i + 1, total);
+  }
+  for (let i = 0; i < missingExams.length; i++) {
+    const roomDoc = missingExams[i];
+    try {
+      if (await archiveLiveEventExam(roomDoc.id, roomDoc.data() as Record<string, unknown>)) imported += 1;
+    } catch (e) {
+      failed += 1;
+      console.warn('[liveEventHistory] exam backfill failed for', roomDoc.id, e);
+    }
+    options.onProgress?.(missing.length + i + 1, total);
   }
   return { checked: roomsSnap.size, imported, skipped, failed };
 }

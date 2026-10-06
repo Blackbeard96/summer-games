@@ -62,6 +62,14 @@ service cloud.firestore {
         );
     }
 
+    // Live Event History docs are keyed by room id; an exam run inside a room is `{roomId}_exam[_{startMs}]`.
+    function isLiveEventHistoryHost(historyId) {
+      return isInSessionRoomHost(historyId) || (
+        historyId.matches('.+_exam(_[0-9]+)?$') &&
+        isInSessionRoomHost(historyId.split('_exam')[0])
+      );
+    }
+
     // Student enrolled in the class for this session, session host, or staff
     function studentClassId() {
       return request.auth != null &&

@@ -289,6 +289,8 @@ export async function activateExamLiveEvent(args: {
   const energyTypeAwarded = getEnergyTypeForMode('exam' as LiveEventModeType);
   await updateDoc(doc(db, 'inSessionRooms', args.sessionId), {
     liveEventMode: 'exam',
+    /** Never cleared (End Exam Mode clears the exam fields); lets history backfill find exam rooms. */
+    hadExamMode: true,
     workType: 'mental',
     energyType: ENERGY_TYPES.MENTAL,
     energyTypeAwarded,
