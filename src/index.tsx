@@ -12,6 +12,7 @@ import './styles/mst-journey.css';
 import './styles/mst-profile.css';
 import './styles/mst-mission.css';
 import './styles/mst-popups.css';
+import './styles/mst-market.css';
 import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';

@@ -1413,26 +1413,8 @@ const Marketplace = () => {
     }
   };
 
-  const getRarityColor = (rarity: string) => {
-    switch (rarity) {
-      case 'common': return '#6b7280';
-      case 'rare': return '#3b82f6';
-      case 'epic': return '#8b5cf6';
-      case 'legendary': return '#fbbf24';
-      default: return '#6b7280';
-    }
-  };
-
-  const getCategoryIcon = (category: string) => {
-    switch (category) {
-      case 'time': return '⏰';
-      case 'protection': return '🛡️';
-      case 'food': return '🍕';
-      case 'special': return '✨';
-      case 'equippable': return '⚔️';
-      default: return '📦';
-    }
-  };
+  const isLimitedToTwo = (name: string) =>
+    name === '+1 UXP Credit' || name === '+2 UXP Credit' || name === '+4 UXP Credit' || name === 'Get Out of Check-in Free';
 
   const filteredArtifacts = storeItems.filter(artifact => {
     // Filter out disabled artifacts
@@ -1456,488 +1438,176 @@ const Marketplace = () => {
   ];
 
   const rarities = [
-    { id: 'all', name: 'All Rarities', color: '#6b7280' },
-    { id: 'common', name: 'Common', color: '#6b7280' },
-    { id: 'rare', name: 'Rare', color: '#3b82f6' },
-    { id: 'epic', name: 'Epic', color: '#8b5cf6' },
-    { id: 'legendary', name: 'Legendary', color: '#fbbf24' }
+    { id: 'all', name: 'All Rarities' },
+    { id: 'common', name: 'Common' },
+    { id: 'rare', name: 'Rare' },
+    { id: 'epic', name: 'Epic' },
+    { id: 'legendary', name: 'Legendary' }
   ];
 
   return (
-    <div style={{ 
-      minHeight: '100vh', 
-      background: 'linear-gradient(135deg, #f8fafc 0%, #e0e7ff 100%)',
-      position: 'relative'
-    }}>
-      {/* Mystical background pattern */}
-      <div style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: 'url("data:image/svg+xml,%3Csvg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"%3E%3Cg fill="%23e0e7ff" fill-opacity="0.3"%3E%3Cpath d="M50 0L60 40L100 50L60 60L50 100L40 60L0 50L40 40Z"/%3E%3C/g%3E%3C/svg%3E")',
-        opacity: 0.1,
-        pointerEvents: 'none'
-      }} />
+    <div className="mst-mkt">
       {/* Header */}
-      <div className="marketplace-header" style={{ 
-        background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', 
-        borderBottom: '2px solid #e0e7ff',
-        padding: isMobile ? '0.75rem 0' : '1rem 0',
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-        position: 'relative',
-        zIndex: 10
-      }}>
-        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: isMobile ? '0 1rem' : '0 1.5rem' }}>
-          <div style={{ 
-            display: 'flex', 
-            flexDirection: isMobile ? 'column' : 'row',
-            alignItems: isMobile ? 'stretch' : 'center', 
-            justifyContent: 'space-between',
-            gap: isMobile ? '1rem' : '0'
-          }}>
-            <div style={{ 
-              display: 'flex', 
-              flexDirection: isMobile ? 'column' : 'row',
-              alignItems: isMobile ? 'stretch' : 'center', 
-              gap: isMobile ? '1rem' : '2rem'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span style={{ fontSize: isMobile ? '1.5rem' : '1.875rem' }}>🔮</span>
-                <h1 style={{ 
-                  fontSize: isMobile ? '1.5rem' : '1.875rem', 
-                  fontWeight: 'bold', 
-                  color: '#1f2937',
-                  margin: 0
-                }}>
-                  MST MKT
-                </h1>
-                <span style={{ 
-                  fontSize: isMobile ? '0.75rem' : '0.875rem', 
-                  color: '#6b7280',
-                  fontWeight: '500'
-                }}>
-                  Masters of Space and Time
-                </span>
+      <header className="marketplace-header mst-mkt-header">
+        <div className="mst-mkt-container">
+          <div className="mst-mkt-header-row">
+            <div className="mst-mkt-header-left">
+              <div className="mst-mkt-brand">
+                <span className="mst-mkt-brand-mark" aria-hidden>🔮</span>
+                <div>
+                  <h1 className="mst-mkt-title">MST MKT</h1>
+                  <span className="mst-mkt-subtitle">Masters of Space and Time</span>
+                </div>
               </div>
-              <div style={{ position: 'relative', width: isMobile ? '100%' : '300px' }}>
+              <div className="mst-mkt-search">
+                <span className="mst-mkt-search-icon" aria-hidden>🔍</span>
                 <input
                   type="text"
                   placeholder="What are you looking for?"
+                  aria-label="Search artifacts"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '0.75rem 1rem 0.75rem 2.5rem',
-                    border: '1px solid #d1d5db',
-                    borderRadius: '0.5rem',
-                    fontSize: '0.875rem'
-                  }}
                 />
-                <span style={{ 
-                  position: 'absolute', 
-                  left: '0.75rem', 
-                  top: '50%', 
-                  transform: 'translateY(-50%)',
-                  color: '#6b7280'
-                }}>
-                  🔍
-                </span>
               </div>
             </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-              <div className="power-points" style={{ 
-                backgroundColor: '#fbbf24', 
-                color: '#1f2937', 
-                padding: '0.5rem 1rem', 
-                borderRadius: '0.5rem',
-                fontWeight: 'bold',
-                fontSize: '0.875rem',
-                whiteSpace: 'nowrap'
-              }}>
-                ⚡ {powerPoints} Power Points
+            <div className="mst-mkt-wallet">
+              <div className="power-points mst-resource-chip mst-card--power">
+                <span aria-hidden>⚡</span>
+                <span className="mst-resource-label">Power Points</span>
+                <span className="mst-resource-value">{powerPoints}</span>
               </div>
-              <div style={{
-                backgroundColor: '#e0e7ff',
-                color: '#312e81',
-                padding: '0.5rem 1rem',
-                borderRadius: '0.5rem',
-                fontWeight: 'bold',
-                fontSize: '0.875rem',
-                whiteSpace: 'nowrap',
-                border: '1px solid #a5b4fc'
-              }}>
-                💎 {truthMetal} Truth Metal
+              <div className="mst-resource-chip mst-card--truth">
+                <span aria-hidden>💎</span>
+                <span className="mst-resource-label">Truth Metal</span>
+                <span className="mst-resource-value">{truthMetal}</span>
               </div>
             </div>
           </div>
-          
-          {/* Debug Section */}
-      {isAdmin && (
-        <div style={{
-          backgroundColor: '#f3f4f6',
-          borderRadius: '0.5rem',
-          padding: '1rem',
-          marginBottom: '1rem',
-          border: '1px solid #d1d5db'
-        }}>
-          <h3 style={{ fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#374151' }}>
-            🔧 Debug Tools
-          </h3>
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <button
-              onClick={debugInventoryData}
-              style={{
-                padding: '0.5rem 1rem',
-                backgroundColor: '#6b7280',
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.25rem',
-                cursor: 'pointer',
-                fontSize: '0.75rem',
-                fontWeight: '500'
-              }}
-            >
-              🔍 Debug Inventory Data
-            </button>
-            <button
-              onClick={cleanupInventoryData}
-              style={{
-                padding: '0.5rem 1rem',
-                backgroundColor: '#dc2626',
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.25rem',
-                cursor: 'pointer',
-                fontSize: '0.75rem',
-                fontWeight: '500'
-              }}
-            >
-              🧹 Clean Up Inventory
-            </button>
-            <button
-              onClick={forceSyncInventory}
-              style={{
-                padding: '0.5rem 1rem',
-                backgroundColor: '#059669',
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.25rem',
-                cursor: 'pointer',
-                fontSize: '0.75rem',
-                fontWeight: '500'
-              }}
-            >
-              🔄 Force Sync Inventory
-            </button>
-            <button
-              onClick={clearPhantomShield}
-              style={{
-                padding: '0.5rem 1rem',
-                backgroundColor: '#dc2626',
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.25rem',
-                cursor: 'pointer',
-                fontSize: '0.75rem',
-                fontWeight: '500'
-              }}
-            >
-              🛡️ Clear Phantom Shield
-            </button>
-          </div>
+
+          {isAdmin && (
+            <div className="mst-mkt-debug">
+              <h3 className="mst-mkt-debug-title">🔧 Admin Debug Tools</h3>
+              <div className="mst-mkt-debug-actions">
+                <button type="button" className="mst-mkt-debug-btn" onClick={debugInventoryData}>
+                  🔍 Debug Inventory Data
+                </button>
+                <button type="button" className="mst-mkt-debug-btn mst-mkt-debug-btn--danger" onClick={cleanupInventoryData}>
+                  🧹 Clean Up Inventory
+                </button>
+                <button type="button" className="mst-mkt-debug-btn mst-mkt-debug-btn--success" onClick={forceSyncInventory}>
+                  🔄 Force Sync Inventory
+                </button>
+                <button type="button" className="mst-mkt-debug-btn mst-mkt-debug-btn--danger" onClick={clearPhantomShield}>
+                  🛡️ Clear Phantom Shield
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-      )}
-        </div>
-      </div>
+      </header>
 
       {/* Banner */}
-      <div style={{ 
-        background: 'linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)', 
-        color: 'white', 
-        padding: isMobile ? '0.75rem 0' : '1rem 0',
-        textAlign: 'center',
-        fontWeight: 'bold',
-        position: 'relative',
-        overflow: 'hidden'
-      }}>
-        <div style={{ 
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'url("data:image/svg+xml,%3Csvg width="60" height="60" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg"%3E%3Cg fill="none" fill-rule="evenodd"%3E%3Cg fill="%23ffffff" fill-opacity="0.1"%3E%3Ccircle cx="30" cy="30" r="2"/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")',
-          opacity: 0.3
-        }} />
-        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: isMobile ? '0 1rem' : '0 1.5rem', position: 'relative', zIndex: 1 }}>
-          🔮 MASTERS OF SPACE AND TIME - Epic and Legendary artifacts now available! Limited time only.
+      <div className="mst-mkt-banner">
+        <div className="mst-mkt-container">
+          🔮 <strong>MASTERS OF SPACE AND TIME</strong> · Epic and Legendary artifacts now available! Limited time only.
         </div>
       </div>
 
-      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: isMobile ? '1rem' : '2rem 1.5rem' }}>
-        {/* Mobile Filter Toggle */}
+      <div className="mst-mkt-container mst-mkt-body">
         {isMobile && (
-          <div style={{ marginBottom: '1rem' }}>
-            <button
-              onClick={() => setShowFilters(!showFilters)}
-              style={{
-                width: '100%',
-                padding: '0.75rem 1rem',
-                backgroundColor: 'white',
-                border: '1px solid #d1d5db',
-                borderRadius: '0.5rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                cursor: 'pointer',
-                fontSize: '0.875rem',
-                fontWeight: '500'
-              }}
-            >
-              <span>🔧 Filters</span>
-              <span>{showFilters ? '▲' : '▼'}</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            className="mst-mkt-filter-toggle"
+            onClick={() => setShowFilters(!showFilters)}
+          >
+            <span>🔧 Filters</span>
+            <span>{showFilters ? '▲' : '▼'}</span>
+          </button>
         )}
 
-        <div style={{ 
-          display: 'flex', 
-          flexDirection: isMobile ? 'column' : 'row',
-          gap: isMobile ? '1rem' : '2rem' 
-        }}>
+        <div className="mst-mkt-layout">
           {/* Sidebar Filters */}
-          <div className="category-filters" style={{ 
-            width: isMobile ? '100%' : '250px', 
-            flexShrink: 0,
-            display: isMobile && !showFilters ? 'none' : 'block'
-          }}>
-            <div style={{ 
-              backgroundColor: 'white', 
-              borderRadius: '0.75rem', 
-              padding: isMobile ? '1rem' : '1.5rem',
-              boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
-              border: '1px solid #e5e7eb'
-            }}>
-              {/* Category Filter */}
-              <div style={{ marginBottom: '2rem' }}>
-                <h3 style={{ 
-                  fontSize: '1.125rem', 
-                  fontWeight: 'bold', 
-                  marginBottom: '1rem',
-                  color: '#374151'
-                }}>
-                  Category
-                </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <aside className={`category-filters mst-mkt-sidebar${isMobile && !showFilters ? ' is-collapsed' : ''}`}>
+            <div className="mst-mkt-filters">
+              <div className="mst-mkt-filter-group">
+                <h3 className="mst-mkt-filter-title">Category</h3>
+                <div className="mst-mkt-filter-options">
                   {categories.map(category => (
-                    <label key={category.id} style={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      gap: '0.5rem',
-                      cursor: 'pointer',
-                      padding: '0.5rem',
-                      borderRadius: '0.375rem',
-                      backgroundColor: selectedCategory === category.id ? '#f3f4f6' : 'transparent'
-                    }}>
+                    <label
+                      key={category.id}
+                      className={`mst-mkt-filter-option${selectedCategory === category.id ? ' is-active' : ''}`}
+                    >
                       <input
                         type="radio"
                         name="category"
                         value={category.id}
                         checked={selectedCategory === category.id}
                         onChange={(e) => setSelectedCategory(e.target.value)}
-                        style={{ margin: 0 }}
                       />
-                      <span style={{ fontSize: '1rem' }}>{category.icon}</span>
-                      <span style={{ fontSize: '0.875rem' }}>{category.name}</span>
+                      <span className="mst-mkt-filter-icon" aria-hidden>{category.icon}</span>
+                      <span>{category.name}</span>
                     </label>
                   ))}
                 </div>
               </div>
 
-              {/* Rarity Filter */}
-              <div>
-                <h3 style={{ 
-                  fontSize: '1.125rem', 
-                  fontWeight: 'bold', 
-                  marginBottom: '1rem',
-                  color: '#374151'
-                }}>
-                  Rarity
-                </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <div className="mst-mkt-filter-group">
+                <h3 className="mst-mkt-filter-title">Rarity</h3>
+                <div className="mst-mkt-filter-options">
                   {rarities.map(rarity => (
-                    <label key={rarity.id} style={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      gap: '0.5rem',
-                      cursor: 'pointer',
-                      padding: '0.5rem',
-                      borderRadius: '0.375rem',
-                      backgroundColor: selectedRarity === rarity.id ? '#f3f4f6' : 'transparent'
-                    }}>
+                    <label
+                      key={rarity.id}
+                      className={`mst-mkt-filter-option mst-mkt-rarity--${rarity.id}${selectedRarity === rarity.id ? ' is-active' : ''}`}
+                    >
                       <input
                         type="radio"
                         name="rarity"
                         value={rarity.id}
                         checked={selectedRarity === rarity.id}
                         onChange={(e) => setSelectedRarity(e.target.value)}
-                        style={{ margin: 0 }}
                       />
-                      <div style={{ 
-                        width: '12px', 
-                        height: '12px', 
-                        borderRadius: '50%', 
-                        backgroundColor: rarity.color 
-                      }} />
-                      <span style={{ fontSize: '0.875rem' }}>{rarity.name}</span>
+                      <span className="mst-mkt-dot" aria-hidden />
+                      <span>{rarity.name}</span>
                     </label>
                   ))}
                 </div>
               </div>
             </div>
-          </div>
+          </aside>
 
           {/* Main Content */}
-          <div style={{ flex: 1 }}>
-            <div style={{ 
-              display: 'flex', 
-              flexDirection: isMobile ? 'column' : 'row',
-              justifyContent: 'space-between', 
-              alignItems: isMobile ? 'stretch' : 'center',
-              marginBottom: '1.5rem',
-              gap: isMobile ? '0.5rem' : '0'
-            }}>
-              <h2 style={{ 
-                fontSize: isMobile ? '1.25rem' : '1.5rem', 
-                fontWeight: 'bold', 
-                color: '#1f2937',
-                margin: 0
-              }}>
-                Artifacts ({filteredArtifacts.length})
+          <main className="mst-mkt-main">
+            <div className="mst-mkt-grid-head">
+              <h2 className="mst-mkt-grid-title">
+                Artifacts <span>({filteredArtifacts.length})</span>
               </h2>
-              <div style={{ 
-                fontSize: '0.875rem', 
-                color: '#6b7280',
-                textAlign: isMobile ? 'left' : 'right'
-              }}>
+              <div className="mst-mkt-grid-count">
                 Showing {filteredArtifacts.length} of {storeItems.length} artifacts
               </div>
             </div>
 
-            {/* Product Grid */}
-            <div style={{ 
-              display: 'grid', 
-              gridTemplateColumns: isMobile 
-                ? 'repeat(auto-fill, minmax(280px, 1fr))' 
-                : 'repeat(auto-fill, minmax(280px, 1fr))', 
-              gap: isMobile ? '1rem' : '1.5rem' 
-            }}>
+            <div className="mst-mkt-grid">
               {/* Want more PP? Card - First Item */}
-              <div 
+              <div
                 key="want-more-pp"
-                className="artifact-card" 
-                style={{ 
-                  background: 'linear-gradient(135deg, #fef3c7 0%, #fbbf24 100%)',
-                  borderRadius: '1rem',
-                  overflow: 'hidden',
-                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-                  border: '2px solid #f59e0b',
-                  transition: 'all 0.3s ease-in-out',
-                  cursor: 'pointer',
-                  position: 'relative'
-                }}
-                onMouseEnter={(e) => {
-                  if (!isMobile) {
-                    e.currentTarget.style.transform = 'translateY(-4px) scale(1.02)';
-                    e.currentTarget.style.boxShadow = '0 10px 25px -3px rgba(251, 191, 36, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.05)';
-                    e.currentTarget.style.borderColor = '#f59e0b';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isMobile) {
-                    e.currentTarget.style.transform = 'translateY(0) scale(1)';
-                    e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)';
-                    e.currentTarget.style.borderColor = '#f59e0b';
-                  }
-                }}
+                className="artifact-card mst-mkt-card mst-mkt-card--info"
                 onClick={() => setShowWaysToEarnPpModal(true)}
               >
-                {/* Glow effect */}
-                <div style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  background: 'radial-gradient(circle at center, rgba(251, 191, 36, 0.3) 0%, transparent 70%)',
-                  opacity: 0.6,
-                  pointerEvents: 'none'
-                }} />
-                
-                {/* Icon/Image */}
-                <div style={{ position: 'relative', background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)', padding: '2rem', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                  <div style={{ fontSize: '4rem' }}>💰</div>
+                <div className="mst-mkt-info-media">
+                  <span aria-hidden>💰</span>
                 </div>
-                
-                {/* Content */}
-                <div style={{ padding: '1.5rem', textAlign: 'center' }}>
-                  <div style={{ 
-                    position: 'absolute', 
-                    top: '1rem', 
-                    right: '1rem', 
-                    background: '#f59e0b', 
-                    color: 'white', 
-                    padding: '0.25rem 0.75rem', 
-                    borderRadius: '0.5rem', 
-                    fontSize: '0.75rem', 
-                    fontWeight: 'bold' 
-                  }}>
-                    INFO
-                  </div>
-                  <h3 style={{ 
-                    fontSize: '1.25rem', 
-                    fontWeight: 'bold', 
-                    marginBottom: '0.5rem', 
-                    color: '#1f2937' 
-                  }}>
-                    Want more PP?
-                  </h3>
-                  <p style={{ 
-                    fontSize: '0.875rem', 
-                    color: '#6b7280', 
-                    marginBottom: '1rem',
-                    lineHeight: '1.5'
-                  }}>
+                <span className="mst-mkt-badge mst-mkt-badge--info">Info</span>
+                <div className="mst-mkt-card-body">
+                  <h3 className="mst-mkt-card-title">Want more PP?</h3>
+                  <p className="mst-mkt-card-desc">
                     Tap to open the full list of ways to earn PP. Use the Daily Challenges row for where to find daily missions on Home.
                   </p>
                   <button
                     type="button"
-                    style={{
-                      width: '100%',
-                      background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '0.5rem',
-                      padding: '0.75rem 1rem',
-                      fontSize: '1rem',
-                      fontWeight: 'bold',
-                      cursor: 'pointer',
-                      boxShadow: '0 2px 8px rgba(217, 119, 6, 0.3)',
-                      transition: 'all 0.2s'
-                    }}
+                    className="mst-mkt-btn mst-mkt-btn--buy"
                     onClick={(e) => {
                       e.stopPropagation();
                       setShowWaysToEarnPpModal(true);
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.transform = 'translateY(-2px)';
-                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(217, 119, 6, 0.4)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.transform = 'translateY(0)';
-                      e.currentTarget.style.boxShadow = '0 2px 8px rgba(217, 119, 6, 0.3)';
                     }}
                   >
                     Learn More
@@ -1951,7 +1621,7 @@ const Marketplace = () => {
                 const equippableOwned = isEquippableListing && !!equippableStoreOwned[artifact.id];
                 const purchased = equippableOwned || (!isEquippableListing && artifactCount > 0);
                 const tmCost = Math.max(0, Math.floor(Number(artifact.truthMetalPrice) || 0));
-                const isAtLimit = (artifact.name === '+1 UXP Credit' || artifact.name === '+2 UXP Credit' || artifact.name === '+4 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && artifactCount >= 2;
+                const isAtLimit = isLimitedToTwo(artifact.name) && artifactCount >= 2;
                 // Shield limit: check both artifact count and active overshield
                 const hasActiveOvershield = artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0;
                 const isShieldAtLimit = artifact.name === 'Shield' && (artifactCount >= 1 || hasActiveOvershield);
@@ -1962,295 +1632,93 @@ const Marketplace = () => {
                   isEquippableListing && artifact.equippableArtifactId?.trim()
                     ? getEquippablePerkDisplayRows(artifact.equippableArtifactId, equippableCatalogMerged)
                     : [];
+                const shieldActive = artifact.name === 'Shield' && !!vault && (vault.overshield || 0) > 0;
+                const atAnyLimit = equippableAtLimit || isAtLimit || isShieldAtLimit;
+                const purchaseVariant = atAnyLimit
+                  ? 'mst-mkt-btn--muted'
+                  : insufficientPp
+                    ? 'mst-mkt-btn--no-pp'
+                    : insufficientTm
+                      ? 'mst-mkt-btn--no-tm'
+                      : 'mst-mkt-btn--buy';
                 return (
-                  <div key={artifact.id} className="artifact-card" style={{ 
-                    background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
-                    borderRadius: '1rem',
-                    overflow: 'hidden',
-                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-                    border: `2px solid ${getRarityColor(artifact.rarity)}20`,
-                    transition: 'all 0.3s ease-in-out',
-                    cursor: purchased ? 'default' : 'pointer',
-                    opacity: purchased ? 0.7 : 1,
-                    position: 'relative'
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!purchased && !isMobile) {
-                      e.currentTarget.style.transform = 'translateY(-4px) scale(1.02)';
-                      e.currentTarget.style.boxShadow = `0 10px 25px -3px ${getRarityColor(artifact.rarity)}40, 0 4px 6px -2px rgba(0, 0, 0, 0.05)`;
-                      e.currentTarget.style.borderColor = getRarityColor(artifact.rarity);
-                    }
-                    setHoveredArtifactId(artifact.id);
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isMobile) {
-                      e.currentTarget.style.transform = 'translateY(0) scale(1)';
-                      e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)';
-                      e.currentTarget.style.borderColor = `${getRarityColor(artifact.rarity)}20`;
-                    }
-                    setHoveredArtifactId(null);
-                  }}
+                  <div
+                    key={artifact.id}
+                    className={`artifact-card mst-mkt-card mst-mkt-rarity--${artifact.rarity}${purchased ? ' is-owned' : ''}`}
+                    onMouseEnter={() => setHoveredArtifactId(artifact.id)}
+                    onMouseLeave={() => setHoveredArtifactId(null)}
                   >
-                    {/* Mystical glow effect */}
-                    <div style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      background: `radial-gradient(circle at center, ${getRarityColor(artifact.rarity)}20 0%, transparent 70%)`,
-                      opacity: 0.6,
-                      pointerEvents: 'none'
-                    }} />
-                    
-                    {/* Product Image */}
-                    <div style={{ position: 'relative' }}>
-                      <img 
-                        src={artifact.image} 
-                        alt={artifact.name} 
-                        style={{ 
-                          width: '100%', 
-                          height: isMobile ? '180px' : '200px', 
-                          objectFit: 'cover',
-                          filter: 'brightness(1.1) contrast(1.1)'
-                        }} 
-                      />
+                    <div className="mst-mkt-card-media">
+                      <img src={artifact.image} alt={artifact.name} />
                       {artifact.discount && (
-                        <div style={{
-                          position: 'absolute',
-                          top: '0.5rem',
-                          left: '0.5rem',
-                          backgroundColor: '#ec4899',
-                          color: 'white',
-                          padding: '0.25rem 0.5rem',
-                          borderRadius: '0.25rem',
-                          fontSize: '0.75rem',
-                          fontWeight: 'bold'
-                        }}>
-                          -{artifact.discount}%
-                        </div>
+                        <span className="mst-mkt-badge mst-mkt-badge--discount">-{artifact.discount}%</span>
                       )}
-                      <div style={{
-                        position: 'absolute',
-                        top: '0.5rem',
-                        right: '0.5rem',
-                        backgroundColor: getRarityColor(artifact.rarity),
-                        color: 'white',
-                        padding: '0.25rem 0.5rem',
-                        borderRadius: '0.25rem',
-                        fontSize: '0.75rem',
-                        fontWeight: 'bold'
-                      }}>
-                        {artifact.rarity.toUpperCase()}
-                      </div>
+                      <span className="mst-mkt-badge mst-mkt-badge--rarity">{artifact.rarity}</span>
                       {artifact.id === 'instant-a' && hoveredArtifactId === 'instant-a' && (
-                        <div style={{
-                          position: 'absolute',
-                          bottom: '0',
-                          left: '0',
-                          right: '0',
-                          background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
-                          color: 'white',
-                          padding: '0.5rem',
-                          textAlign: 'center',
-                          fontSize: '0.75rem',
-                          fontWeight: 'bold',
-                          boxShadow: '0 -2px 8px rgba(0, 0, 0, 0.3)',
-                          zIndex: 10,
-                          transition: 'opacity 0.3s ease-out, transform 0.3s ease-out',
-                          opacity: 1,
-                          transform: 'translateY(0)'
-                        }}>
-                          ⚠️ Limited to One User per Class
-                        </div>
+                        <div className="mst-mkt-card-warning">⚠️ Limited to One User per Class</div>
                       )}
                     </div>
 
-                    {/* Product Info */}
-                    <div style={{ padding: isMobile ? '0.75rem' : '1rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                        <span style={{ fontSize: isMobile ? '1.25rem' : '1.5rem' }}>{artifact.icon}</span>
-                        <h3 style={{ 
-                          fontSize: isMobile ? '1rem' : '1.125rem', 
-                          fontWeight: 'bold',
-                          color: '#1f2937',
-                          margin: 0
-                        }}>
-                          {artifact.name}
-                        </h3>
+                    <div className="mst-mkt-card-body">
+                      <div className="mst-mkt-card-title-row">
+                        <span className="mst-mkt-card-icon" aria-hidden>{artifact.icon}</span>
+                        <h3 className="mst-mkt-card-title">{artifact.name}</h3>
                       </div>
-                      
-                      <p style={{ 
-                        fontSize: '0.875rem', 
-                        color: '#6b7280',
-                        marginBottom: equippablePerkLines.length > 0 ? '0.65rem' : '1rem',
-                        lineHeight: '1.4'
-                      }}>
-                        {artifact.description}
-                      </p>
+
+                      <p className="mst-mkt-card-desc">{artifact.description}</p>
 
                       {equippablePerkLines.length > 0 && (
-                        <div
-                          style={{
-                            marginBottom: '0.85rem',
-                            padding: '0.5rem 0.65rem',
-                            background: 'linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%)',
-                            borderRadius: '0.5rem',
-                            border: '1px solid #c7d2fe',
-                          }}
-                        >
-                          <div
-                            style={{
-                              fontSize: '0.7rem',
-                              fontWeight: 700,
-                              color: '#4338ca',
-                              textTransform: 'uppercase',
-                              letterSpacing: '0.04em',
-                              marginBottom: '0.35rem',
-                            }}
-                          >
-                            Perks when equipped
-                          </div>
-                          <ul
-                            style={{
-                              margin: 0,
-                              paddingLeft: '1.1rem',
-                              color: '#374151',
-                              fontSize: '0.8125rem',
-                              lineHeight: 1.45,
-                            }}
-                          >
+                        <div className="mst-mkt-perks">
+                          <div className="mst-mkt-perks-title">Perks when equipped</div>
+                          <ul>
                             {equippablePerkLines.map((line, idx) => (
-                              <li key={idx} style={{ marginBottom: idx === equippablePerkLines.length - 1 ? 0 : '0.35rem' }}>
-                                <strong style={{ color: '#1f2937' }}>{line.label}</strong>
-                                {line.description ? (
-                                  <span style={{ color: '#6b7280' }}> — {line.description}</span>
-                                ) : null}
+                              <li key={idx}>
+                                <strong>{line.label}</strong>
+                                {line.description ? <span> — {line.description}</span> : null}
                               </li>
                             ))}
                           </ul>
                         </div>
                       )}
 
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <div>
-                          {artifact.originalPrice ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.25rem' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <span style={{ 
-                                  fontSize: isMobile ? '1.125rem' : '1.25rem', 
-                                  fontWeight: 'bold',
-                                  color: '#1f2937'
-                                }}>
-                                  {artifact.price} PP
-                                </span>
-                                <span style={{ 
-                                  fontSize: '0.875rem', 
-                                  color: '#6b7280',
-                                  textDecoration: 'line-through'
-                                }}>
-                                  {artifact.originalPrice} PP
-                                </span>
-                              </div>
-                              {tmCost > 0 && (
-                                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#4338ca' }}>
-                                  + {tmCost} 💎 Truth Metal
-                                </span>
-                              )}
-                            </div>
-                          ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.2rem' }}>
-                              <span style={{ 
-                                fontSize: isMobile ? '1.125rem' : '1.25rem', 
-                                fontWeight: 'bold',
-                                color: '#1f2937'
-                              }}>
-                                {artifact.price} PP
-                              </span>
-                              {tmCost > 0 && (
-                                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#4338ca' }}>
-                                  + {tmCost} 💎 Truth Metal
-                                </span>
-                              )}
-                            </div>
+                      <div className="mst-mkt-card-foot">
+                        <div className="mst-mkt-price">
+                          <div className="mst-mkt-price-row">
+                            <span className="mst-mkt-price-pp">{artifact.price} PP</span>
+                            {artifact.originalPrice ? (
+                              <span className="mst-mkt-price-was">{artifact.originalPrice} PP</span>
+                            ) : null}
+                          </div>
+                          {tmCost > 0 && (
+                            <span className="mst-mkt-price-tm">+ {tmCost} 💎 Truth Metal</span>
                           )}
                         </div>
 
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'flex-end' }}>
+                        <div className="mst-mkt-actions">
                           {purchased && (
-                            <div style={{ 
-                              fontSize: '0.75rem', 
-                              color: '#6b7280',
-                              textAlign: 'right'
-                            }}>
+                            <div className="mst-mkt-owned-note">
                               {equippableOwned ? 'Owned (equip on Artifacts page)' : `Owned: ${artifactCount}`}
-                              {(artifact.name === '+1 UXP Credit' || artifact.name === '+2 UXP Credit' || artifact.name === '+4 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && ` (Max: 2)`}
+                              {isLimitedToTwo(artifact.name) && ` (Max: 2)`}
                               {artifact.name === 'Shield' && ` (Max: 1)`}
                             </div>
                           )}
-                          <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <div className="mst-mkt-btn-row">
                             {purchased && !isEquippableListing && (
                               <button
+                                type="button"
+                                className="mst-mkt-btn mst-mkt-btn--use"
                                 onClick={() => handleUseArtifact(artifact.name)}
-                                disabled={artifact.name === 'Shield' && vault ? (vault.overshield || 0) > 0 : false}
-                                style={{
-                                  backgroundColor: artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0 ? '#6b7280' : '#f59e0b',
-                                  color: 'white',
-                                  border: 'none',
-                                  padding: isMobile ? '0.375rem 0.5rem' : '0.375rem 0.75rem',
-                                  borderRadius: '0.375rem',
-                                  fontSize: isMobile ? '0.625rem' : '0.75rem',
-                                  fontWeight: '500',
-                                  cursor: artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0 ? 'not-allowed' : 'pointer',
-                                  transition: 'all 0.2s',
-                                  minWidth: isMobile ? '60px' : 'auto',
-                                  minHeight: isMobile ? '28px' : 'auto',
-                                  opacity: artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0 ? 0.6 : 1
-                                }}
-                                onMouseEnter={e => {
-                                  if (!isMobile && !(artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0)) {
-                                    e.currentTarget.style.transform = 'translateY(-1px)';
-                                    e.currentTarget.style.backgroundColor = '#d97706';
-                                  }
-                                }}
-                                onMouseLeave={e => {
-                                  if (!isMobile) {
-                                    e.currentTarget.style.transform = 'translateY(0)';
-                                    e.currentTarget.style.backgroundColor = artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0 ? '#6b7280' : '#f59e0b';
-                                  }
-                                }}
-                                title={artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0 ? 'You already have an active overshield!' : ''}
+                                disabled={shieldActive}
+                                title={shieldActive ? 'You already have an active overshield!' : ''}
                               >
-                                {artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0 ? 'Active' : 'Used'}
+                                {shieldActive ? 'Active' : 'Used'}
                               </button>
                             )}
                             <button
+                              type="button"
+                              className={`mst-mkt-btn ${purchaseVariant}`}
                               onClick={() => handlePurchase(artifact)}
-                              disabled={equippableAtLimit || isAtLimit || isShieldAtLimit || insufficientPp || insufficientTm}
-                              style={{
-                                backgroundColor: (equippableAtLimit || isAtLimit || isShieldAtLimit) ? '#6b7280' : insufficientPp ? '#ef4444' : insufficientTm ? '#6366f1' : '#10b981',
-                                color: 'white',
-                                border: 'none',
-                                padding: isMobile ? '0.5rem 0.75rem' : '0.5rem 1rem',
-                                borderRadius: '0.375rem',
-                                fontSize: isMobile ? '0.75rem' : '0.875rem',
-                                fontWeight: '500',
-                                cursor: (equippableAtLimit || isAtLimit || isShieldAtLimit || insufficientPp || insufficientTm) ? 'not-allowed' : 'pointer',
-                                opacity: (equippableAtLimit || isAtLimit || isShieldAtLimit || insufficientPp || insufficientTm) ? 0.6 : 1,
-                                transition: 'all 0.2s',
-                                minWidth: isMobile ? '80px' : 'auto',
-                                minHeight: isMobile ? '36px' : 'auto'
-                              }}
-                              onMouseEnter={e => {
-                                if (!equippableAtLimit && !isAtLimit && !isShieldAtLimit && !insufficientPp && !insufficientTm && !isMobile) {
-                                  e.currentTarget.style.transform = 'translateY(-1px)';
-                                }
-                              }}
-                              onMouseLeave={e => {
-                                if (!isMobile) {
-                                  e.currentTarget.style.transform = 'translateY(0)';
-                                }
-                              }}
+                              disabled={atAnyLimit || insufficientPp || insufficientTm}
                             >
                               {equippableAtLimit ? 'Owned' : isAtLimit ? 'At Limit' : isShieldAtLimit ? (hasActiveOvershield ? 'Active' : 'Owned') : insufficientPp ? 'Insufficient PP' : insufficientTm ? 'Need Truth Metal' : 'Purchase'}
                             </button>
@@ -2263,19 +1731,14 @@ const Marketplace = () => {
               })}
             </div>
 
-            {/* No Results */}
             {filteredArtifacts.length === 0 && (
-              <div style={{
-                textAlign: 'center',
-                padding: '3rem 1rem',
-                color: '#6b7280'
-              }}>
-                <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🔍</div>
-                <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>No artifacts found</h3>
+              <div className="mst-mkt-empty">
+                <div className="mst-mkt-empty-icon" aria-hidden>🔍</div>
+                <h3>No artifacts found</h3>
                 <p>Try adjusting your search terms or filters.</p>
               </div>
             )}
-          </div>
+          </main>
         </div>
       </div>
 
