@@ -582,6 +582,8 @@ export async function joinSession(
   }
 }
 
+const END_SESSION_LOCK_MS = 3 * 60 * 1000;
+
 /**
  * End a session
  */
@@ -623,6 +625,27 @@ export async function endSession(sessionId: string, hostUid: string, userEmail?:
       return false;
     }
     
+    // Claim the end atomically: finalization pays every player, so a double click or a second host
+    // ending the same room while the first finalize is still running must not pay twice.
+    const endLock = await runTransaction(db, async (tx) => {
+      const snap = await tx.get(sessionRef);
+      if (!snap.exists()) return 'missing' as const;
+      const d = snap.data() as { status?: string; endingLockMs?: number };
+      if (d.status === 'ended') return 'ended' as const;
+      const lockMs = Number(d.endingLockMs) || 0;
+      if (lockMs > 0 && Date.now() - lockMs < END_SESSION_LOCK_MS) return 'busy' as const;
+      tx.update(sessionRef, { endingLockMs: Date.now(), endingLockBy: hostUid });
+      return 'acquired' as const;
+    });
+    if (endLock === 'missing') return false;
+    if (endLock !== 'acquired') {
+      mstLiveLog('PLACEMENT', `endSession no-op — ${endLock === 'ended' ? 'already ended' : 'another end is in progress'}`, {
+        eventId: sessionId,
+        userId: hostUid,
+      });
+      return true;
+    }
+
     // Finalize session stats before ending
     const playerIds = sessionData.players.map((p: SessionPlayer) => p.userId);
     const summary = await finalizeSessionStats(sessionId, playerIds);

@@ -260,8 +260,10 @@ export async function trackDamage(
 }
 
 /**
- * Track an elimination.
- * Eliminator earns LIVE_EVENT_PP_BASE_PER_ELIMINATION (500) + the eliminated player's vault currentPP.
+ * Track an elimination. Counts at most once per elimination (a revive clears `isEliminated`).
+ * Eliminator earns LIVE_EVENT_PP_BASE_PER_ELIMINATION (500, Flow multiplier applies) plus the eliminated
+ * player's remaining in-event PP, all on the session row; {@link finalizeSessionStats} pays the row gain
+ * to the account at session end.
  */
 export async function trackElimination(
   sessionId: string,
@@ -271,48 +273,37 @@ export async function trackElimination(
   try {
     const eliminatorStatsRef = doc(db, 'inSessionRooms', sessionId, 'stats', eliminatorId);
     const eliminatedStatsRef = doc(db, 'inSessionRooms', sessionId, 'stats', eliminatedId);
-
-    // PP earned = base + eliminated player's vault PP (read at elimination time)
-    let eliminatedVaultPP = 0;
-    try {
-      const vaultRef = doc(db, 'vaults', eliminatedId);
-      const vaultSnap = await getDoc(vaultRef);
-      if (vaultSnap.exists()) {
-        eliminatedVaultPP = vaultSnap.data()?.currentPP ?? 0;
-      }
-    } catch (vaultErr) {
-      debugError('inSessionStats', `Could not read vault for eliminated player ${eliminatedId}`, vaultErr);
-    }
-    let ppFromElimination = LIVE_EVENT_PP_BASE_PER_ELIMINATION + Math.max(0, eliminatedVaultPP);
-
     const sessionRef = doc(db, 'inSessionRooms', sessionId);
+
+    let bounty = LIVE_EVENT_PP_BASE_PER_ELIMINATION;
     const sessionDocPre = await getDoc(sessionRef);
     if (sessionDocPre.exists()) {
       const players = (sessionDocPre.data()?.players || []) as Array<Record<string, unknown>>;
       const row = players.find((p) => p?.userId === eliminatorId);
-      const flow = parseFlowStateFromPlayerRow(row);
-      ppFromElimination = applyFlowPpRewardMultiplier(ppFromElimination, flow);
+      bounty = applyFlowPpRewardMultiplier(bounty, parseFlowStateFromPlayerRow(row));
     }
 
-    await runTransaction(db, async (transaction) => {
-      // Increment eliminator's elimination count and add PP (base + vault).
-      // Do NOT mark vaultPpGrantedMidSession here — only after account credit succeeds,
-      // otherwise a failed host write would steal the payout from session-end claim.
+    // Firestore transactions require every read before any write.
+    const counted = await runTransaction(db, async (transaction) => {
       const eliminatorStatsDoc = await transaction.get(eliminatorStatsRef);
+      const eliminatedStatsDoc = await transaction.get(eliminatedStatsRef);
+      if (eliminatedStatsDoc.exists() && (eliminatedStatsDoc.data() as SessionStats).isEliminated) {
+        return false;
+      }
+
       if (eliminatorStatsDoc.exists()) {
         const eliminatorStats = eliminatorStatsDoc.data() as SessionStats;
         transaction.update(eliminatorStatsRef, {
           eliminations: (eliminatorStats.eliminations || 0) + 1,
-          ppEarned: (eliminatorStats.ppEarned || 0) + ppFromElimination,
+          ppEarned: (eliminatorStats.ppEarned || 0) + bounty,
         });
       } else {
-        // Ensure elim credit is never silently dropped if stats weren't created yet
         transaction.set(
           eliminatorStatsRef,
           {
             playerId: eliminatorId,
             eliminations: 1,
-            ppEarned: ppFromElimination,
+            ppEarned: bounty,
             vaultPpGrantedMidSession: 0,
             participationEarned: 0,
             movesEarned: 0,
@@ -322,8 +313,6 @@ export async function trackElimination(
         );
       }
 
-      // Mark eliminated player
-      const eliminatedStatsDoc = await transaction.get(eliminatedStatsRef);
       if (eliminatedStatsDoc.exists()) {
         transaction.update(eliminatedStatsRef, {
           isEliminated: true,
@@ -341,78 +330,62 @@ export async function trackElimination(
           { merge: true }
         );
       }
+      return true;
     });
 
-    // Grant PP to eliminator's account (students, users, vault) so they actually receive +500 (and vault PP)
-    try {
-      await creditPPToStudentUserVault(eliminatorId, ppFromElimination, 'Live Event elimination bounty');
-      await addVaultPpGrantedMidSessionStat(sessionId, eliminatorId, ppFromElimination);
-
-      void trackPlayerAction(eliminatorId, 'EARN_PP', ppFromElimination).catch((err) =>
-        console.error('[inSessionStats] earn_pp daily challenge after elimination:', err)
-      );
-      void trackPlayerAction(eliminatorId, 'DEFEAT_ENEMY', 1).catch((err) =>
-        console.error('[inSessionStats] defeat_enemies daily challenge after elimination:', err)
-      );
-
-      // Update session players: credit eliminator, strip eliminated down to siege floor (or 0).
-      await runTransaction(db, async (tx) => {
-        const sessionSnap = await tx.get(sessionRef);
-        if (!sessionSnap.exists()) return;
-        const players = [...(sessionSnap.data()?.players || [])] as Array<Record<string, unknown>>;
-        const eliminatorIndex = players.findIndex((p) => p?.userId === eliminatorId);
-        const eliminatedIndex = players.findIndex((p) => p?.userId === eliminatedId);
-        if (eliminatorIndex < 0) return;
-
-        let leftoverOnTarget = 0;
-        if (eliminatedIndex >= 0) {
-          const elimRow = { ...players[eliminatedIndex] };
-          const isSiege =
-            elimRow.participationMode === 'offline' || elimRow.joinedViaSiege === true;
-          const startPp = Math.max(
-            0,
-            Math.floor(Number(elimRow.liveEventStartingPP ?? elimRow.powerPoints) || 0)
-          );
-          const floor = isSiege ? computeSiegeProtectionFloor(startPp) : 0;
-          const before = Math.max(0, Math.floor(Number(elimRow.powerPoints) || 0));
-          leftoverOnTarget = Math.max(0, before - floor);
-          elimRow.powerPoints = floor;
-          elimRow.eliminated = true;
-          elimRow.eliminatedBy = eliminatorId;
-          players[eliminatedIndex] = elimRow;
-        }
-
-        const currentPP = Number(players[eliminatorIndex].powerPoints) || 0;
-        // Session row: base elimination bounty + any leftover target PP not yet moved by applyInSessionMove.
-        // Full vault bounty is credited to the eliminator's account via creditPPToStudentUserVault above.
-        players[eliminatorIndex] = {
-          ...players[eliminatorIndex],
-          powerPoints: currentPP + LIVE_EVENT_PP_BASE_PER_ELIMINATION + leftoverOnTarget,
-        };
-        tx.update(sessionRef, { players, updatedAt: serverTimestamp() });
-      });
-    } catch (grantError) {
-      debugError(
-        'inSessionStats',
-        `Error granting mid-session PP to eliminator ${eliminatorId} — leaving for session-end self-claim`,
-        grantError
-      );
-      try {
-        const { registerLiveEventPendingClaim } = await import('./liveEventPendingClaimsService');
-        await registerLiveEventPendingClaim(sessionId, eliminatorId);
-      } catch {
-        /* non-fatal */
-      }
+    if (!counted) {
+      debug('inSessionStats', `Elimination of ${eliminatedId} already counted — no second bounty`);
+      return false;
     }
 
-    debug('inSessionStats', `Tracked elimination: ${eliminatorId} eliminated ${eliminatedId} (+${ppFromElimination} PP = 500 + ${eliminatedVaultPP} vault)`);
+    void trackPlayerAction(eliminatorId, 'DEFEAT_ENEMY', 1).catch((err) =>
+      console.error('[inSessionStats] defeat_enemies daily challenge after elimination:', err)
+    );
+
+    // Session row: bounty + any target PP not yet moved by applyInSessionMove; strip target to siege floor (or 0).
+    let leftoverOnTarget = 0;
+    await runTransaction(db, async (tx) => {
+      const sessionSnap = await tx.get(sessionRef);
+      if (!sessionSnap.exists()) return;
+      const players = [...(sessionSnap.data()?.players || [])] as Array<Record<string, unknown>>;
+      const eliminatorIndex = players.findIndex((p) => p?.userId === eliminatorId);
+      const eliminatedIndex = players.findIndex((p) => p?.userId === eliminatedId);
+      if (eliminatorIndex < 0) return;
+
+      leftoverOnTarget = 0;
+      if (eliminatedIndex >= 0) {
+        const elimRow = { ...players[eliminatedIndex] };
+        const isSiege =
+          elimRow.participationMode === 'offline' || elimRow.joinedViaSiege === true;
+        const startPp = Math.max(
+          0,
+          Math.floor(Number(elimRow.liveEventStartingPP ?? elimRow.powerPoints) || 0)
+        );
+        const floor = isSiege ? computeSiegeProtectionFloor(startPp) : 0;
+        const before = Math.max(0, Math.floor(Number(elimRow.powerPoints) || 0));
+        leftoverOnTarget = Math.max(0, before - floor);
+        elimRow.powerPoints = floor;
+        elimRow.eliminated = true;
+        elimRow.eliminatedBy = eliminatorId;
+        players[eliminatedIndex] = elimRow;
+      }
+
+      const currentPP = Number(players[eliminatorIndex].powerPoints) || 0;
+      players[eliminatorIndex] = {
+        ...players[eliminatorIndex],
+        powerPoints: currentPP + bounty + leftoverOnTarget,
+      };
+      tx.update(sessionRef, { players, updatedAt: serverTimestamp() });
+    });
+
+    debug('inSessionStats', `Tracked elimination: ${eliminatorId} eliminated ${eliminatedId} (+${bounty} bounty + ${leftoverOnTarget} leftover in-event PP)`);
     try {
       const { mstLiveLog } = await import('./mstLiveDebug');
       mstLiveLog('ELIMINATION', 'Elimination credited', {
         eventId: sessionId,
         userId: eliminatorId,
         eliminatedUid: eliminatedId,
-        ppFromElimination,
+        ppFromElimination: bounty + leftoverOnTarget,
       });
     } catch {
       /* ignore */
@@ -593,6 +566,13 @@ async function applyEliminatedPlayerPointPenalty(
 
   for (const [uid, stats] of Object.entries(statsMap)) {
     if (!stats.isEliminated) continue;
+    if (stats.eliminationPenaltyApplied) {
+      // Already deducted by an earlier finalize; only re-derive the halved totals for this summary.
+      out[uid] = Math.floor((out[uid] ?? 0) * frac);
+      const net = Math.floor((stats.netPPGained ?? 0) * frac);
+      statsMap[uid] = { ...stats, netPPGained: net, endingPP: Math.max(0, (stats.startingPP ?? 0) + net) };
+      continue;
+    }
 
     const quizPP = out[uid] ?? 0;
     const pe = stats.ppEarned ?? 0;
@@ -609,32 +589,39 @@ async function applyEliminatedPlayerPointPenalty(
     out[uid] = newQuiz;
 
     const deductQuiz = quizPP - newQuiz;
-    const deductElim = elimPP - newElimPP;
+    // Elimination PP still on the session row is halved through netPPGained; only PP already credited
+    // to the account mid-session needs an account deduction.
+    const deductElim = Math.min(elimPP - newElimPP, Math.max(0, stats.vaultPpGrantedMidSession ?? 0));
     const totalDeduct = deductQuiz + deductElim;
 
     statsMap[uid] = {
       ...stats,
       ppEarned: newPe,
       netPPGained: newNet,
-      endingPP: newEndingPP
+      endingPP: newEndingPP,
+      eliminationPenaltyApplied: true,
     };
 
-    if (totalDeduct > 0) {
-      await deductPPFromStudentUserVault(uid, totalDeduct);
-    }
-
+    // Mark first so a concurrent finalize cannot halve and deduct a second time.
+    let claimed = false;
     try {
       const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', uid);
-      const statsDoc = await getDoc(statsRef);
-      if (statsDoc.exists()) {
-        await updateDoc(statsRef, {
-          ppEarned: newPe,
-          netPPGained: newNet,
-          endingPP: newEndingPP
-        });
-      }
+      claimed = await runTransaction(db, async (tx) => {
+        const snap = await tx.get(statsRef);
+        if (snap.exists() && (snap.data() as SessionStats).eliminationPenaltyApplied) return false;
+        tx.set(
+          statsRef,
+          { ppEarned: newPe, netPPGained: newNet, endingPP: newEndingPP, eliminationPenaltyApplied: true },
+          { merge: true }
+        );
+        return true;
+      });
     } catch (e) {
       debugError('inSessionStats', `Failed to persist penalty stats for ${uid}`, e);
+    }
+
+    if (claimed && totalDeduct > 0) {
+      await deductPPFromStudentUserVault(uid, totalDeduct);
     }
   }
 
@@ -1102,19 +1089,33 @@ export async function finalizeSessionStats(
       if (totalPending <= 0) continue;
       try {
         const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
-        const snap = await getDoc(statsRef);
-        if (!snap.exists()) continue;
-        // Preserve mid-session queued amounts (e.g. sprint vault PP host could not write to students/).
-        const livePrior =
-          typeof (snap.data() as SessionStats).sessionEndAccountPpPending === 'number'
-            ? Math.max(0, Number((snap.data() as SessionStats).sessionEndAccountPpPending) || 0)
-            : priorPending;
-        await updateDoc(statsRef, {
-          sessionEndAccountPpPending: livePrior + transfer,
+        // The session-end transfer is added to pending exactly once per player, even if finalize runs twice.
+        const stored = await runTransaction(db, async (tx) => {
+          const snap = await tx.get(statsRef);
+          if (!snap.exists()) return null;
+          const live = snap.data() as SessionStats;
+          if (live.sessionEndTransferRecorded) return null;
+          // Preserve mid-session queued amounts (e.g. sprint vault PP host could not write to students/).
+          const livePrior =
+            typeof live.sessionEndAccountPpPending === 'number'
+              ? Math.max(0, Number(live.sessionEndAccountPpPending) || 0)
+              : live.sessionEndAccountPpClaimedAt
+                ? 0
+                : priorPending;
+          tx.update(statsRef, {
+            sessionEndAccountPpPending: livePrior + transfer,
+            sessionEndTransferRecorded: true,
+            // A mid-session queued claim may already have been taken; reopen it for the session-end amount.
+            ...(live.sessionEndAccountPpClaimedAt && livePrior + transfer > 0
+              ? { sessionEndAccountPpClaimedAt: deleteField() }
+              : {}),
+          });
+          return livePrior;
         });
+        if (stored === null) continue;
         debug(
           'inSessionStats',
-          `Live event end: stored ${livePrior + transfer} PP pending claim (prior ${livePrior} + transfer ${transfer}; net ${net} − mid-session vault ${alreadyVault}) for ${playerId}`
+          `Live event end: stored ${stored + transfer} PP pending claim (prior ${stored} + transfer ${transfer}; net ${net} − mid-session vault ${alreadyVault}) for ${playerId}`
         );
       } catch (e) {
         debugError('inSessionStats', `Live event end pending PP write failed for ${playerId}`, e);

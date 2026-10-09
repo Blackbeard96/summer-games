@@ -636,7 +636,7 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
 
       // Add elimination log entry if target was eliminated
       let finalBattleLog = updatedBattleLog;
-      const wasEliminated = targetCopy.eliminated && targetTotalHealth <= 0;
+      const wasEliminated = !target.eliminated && targetCopy.eliminated && targetTotalHealth <= 0;
       if (wasEliminated) {
         const eliminationMessage =
           actorUid !== targetUid

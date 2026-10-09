@@ -21,6 +21,10 @@ export interface SessionStats {
   /** Set at session end by host: PP still owed to students/users/vault (participant claims with {@link claimLiveEventSessionEndPendingPp}). */
   sessionEndAccountPpPending?: number;
   sessionEndAccountPpClaimedAt?: unknown;
+  /** Set once the session-end transfer has been added to pending, so a repeated finalize cannot add it again. */
+  sessionEndTransferRecorded?: boolean;
+  /** Set once the eliminated-player halving has been applied, so it is never deducted twice. */
+  eliminationPenaltyApplied?: boolean;
 
   /**
    * Host cannot update other users' `students` docs. Session-end Power stat XP + matching Battle Pass XP
