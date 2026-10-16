@@ -3,8 +3,14 @@ import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { Move, MOVE_DAMAGE_VALUES, Vault } from '../types/battle';
 import { getMoveDamage, getMoveName, getMoveNameSync } from '../utils/moveOverrides';
-import { announceSkillActivation } from '../utils/skillActivationAnnounce';
-import { clearSkillActivations } from '../utils/skillActivationQueue';
+import { announceSkillActivation, type AnnounceSkillActivationParams } from '../utils/skillActivationAnnounce';
+import { clearSkillActivations, markSkillActivationsSeen } from '../utils/skillActivationQueue';
+import {
+  appendSkillActivationRecord,
+  buildSkillActivationRecord,
+  isOwnSkillActivation,
+  takeUnseenSkillActivations,
+} from '../utils/skillActivationSync';
 import { loadSkillArtwork, preloadSkillArtwork } from '../utils/skillArtwork';
 import { trackMoveUsage } from '../utils/manifestTracking';
 import {
@@ -14,7 +20,7 @@ import {
   getManifestDamageBoost,
   getElementalAffinityRingDamageMultiplierForMove,
 } from '../utils/artifactUtils';
-import { doc, getDoc, updateDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp, onSnapshot, increment } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp, onSnapshot, increment, runTransaction } from 'firebase/firestore';
 import { db } from '../firebase';
 import { debug } from '../utils/debug';
 import { computeNextPP } from '../utils/playerPowerPoints';
@@ -708,6 +714,45 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     'Player';
   /** Skill Card: the local execute path already announced this move (turn-order replay must not repeat it). */
   const lastSelfSkillCardRef = useRef<{ moveId: string; at: number } | null>(null);
+  /** Shared battle room (Island Raid / missions / co-op story) where Skill Cards are relayed to teammates. */
+  const skillShareRoomIdRef = useRef<string | null>(null);
+  skillShareRoomIdRef.current = gameId && !isInSession ? gameId : null;
+  /** Human teammates who post moves to the room; their cards arrive via the relay, not local turn order. */
+  const remoteHumanUidsRef = useRef<Set<string>>(new Set());
+  const roomSkillSeenRef = useRef<Set<string>>(new Set());
+  const roomSkillPrimedRef = useRef(false);
+  const roomHumanCountRef = useRef(0);
+
+  /** Show the card locally and, in shared rooms, relay it so every player in the battle sees it. */
+  const announceAndShareSkill = (params: AnnounceSkillActivationParams, actorKind: 'player' | 'enemy') => {
+    announceSkillActivation(params);
+    const roomId = skillShareRoomIdRef.current;
+    const skill = params.skill;
+    if (!roomId || !currentUser?.uid || !skill?.name || !params.actorUid) return;
+    if (roomHumanCountRef.current < 2 && remoteHumanUidsRef.current.size === 0) return;
+    const record = buildSkillActivationRecord({
+      actorUid: params.actorUid,
+      actorName: params.actorName || 'Unknown',
+      targetName: params.targetName ?? null,
+      sourceUid: currentUser.uid,
+      actorKind,
+      move: {
+        id: skill.id ?? null,
+        name: skill.name,
+        category: skill.category ?? null,
+        elementalAffinity: skill.elementalAffinity ?? null,
+        manifestType: skill.manifestType ?? null,
+      },
+    });
+    const roomRef = doc(db, 'islandRaidBattleRooms', roomId);
+    runTransaction(db, async (tx) => {
+      const snap = await tx.get(roomRef);
+      if (!snap.exists()) return;
+      tx.update(roomRef, {
+        recentSkillActivations: appendSkillActivationRecord(snap.data().recentSkillActivations, record),
+      });
+    }).catch((error) => console.warn('[skillActivation] relay failed (display only)', error));
+  };
   const {
     vault: contextVault,
     moves,
@@ -3055,6 +3100,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     if (!isMultiplayer || !gameId || !currentUser) return;
 
     const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
+    roomSkillPrimedRef.current = false;
     
     // Helper function to check if error is a Firestore internal assertion error
     const isFirestoreInternalError = (error: any): boolean => {
@@ -3087,6 +3133,38 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             }
           });
           setFirestorePlayerMoves(newFirestoreMoves);
+
+          Object.keys(playerMoves).forEach((uid) => {
+            if (uid !== currentUser.uid) remoteHumanUidsRef.current.add(uid);
+          });
+          roomHumanCountRef.current = Array.isArray(data.players) ? data.players.length : 0;
+          // Teammates' Skill Cards. First snapshot only primes so joining/reconnecting never replays history.
+          const freshCards = takeUnseenSkillActivations(data.recentSkillActivations, roomSkillSeenRef.current);
+          if (!roomSkillPrimedRef.current) {
+            roomSkillPrimedRef.current = true;
+            markSkillActivationsSeen(freshCards.map((r) => r.id));
+          } else {
+            freshCards
+              .filter((r) => !isOwnSkillActivation(r, currentUser.uid))
+              .forEach((r) => {
+                if (r.actorKind !== 'enemy') remoteHumanUidsRef.current.add(r.sourceUid || r.actorUid);
+                announceSkillActivation({
+                  id: r.id,
+                  skill: {
+                    id: r.moveId,
+                    name: r.moveName,
+                    category: r.category,
+                    elementalAffinity: r.elementalAffinity,
+                    manifestType: r.manifestType,
+                  },
+                  actorName: r.actorName,
+                  actorUid: r.actorUid,
+                  side: r.actorKind === 'enemy' ? 'enemy' : 'ally',
+                  targetName: r.targetName,
+                  rawName: r.actorKind === 'enemy',
+                });
+              });
+          }
           
           if (newFirestoreMoves.size > 0) {
             const otherPlayersMoves = Array.from(newFirestoreMoves.entries())
@@ -4292,18 +4370,21 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const isSummonMove = (participant as Opponent).isSummon && moveData.move.id?.startsWith?.('summon_attack_');
       if (isSummonMove && target) {
         const summon = participant as Opponent;
-        announceSkillActivation({
-          skill: {
-            ...moveData.move,
-            category: moveData.move.category || 'elemental',
-            elementalAffinity: moveData.move.elementalAffinity || (summon.summonElementalType as Move['elementalAffinity']),
+        announceAndShareSkill(
+          {
+            skill: {
+              ...moveData.move,
+              category: moveData.move.category || 'elemental',
+              elementalAffinity: moveData.move.elementalAffinity || (summon.summonElementalType as Move['elementalAffinity']),
+            },
+            actorName: summon.name,
+            actorUid: summon.id,
+            side: 'ally',
+            targetName: target.name,
+            rawName: true,
           },
-          actorName: summon.name,
-          actorUid: summon.id,
-          side: 'ally',
-          targetName: target.name,
-          rawName: true,
-        });
+          'player'
+        );
         const baseSummonDmg = moveData.move.damage ?? summon.summonDamage ?? 100;
         const elem = summon.summonElementalType || 'fire';
         const atkEl = attackElementFromSummonAffinity(elem);
@@ -4413,14 +4494,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         const selfCard = lastSelfSkillCardRef.current;
         const alreadyAnnouncedLocally =
           isCurrentPlayer && !!selfCard && selfCard.moveId === playerMove.id && Date.now() - selfCard.at < 15000;
-        if (!alreadyAnnouncedLocally) {
-          announceSkillActivation({
+        const relayedFromTeammate =
+          !isCurrentPlayer && !!skillShareRoomIdRef.current && remoteHumanUidsRef.current.has(participant.id);
+        if (!alreadyAnnouncedLocally && !relayedFromTeammate) {
+          const cardParams: AnnounceSkillActivationParams = {
             skill: playerMove,
             actorName: playerName,
             actorUid: participant.id,
             side: isCurrentPlayer ? 'self' : 'ally',
             targetName: isSelfDirectedMove && isTargetingSelf ? null : target?.name,
-          });
+          };
+          if (isCurrentPlayer) announceAndShareSkill(cardParams, 'player');
+          else announceSkillActivation(cardParams);
         }
 
         // Daily challenges: credit Manifest / Elemental once when this client's skill resolves in turn order
@@ -5810,13 +5895,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // Live Events and Vault Siege announce after their authoritative write succeeds (below).
     if (!isInSession && !onExecuteVaultSiegeAttack) {
       lastSelfSkillCardRef.current = { moveId: move.id, at: Date.now() };
-      announceSkillActivation({
-        skill: move,
-        actorName: playerName,
-        actorUid: constructActor ? constructActor.id : currentUser?.uid,
-        side: 'self',
-        targetName: isSelfTarget ? null : targetOpponent?.name,
-      });
+      announceAndShareSkill(
+        {
+          skill: move,
+          actorName: playerName,
+          actorUid: constructActor ? constructActor.id : currentUser?.uid,
+          side: 'self',
+          targetName: isSelfTarget ? null : targetOpponent?.name,
+        },
+        'player'
+      );
     }
     
     // Use the component-level checkIsCPUOpponent function (defined above)
@@ -8245,19 +8333,22 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
     }
 
-    announceSkillActivation({
-      skill: {
-        id: opponentMove.id || cpuMoveIdForCd,
-        name: opponentMove.name,
-        category: (opponentMove as any).category || 'cpu',
-        elementalAffinity: (opponentMove as any).elementalAffinity ?? null,
-        imageUrl: (opponentMove as any).imageUrl ?? null,
+    announceAndShareSkill(
+      {
+        skill: {
+          id: opponentMove.id || cpuMoveIdForCd,
+          name: opponentMove.name,
+          category: (opponentMove as any).category || 'cpu',
+          elementalAffinity: (opponentMove as any).elementalAffinity ?? null,
+          imageUrl: (opponentMove as any).imageUrl ?? null,
+        },
+        actorName: opp.name,
+        actorUid: opp.id || oppIdForCd,
+        side: 'enemy',
+        rawName: true,
       },
-      actorName: opp.name,
-      actorUid: opp.id,
-      side: 'enemy',
-      rawName: true,
-    });
+      'enemy'
+    );
 
     // Activate defensive move if opponent uses one
     if (opponentMove.type === 'defense' && (opponentMove.damageReduction || opponentMove.counterMove)) {

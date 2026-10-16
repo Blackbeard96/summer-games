@@ -24,6 +24,7 @@ import {
 import {
   appendSkillActivationRecord,
   buildSkillActivationRecord,
+  isOwnSkillActivation,
   takeUnseenSkillActivations,
   SKILL_ACTIVATION_HISTORY_CAP,
 } from '../skillActivationSync';
@@ -161,6 +162,24 @@ describe('live event skill activation sync', () => {
       list = appendSkillActivationRecord(list, buildSkillActivationRecord({ actorUid: `u${i}`, actorName: 'P', move: { name: `S${i}` }, now: i }));
     }
     expect((list as unknown[]).length).toBe(SKILL_ACTIVATION_HISTORY_CAP);
+  });
+
+  it('treats records written by this client as its own, including CPU turns it relayed', () => {
+    const mine = buildSkillActivationRecord({ actorUid: 'me', actorName: 'Me', move: { name: 'X' } });
+    const cpuFromMe = buildSkillActivationRecord({
+      actorUid: 'golem-1',
+      actorName: 'Ice Golem',
+      sourceUid: 'me',
+      actorKind: 'enemy',
+      move: { name: 'Frost Slam' },
+    });
+    const teammate = buildSkillActivationRecord({ actorUid: 'mate', actorName: 'Mate', move: { name: 'Y' } });
+    expect(isOwnSkillActivation(mine, 'me')).toBe(true);
+    expect(isOwnSkillActivation(cpuFromMe, 'me')).toBe(true);
+    expect(isOwnSkillActivation(cpuFromMe, 'mate')).toBe(false);
+    expect(isOwnSkillActivation(teammate, 'me')).toBe(false);
+    expect(cpuFromMe.actorKind).toBe('enemy');
+    expect(teammate.actorKind).toBe('player');
   });
 
   it('returns only unseen records, oldest first, and never replays', () => {

@@ -57,7 +57,7 @@ import {
   type SessionLoadout
 } from '../utils/inSessionSkillsService';
 import { shouldEnforceTurnSkillCooldownsInLiveSession } from '../utils/battleModeSkillRules';
-import { takeUnseenSkillActivations } from '../utils/skillActivationSync';
+import { isOwnSkillActivation, takeUnseenSkillActivations } from '../utils/skillActivationSync';
 import { markSkillActivationsSeen } from '../utils/skillActivationQueue';
 import { announceSkillActivation } from '../utils/skillActivationAnnounce';
 import { 
@@ -1012,7 +1012,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         markSkillActivationsSeen(freshSkillCards.map((r) => r.id));
       } else {
         freshSkillCards
-          .filter((r) => r.actorUid !== currentUser?.uid)
+          .filter((r) => !isOwnSkillActivation(r, currentUser?.uid))
           .forEach((r) =>
             announceSkillActivation({
               id: r.id,

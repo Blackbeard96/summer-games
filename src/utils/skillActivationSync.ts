@@ -16,11 +16,16 @@ export interface SkillActivationRecord {
   manifestType: string | null;
   targetName: string | null;
   at: number;
+  /** Client that wrote the record (differs from actorUid for CPU enemies / constructs). */
+  sourceUid?: string | null;
+  actorKind?: 'player' | 'enemy' | null;
 }
 
 interface RecordSource {
   actorUid: string;
   actorName: string;
+  sourceUid?: string | null;
+  actorKind?: 'player' | 'enemy' | null;
   targetUid?: string | null;
   targetName?: string | null;
   move: {
@@ -46,8 +51,14 @@ export const buildSkillActivationRecord = (src: RecordSource): SkillActivationRe
     manifestType: src.move.manifestType ?? null,
     targetName: src.targetUid && src.targetUid === src.actorUid ? null : (src.targetName ?? null),
     at,
+    sourceUid: src.sourceUid ?? src.actorUid,
+    actorKind: src.actorKind ?? 'player',
   };
 };
+
+/** True when this client wrote the record (it already showed the card locally). */
+export const isOwnSkillActivation = (record: SkillActivationRecord, myUid: string | null | undefined): boolean =>
+  !!myUid && (record.sourceUid ?? record.actorUid) === myUid;
 
 const isRecord = (r: unknown): r is SkillActivationRecord =>
   !!r && typeof r === 'object' && typeof (r as SkillActivationRecord).id === 'string' && typeof (r as SkillActivationRecord).moveName === 'string';
