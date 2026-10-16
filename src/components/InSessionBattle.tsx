@@ -57,6 +57,9 @@ import {
   type SessionLoadout
 } from '../utils/inSessionSkillsService';
 import { shouldEnforceTurnSkillCooldownsInLiveSession } from '../utils/battleModeSkillRules';
+import { takeUnseenSkillActivations } from '../utils/skillActivationSync';
+import { markSkillActivationsSeen } from '../utils/skillActivationQueue';
+import { announceSkillActivation } from '../utils/skillActivationAnnounce';
 import { 
   submitAction,
   subscribeToActions,
@@ -307,6 +310,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [userProfiles, setUserProfiles] = useState<Map<string, { displayName: string; photoURL?: string }>>(new Map());
   /** Keep latest profile/roster data without re-subscribing the session doc (rapid teardown causes Firestore ca9 errors). */
   const userProfilesRef = useRef(userProfiles);
+  const skillCardSeenIdsRef = useRef<Set<string>>(new Set());
+  const skillCardPrimedRef = useRef(false);
   const studentsRef = useRef(students);
   userProfilesRef.current = userProfiles;
   studentsRef.current = students;
@@ -867,6 +872,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     
       // Subscribe to session updates
       // CRITICAL: Ensure only one subscription per sessionId to prevent duplication
+      skillCardPrimedRef.current = false;
       const unsubscribe = subscribeToSession(sessionId, (session) => {
         // Dispatch subscription health update
         if (typeof window !== 'undefined') {
@@ -999,6 +1005,32 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         }
       });
       
+      // Skill Cards for other players' confirmed skills. First snapshot only primes (no replay on join/reconnect).
+      const freshSkillCards = takeUnseenSkillActivations(rawRoom.recentSkillActivations, skillCardSeenIdsRef.current);
+      if (!skillCardPrimedRef.current) {
+        skillCardPrimedRef.current = true;
+        markSkillActivationsSeen(freshSkillCards.map((r) => r.id));
+      } else {
+        freshSkillCards
+          .filter((r) => r.actorUid !== currentUser?.uid)
+          .forEach((r) =>
+            announceSkillActivation({
+              id: r.id,
+              skill: {
+                id: r.moveId,
+                name: r.moveName,
+                category: r.category,
+                elementalAffinity: r.elementalAffinity,
+                manifestType: r.manifestType,
+              },
+              actorName: updatedPlayers.find((p) => p.userId === r.actorUid)?.displayName || r.actorName,
+              actorUid: r.actorUid,
+              side: 'enemy',
+              targetName: r.targetName,
+            })
+          );
+      }
+
       // CRITICAL: Update React state - this triggers UI re-render
       setSessionPlayers(updatedPlayers);
       

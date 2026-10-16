@@ -4,6 +4,7 @@ import { MOVE_DAMAGE_VALUES, MOVE_TEMPLATES } from '../types/battle';
 import { db } from '../firebase';
 import { doc, getDoc } from 'firebase/firestore';
 import { invalidateMoveOverridesCache } from '../utils/moveOverrides';
+import SkillArtworkEditor from './admin/SkillArtworkEditor';
 
 interface ManifestAdminProps {
   isOpen: boolean;
@@ -1456,6 +1457,13 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                         </button>
                       )}
                     </div>
+
+                  <SkillArtworkEditor
+                    skillKey={move.id}
+                    skillName={moveEdits[move.id]?.name || move.name || move.id}
+                    category="manifest"
+                    manifestType={selectedManifest}
+                  />
                   
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
                     <div>

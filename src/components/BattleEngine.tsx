@@ -3,6 +3,9 @@ import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { Move, MOVE_DAMAGE_VALUES, Vault } from '../types/battle';
 import { getMoveDamage, getMoveName, getMoveNameSync } from '../utils/moveOverrides';
+import { announceSkillActivation } from '../utils/skillActivationAnnounce';
+import { clearSkillActivations } from '../utils/skillActivationQueue';
+import { loadSkillArtwork, preloadSkillArtwork } from '../utils/skillArtwork';
 import { trackMoveUsage } from '../utils/manifestTracking';
 import {
   getElementalRingLevel,
@@ -703,6 +706,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     currentUser?.displayName?.trim() ||
     currentUser?.email?.split('@')[0] ||
     'Player';
+  /** Skill Card: the local execute path already announced this move (turn-order replay must not repeat it). */
+  const lastSelfSkillCardRef = useRef<{ moveId: string; at: number } | null>(null);
   const {
     vault: contextVault,
     moves,
@@ -808,6 +813,26 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     finishingBlow: null,
     showDefeatOverlay: false,
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    loadSkillArtwork()
+      .then(() => {
+        if (!cancelled) preloadSkillArtwork(moves || []);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [moves]);
+
+  useEffect(() => () => clearSkillActivations(), []);
+
+  useEffect(() => {
+    if (battleState.phase === 'victory' || battleState.phase === 'defeat') {
+      clearSkillActivations({ keepCurrent: true });
+    }
+  }, [battleState.phase]);
 
   /** Prevent double onBattleEnd (Continue button + auto-timeout, or duplicate defeat paths). */
   const battleEndReportedRef = useRef(false);
@@ -2480,6 +2505,21 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             isPlayerTurn: battleState.isPlayerTurn
           });
           
+          if (moveData.moveName) {
+            announceSkillActivation({
+              id: `pvp:${battleRoom.id}:${docSnapshot.id}`,
+              skill: {
+                id: moveData.moveId ?? null,
+                name: moveData.moveName,
+                category: moveData.moveCategory ?? null,
+                elementalAffinity: moveData.elementalAffinity ?? null,
+              },
+              actorName: formatOpponentName(opponent.name),
+              actorUid: opponent.id,
+              side: 'enemy',
+            });
+          }
+
           // Apply the opponent's move (will check phase internally and switch to player's turn)
           await applyOpponentMove(moveData);
           
@@ -4145,6 +4185,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       if (isKonForcePush && target) {
         console.log(`⚡ [AI] Kon turn start - targeting ${target.name} (${target.id}) with Force Push`);
+        announceSkillActivation({
+          skill: moveData.move,
+          actorName: participant.name || 'Kon',
+          actorUid: participant.id,
+          side: 'ally',
+          targetName: target.name,
+          rawName: true,
+        });
         
         const targetName = target.name || 'Unknown';
         const targetId = target.id;
@@ -4244,6 +4292,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const isSummonMove = (participant as Opponent).isSummon && moveData.move.id?.startsWith?.('summon_attack_');
       if (isSummonMove && target) {
         const summon = participant as Opponent;
+        announceSkillActivation({
+          skill: {
+            ...moveData.move,
+            category: moveData.move.category || 'elemental',
+            elementalAffinity: moveData.move.elementalAffinity || (summon.summonElementalType as Move['elementalAffinity']),
+          },
+          actorName: summon.name,
+          actorUid: summon.id,
+          side: 'ally',
+          targetName: target.name,
+          rawName: true,
+        });
         const baseSummonDmg = moveData.move.damage ?? summon.summonDamage ?? 100;
         const elem = summon.summonElementalType || 'fire';
         const atkEl = attackElementFromSummonAffinity(elem);
@@ -4349,6 +4409,19 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         // Fallback to currentUser displayName, then to 'Player'
         const playerName = participant.name || playerDisplayName;
         console.log(`🎮 Executing player move for ${playerName} (${participant.id}): ${playerMove.name} on target ${targetId}`);
+
+        const selfCard = lastSelfSkillCardRef.current;
+        const alreadyAnnouncedLocally =
+          isCurrentPlayer && !!selfCard && selfCard.moveId === playerMove.id && Date.now() - selfCard.at < 15000;
+        if (!alreadyAnnouncedLocally) {
+          announceSkillActivation({
+            skill: playerMove,
+            actorName: playerName,
+            actorUid: participant.id,
+            side: isCurrentPlayer ? 'self' : 'ally',
+            targetName: isSelfDirectedMove && isTargetingSelf ? null : target?.name,
+          });
+        }
 
         // Daily challenges: credit Manifest / Elemental once when this client's skill resolves in turn order
         // (deduped with animation-path tracking).
@@ -4861,6 +4934,20 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         // The move name should come directly from the move object stored in participantMoves
         const moveName = cpuMove.name || 'Unknown Move';
         console.log(`⚔️ Executing CPU move: ${cpuOpponent.name} using ${moveName}`, cpuMove);
+        announceSkillActivation({
+          skill: {
+            id: cpuMove.id ?? null,
+            name: moveName,
+            category: cpuMove.category || 'cpu',
+            elementalAffinity: cpuMove.elementalAffinity ?? null,
+            imageUrl: cpuMove.imageUrl ?? null,
+          },
+          actorName: formatOpponentName(cpuOpponent.name),
+          actorUid: cpuOpponent.id,
+          side: 'enemy',
+          targetName: target.name,
+          rawName: true,
+        });
         
         // Calculate damage - CPU moves can have damageRange or baseDamage
         let totalDamage = 0;
@@ -5719,6 +5806,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const currentPlayerInAllies = allies.find(a => a.id === currentUser?.uid);
     const constructActor = constructIdFromMove ? allies.find(a => a.id === constructIdFromMove) : undefined;
     const playerName = constructActor?.name || currentPlayerInAllies?.name || playerDisplayName;
+
+    // Live Events and Vault Siege announce after their authoritative write succeeds (below).
+    if (!isInSession && !onExecuteVaultSiegeAttack) {
+      lastSelfSkillCardRef.current = { moveId: move.id, at: Date.now() };
+      announceSkillActivation({
+        skill: move,
+        actorName: playerName,
+        actorUid: constructActor ? constructActor.id : currentUser?.uid,
+        side: 'self',
+        targetName: isSelfTarget ? null : targetOpponent?.name,
+      });
+    }
     
     // Use the component-level checkIsCPUOpponent function (defined above)
     
@@ -6607,6 +6706,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         console.log('✅ [In-Session Move] ⚡ SUCCESS ⚡', move.name, '→', targetOpponent.name, '| Dmg:', moveResult.damage, '| HP:', hpChange, '| Waiting for subscription...');
         
         if (moveResult.success) {
+          announceSkillActivation({
+            skill: move,
+            actorName: playerName,
+            actorUid: currentUser.uid,
+            side: 'self',
+            targetName: effectiveTargetUid === currentUser.uid ? null : effectiveTargetName,
+            id: moveResult.skillActivationId,
+          });
           console.log('✅ [In-Session Move] Move result success:', {
             success: moveResult.success,
             message: moveResult.message,
@@ -7144,6 +7251,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         console.log('🔥 Vault siege attack result:', attackResult);
         
         if (attackResult?.success) {
+          announceSkillActivation({
+            skill: move,
+            actorName: playerName,
+            actorUid: currentUser?.uid,
+            side: 'self',
+            targetName: targetOpponent.name,
+          });
           console.log('✅ Database vault siege attack successful');
           // The database has been updated, so we can trust the local state
         } else {
@@ -7804,6 +7918,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           userId: currentUser.uid,
           moveId: move.id,
           moveName: move.name,
+          // Display-only (opponent's Skill Card artwork)
+          moveCategory: move.category ?? null,
+          elementalAffinity: move.elementalAffinity ?? null,
           damage: damage - shieldDamage, // Actual PP damage (after shield absorption)
           shieldDamage: shieldDamage,
           ppStolen: ppStolen,
@@ -8127,6 +8244,20 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         });
       }
     }
+
+    announceSkillActivation({
+      skill: {
+        id: opponentMove.id || cpuMoveIdForCd,
+        name: opponentMove.name,
+        category: (opponentMove as any).category || 'cpu',
+        elementalAffinity: (opponentMove as any).elementalAffinity ?? null,
+        imageUrl: (opponentMove as any).imageUrl ?? null,
+      },
+      actorName: opp.name,
+      actorUid: opp.id,
+      side: 'enemy',
+      rawName: true,
+    });
 
     // Activate defensive move if opponent uses one
     if (opponentMove.type === 'defense' && (opponentMove.damageReduction || opponentMove.counterMove)) {

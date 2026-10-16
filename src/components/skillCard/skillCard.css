@@ -1,0 +1,180 @@
+/* MST Skill Card activation overlay. Visual only: never intercepts input. */
+.mst-skill-card-layer {
+  position: fixed;
+  inset: 0;
+  /* Above battle menus (10000) and the Vault Siege modal (1000000); safe because it never takes input. */
+  z-index: 10000001;
+  pointer-events: none;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: clamp(64px, 14vh, 140px);
+}
+
+.mst-skill-card {
+  --mst-skill-card-duration: 2500ms;
+  --mst-skill-card-accent: var(--mst-gold, #d4a84f);
+  --mst-skill-card-glow: rgba(240, 201, 106, 0.45);
+  width: min(260px, 70vw);
+  pointer-events: none;
+  will-change: transform, opacity;
+  animation: mst-skill-card-life var(--mst-skill-card-duration) cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.mst-skill-card--ally {
+  --mst-skill-card-accent: #6aa8f0;
+  --mst-skill-card-glow: rgba(106, 168, 240, 0.4);
+}
+
+.mst-skill-card--enemy {
+  --mst-skill-card-accent: #e05a5a;
+  --mst-skill-card-glow: rgba(224, 90, 90, 0.42);
+}
+
+.mst-skill-card__frame {
+  position: relative;
+  border-radius: 14px;
+  padding: 6px;
+  background:
+    linear-gradient(160deg, rgba(20, 15, 42, 0.96), rgba(5, 7, 13, 0.97)) padding-box,
+    linear-gradient(140deg, var(--mst-gold-bright, #f0c96a), var(--mst-skill-card-accent), var(--mst-purple, #6d3ef2)) border-box;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 18px 48px rgba(0, 0, 0, 0.55), 0 0 36px var(--mst-skill-card-glow);
+}
+
+.mst-skill-card__art {
+  position: relative;
+  overflow: hidden;
+  border-radius: 9px;
+  aspect-ratio: 300 / 228;
+  background: #05070d;
+  animation: mst-skill-card-reveal var(--mst-skill-card-duration) ease-out both;
+}
+
+.mst-skill-card__art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mst-skill-card__sheen {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 240, 200, 0.55) 50%, transparent 65%);
+  transform: translateX(-120%);
+  animation: mst-skill-card-sheen var(--mst-skill-card-duration) ease-out both;
+}
+
+.mst-skill-card__body {
+  padding: 8px 6px 4px;
+  text-align: center;
+}
+
+.mst-skill-card__category {
+  font-family: var(--mst-font-body, 'Outfit', sans-serif);
+  font-size: 0.66rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--mst-skill-card-accent);
+}
+
+.mst-skill-card__name {
+  margin-top: 2px;
+  font-family: var(--mst-font-display, 'Cinzel', serif);
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--mst-gold-bright, #f0c96a);
+  text-shadow: 0 0 12px var(--mst-skill-card-glow);
+  overflow-wrap: anywhere;
+}
+
+.mst-skill-card__actor {
+  margin-top: 3px;
+  font-family: var(--mst-font-body, 'Outfit', sans-serif);
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.82);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mst-skill-card__target {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.mst-skill-card__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* 0–12% entrance (0.3s) · 12–28% reveal (0.4s) · 28–84% display (1.4s) · 84–100% exit (0.4s) */
+@keyframes mst-skill-card-life {
+  0% { opacity: 0; transform: translateY(18px) scale(0.82) rotateX(18deg); }
+  12% { opacity: 1; transform: translateY(0) scale(1.03) rotateX(0deg); }
+  28% { opacity: 1; transform: translateY(0) scale(1); }
+  84% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-14px) scale(0.96); }
+}
+
+@keyframes mst-skill-card-reveal {
+  0%, 12% { clip-path: inset(0 50% 0 50%); filter: brightness(1.8) saturate(0.4); }
+  28% { clip-path: inset(0 0 0 0); filter: brightness(1) saturate(1); }
+  100% { clip-path: inset(0 0 0 0); filter: brightness(1) saturate(1); }
+}
+
+@keyframes mst-skill-card-sheen {
+  0%, 16% { transform: translateX(-120%); }
+  34%, 100% { transform: translateX(120%); }
+}
+
+/* Reduced motion: no movement, scaling, or sweeps — a short fade only. */
+.mst-skill-card--reduced,
+.mst-skill-card--reduced .mst-skill-card__art,
+.mst-skill-card--reduced .mst-skill-card__sheen {
+  animation: none;
+}
+
+.mst-skill-card--reduced {
+  animation: mst-skill-card-fade var(--mst-skill-card-duration) linear both;
+}
+
+.mst-skill-card--reduced .mst-skill-card__sheen {
+  display: none;
+}
+
+@keyframes mst-skill-card-fade {
+  0% { opacity: 0; }
+  10% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mst-skill-card,
+  .mst-skill-card__art,
+  .mst-skill-card__sheen {
+    animation-name: mst-skill-card-fade;
+  }
+  .mst-skill-card__art,
+  .mst-skill-card__sheen {
+    animation: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .mst-skill-card-layer {
+    padding-top: clamp(48px, 9vh, 90px);
+  }
+  .mst-skill-card {
+    width: min(200px, 58vw);
+  }
+  .mst-skill-card__name {
+    font-size: 1rem;
+  }
+}

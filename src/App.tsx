@@ -46,6 +46,7 @@ import BattleInvitationManager from './components/BattleInvitationManager';
 import NavigationDebugger from './components/NavigationDebugger';
 import InSessionNotification from './components/InSessionNotification';
 import ToastContainer from './components/ToastContainer';
+import SkillActivationOverlay from './components/skillCard/SkillActivationOverlay';
 import { useDailyChallengeToasts } from './hooks/useDailyChallengeToasts';
 import { usePopupControls } from './hooks/usePopupControls';
 
@@ -828,6 +829,7 @@ const AppContent = () => {
       {popupControls.enableAssessmentGoalResultModal ? <AssessmentGoalResultNotifier /> : null}
       {popupControls.enableLiveEventJoinBanner ? <InSessionNotification /> : null}
       <ToastContainer />
+      {currentUser && <SkillActivationOverlay />}
       
       {/* Milestone Modal */}
       {currentMilestone && (

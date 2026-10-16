@@ -32,6 +32,7 @@ import {
 import { isLiveEventPlayerEliminatedForRevive } from './liveEventRevive';
 import { isGlobalHost } from './inSessionService';
 import { computeSiegeProtectionFloor } from './liveEventGameTimeService';
+import { appendSkillActivationRecord, buildSkillActivationRecord } from './skillActivationSync';
 
 const DEBUG_IN_SESSION_MOVES = process.env.REACT_APP_DEBUG_IN_SESSION_MOVES === 'true' || 
                                  process.env.REACT_APP_DEBUG === 'true';
@@ -49,6 +50,8 @@ export interface InSessionMoveResult {
   participationPointsSpent?: number;
   participationCostDiscount?: number;
   battleLogEntry?: string;
+  /** Id of the display-only Skill Card record written with this move. */
+  skillActivationId?: string;
   stateChanges?: {
     targetHpBefore?: number;
     targetHpAfter?: number;
@@ -236,6 +239,7 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
     // ALWAYS log transaction start (critical for debugging) - concise
     console.log('🔄 [applyInSessionMove] ⚡ STARTING TRANSACTION ⚡', move.name, '→', targetName, '| Dmg:', damage, '| Shield:', shieldDamage, '| Heal:', healing);
     let pendingElimination: { eliminatorUid: string; eliminatedUid: string; eliminatorName: string; eliminatedName: string } | null = null;
+    let skillActivationId: string | undefined;
 
     const result = await runTransaction(db, async (transaction) => {
       // Read session document
@@ -662,11 +666,22 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         battleLogLength: finalBattleLog.length
       });
       
+      // Display-only Skill Card record for other clients (same write; no extra listener).
+      const skillActivationRecord = buildSkillActivationRecord({
+        actorUid,
+        actorName,
+        targetUid,
+        targetName,
+        move,
+      });
+      skillActivationId = skillActivationRecord.id;
+
       // CRITICAL: Update session document with players array and battle log
       // This is the authoritative update that all clients will receive via subscription
       transaction.update(sessionRef, {
         players: updatedPlayers,
         battleLog: finalBattleLog,
+        recentSkillActivations: appendSkillActivationRecord(sessionData.recentSkillActivations, skillActivationRecord),
         updatedAt: serverTimestamp()
       });
 
@@ -730,6 +745,7 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         participationPointsSpent,
         participationCostDiscount,
         battleLogEntry: finalBattleLogMessage,
+        skillActivationId,
         liveEventSiege: isLiveEventSiege && actorUid !== targetUid,
         // Include state changes for debug mirror
         stateChanges: {

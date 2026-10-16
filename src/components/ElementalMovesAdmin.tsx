@@ -5,6 +5,7 @@ import { db } from '../firebase';
 import { collection, doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { invalidateMoveOverridesCache } from '../utils/moveOverrides';
 import { SkillEffectsConfigEditor } from './admin/SkillEffectsConfigEditor';
+import SkillArtworkEditor from './admin/SkillArtworkEditor';
 
 interface ElementalMovesAdminProps {
   isOpen: boolean;
@@ -699,6 +700,13 @@ const ElementalMovesAdmin: React.FC<ElementalMovesAdminProps> = ({ isOpen, onClo
                           <SkillEffectsConfigEditor
                             value={moveEdits[move.id]?.skillEffects ?? (move as MoveEditData).skillEffects ?? []}
                             onChange={(next) => handleMoveEdit(move.id, 'skillEffects', next)}
+                          />
+
+                          <SkillArtworkEditor
+                            skillKey={move.id}
+                            skillName={moveEdits[move.id]?.name || move.name}
+                            category="elemental"
+                            elementalAffinity={selectedElement}
                           />
 
                           {/* Status Effects Editor - Multiple Effects */}

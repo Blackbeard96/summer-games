@@ -12,6 +12,7 @@ import {
 } from '../utils/elementTypeUi';
 import type { MissionMediaSequenceStep } from '../types/missions';
 import MissionSequenceBuilder from './MissionSequenceBuilder';
+import SkillArtworkEditor from './admin/SkillArtworkEditor';
 
 interface CPUOpponentMovesAdminProps {
   isOpen: boolean;
@@ -1835,6 +1836,12 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
                                   Remove
                                 </button>
                               </div>
+                              <SkillArtworkEditor
+                                skillKey={move.id}
+                                skillName={move.name || move.id}
+                                category="cpu"
+                                elementalAffinity={move.elementalAffinity}
+                              />
                               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
                                 <input
                                   type="text"
@@ -2029,6 +2036,13 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
                             Remove
                           </button>
                         </div>
+
+                        <SkillArtworkEditor
+                          skillKey={move.id}
+                          skillName={move.name || move.id}
+                          category="cpu"
+                          elementalAffinity={move.elementalAffinity}
+                        />
 
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
                           <div>

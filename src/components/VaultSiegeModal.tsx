@@ -9,6 +9,9 @@ import { getMoveDamageSync, getMoveNameSync, getMoveDescriptionSync, loadMoveOve
 import { calculateDamageRange, formatDamageRange } from '../utils/damageCalculator';
 import { getEffectiveMasteryLevel } from '../utils/artifactUtils';
 import { trackMoveUsage } from '../utils/manifestTracking';
+import { announceSkillActivation } from '../utils/skillActivationAnnounce';
+import { clearSkillActivations } from '../utils/skillActivationQueue';
+import { loadSkillArtwork, preloadSkillArtwork } from '../utils/skillArtwork';
 import { loadVaultSiegePlayerList, loadVaultSiegeClassmateIds } from '../utils/vaultSiegeTargets';
 import type { ElementType } from '../types/elementTypes';
 import { elementTypeEmoji, elementTypeLabel } from '../utils/elementTypeUi';
@@ -62,6 +65,18 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
   const [remainingMoves, setRemainingMoves] = useState<number>(0);
   const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
   const modalRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    loadSkillArtwork()
+      .then(() => preloadSkillArtwork(moves || []))
+      .catch(() => undefined);
+  }, [isOpen, moves]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    return () => clearSkillActivations({ keepCurrent: true });
+  }, [isOpen]);
 
   // Load equipped artifacts when modal opens so skill levels match Skill Mastery (including ring bonuses)
   useEffect(() => {
@@ -538,6 +553,15 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         }
         
         if (result?.success) {
+          if (move) {
+            announceSkillActivation({
+              skill: move,
+              actorName: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'You',
+              actorUid: currentUser?.uid,
+              side: 'self',
+              targetName: filteredPlayers.find((p) => p.uid === selectedTarget)?.displayName || null,
+            });
+          }
           totalPPStolen += result.ppStolen || 0;
           totalXP += result.xpGained || 0;
           totalShieldDamage += result.shieldDamage || 0;

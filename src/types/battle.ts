@@ -91,6 +91,9 @@ export interface Move {
    * when a payload of the same category is present to avoid double application.
    */
   skillEffects?: SkillEffectPayload[];
+  /** Optional Skill Card artwork (display only). Falls back to MST defaults when missing. */
+  imageUrl?: string;
+  imageStoragePath?: string;
 }
 
 export interface ActionCard {

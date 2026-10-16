@@ -177,6 +177,10 @@ const findOriginalTemplateName = (overriddenName: string): string | null => {
   return null;
 };
 
+/** Sync: original template name for an overridden display name (null when unknown or cache cold). */
+export const getMoveTemplateNameSync = (overriddenName: string): string | null =>
+  findOriginalTemplateName(overriddenName);
+
 /**
  * Synchronous version for move name with cache
  * Handles both original template names and overridden names

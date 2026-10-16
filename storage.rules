@@ -52,6 +52,18 @@ service firebase.storage {
       allow write: if request.auth != null;
     }
     
+    // Skill Card artwork - designated admin accounts only (never widen to an email domain:
+    // students share school domains). PNG/JPG/WebP up to 2 MB. Anyone can read for battle display.
+    match /skill_art/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if request.auth != null &&
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] &&
+        request.resource.size <= 2 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/(png|jpeg|webp)');
+      allow delete: if request.auth != null &&
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'];
+    }
+
     // Default rule - deny all other access
     match /{allPaths=**} {
       allow read, write: if false;
