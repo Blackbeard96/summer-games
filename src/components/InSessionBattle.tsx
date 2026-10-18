@@ -127,6 +127,7 @@ import { LiveQuizQuestionCard, LiveQuizAnswerOptions, LiveQuizLeaderboard, type 
 import LiveEventReflectionPanel from './LiveEventReflectionPanel';
 import LiveEventGoalSettingPanel from './LiveEventGoalSettingPanel';
 import LiveEventSprintPanel from './LiveEventSprintPanel';
+import ClassFlowWorkPanel from './classFlow/ClassFlowWorkPanel';
 import LiveEventMstMktModal from './LiveEventMstMktModal';
 import FlowStateActivationOverlay from './liveEvent/FlowStateActivationOverlay';
 import FlowStateBoonModal from './liveEvent/FlowStateBoonModal';
@@ -431,6 +432,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     goalSettingPrompt?: string;
   }>({});
   const [roomClassFlowSprint, setRoomClassFlowSprint] = useState<ClassFlowSprintState | null>(null);
+  const [roomClassFlowConfig, setRoomClassFlowConfig] = useState<unknown>(null);
   const [sessionRoomHostUid, setSessionRoomHostUid] = useState<string>('');
   const [reflectionPickAssessmentId, setReflectionPickAssessmentId] = useState('');
   const [reflectionPickPrompt, setReflectionPickPrompt] = useState('');
@@ -887,6 +889,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       if (!session) {
         debug('inSessionBattle', `Session ${sessionId} does not exist`);
         setRoomClassFlowSprint(null);
+        setRoomClassFlowConfig(null);
         setSessionRoomHostUid('');
         setLiveEventFightNegated(false);
         return;
@@ -909,6 +912,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       setMstMktOpen(rawRoom.mstMktOpen === true);
       setLiveEventFightNegated(rawRoom.liveEventFightNegated === true);
       setRoomClassFlowSprint(parseClassFlowSprint(rawRoom.classFlowSprint));
+      setRoomClassFlowConfig((prev: unknown) => {
+        const next = rawRoom.classFlowConfig ?? null;
+        return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+      });
       
       const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
                                  process.env.REACT_APP_DEBUG === 'true';
@@ -4239,6 +4246,24 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           userDisplayName={currentUser.displayName}
           classId={classId}
           goalSettingAssessmentId={roomReflectionMeta.goalSettingAssessmentId}
+        />
+      )}
+
+      {(isSessionHost || isAdminUser || roomClassFlowSprint) &&
+        !quizSession &&
+        roomReflectionMeta.liveEventMode !== 'reflection' &&
+        !isExamLiveEventMode(roomReflectionMeta.liveEventMode) &&
+        currentUser && (
+        <ClassFlowWorkPanel
+          sessionId={sessionId}
+          sprint={roomClassFlowSprint}
+          rawConfig={roomClassFlowConfig}
+          sessionPlayers={sessionPlayers.map((p) => ({ userId: p.userId, displayName: p.displayName }))}
+          hostUid={sessionRoomHostUid}
+          isFacilitator={isSessionHost || isAdminUser}
+          currentUserId={currentUser.uid}
+          userEmail={currentUser.email}
+          userDisplayName={currentUser.displayName}
         />
       )}
 

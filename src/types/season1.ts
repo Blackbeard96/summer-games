@@ -5,6 +5,7 @@
 
 import type { Timestamp } from 'firebase/firestore';
 import type { BattlePassIntroStep } from './missions';
+import type { CfSprintAssignment } from './classFlowWork';
 
 /** Live event modes (Season 1 taxonomy). */
 export type LiveEventModeType =
@@ -39,6 +40,14 @@ export interface ClassFlowSprintState {
   rewardsGrantedUids: string[];
   /** Players who already had incompletePenaltyVaultPP applied for this sprint (idempotent). */
   incompletePenaltiesGrantedUids: string[];
+  /** Set while the host has paused the countdown; resume pushes endsAt forward by the paused time. */
+  pausedAt?: Timestamp | Date | null;
+  pausedAccumMs?: number;
+  extendedSeconds?: number;
+  /** Class Flow Sprint Management (only when Work Assignments are enabled). */
+  objective?: string;
+  planId?: string | null;
+  assignments?: CfSprintAssignment[];
 }
 
 export type EnergyType = 'kinetic' | 'mental' | 'emotional' | 'spiritual';

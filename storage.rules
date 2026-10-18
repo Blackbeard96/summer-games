@@ -64,6 +64,20 @@ service firebase.storage {
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'];
     }
 
+    // Class Flow submission evidence: players upload only into their own folder (images/PDF, 10 MB).
+    // Facilitators view it through the download URL saved on the submission.
+    match /classFlowEvidence/{sessionId}/{uid}/{fileName} {
+      allow read: if request.auth != null && (
+        request.auth.uid == uid ||
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']
+      );
+      allow create: if request.auth != null &&
+        request.auth.uid == uid &&
+        request.resource.size <= 10 * 1024 * 1024 &&
+        (request.resource.contentType.matches('image/.*') || request.resource.contentType == 'application/pdf');
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+
     // Default rule - deny all other access
     match /{allPaths=**} {
       allow read, write: if false;

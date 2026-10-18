@@ -33,6 +33,13 @@ import {
 } from './productivityTracking';
 import { liveEventAwardDebug, truncateId } from './liveEventDebugLogging';
 import { fetchClassroomStudentUids } from './classFlowSprintRosterService';
+import type { CfSprintAssignment } from '../types/classFlowWork';
+import {
+  extendedEndsAtMs,
+  parseSprintAssignments,
+  resumedEndsAtMs,
+  type CfTimerInput,
+} from './classFlowConfig';
 
 const roomRef = (sessionId: string) => doc(db, 'inSessionRooms', sessionId);
 
@@ -103,6 +110,22 @@ export function parseClassFlowSprint(raw: unknown): ClassFlowSprintState | null 
     markedCompleteUids: marked,
     rewardsGrantedUids: granted,
     incompletePenaltiesGrantedUids: penaltyGranted,
+    pausedAt: tsToMillis(o.pausedAt) != null ? (o.pausedAt as Timestamp) : null,
+    pausedAccumMs: typeof o.pausedAccumMs === 'number' ? Math.max(0, o.pausedAccumMs) : 0,
+    extendedSeconds: typeof o.extendedSeconds === 'number' ? Math.max(0, o.extendedSeconds) : 0,
+    objective: typeof o.objective === 'string' ? o.objective : undefined,
+    planId: typeof o.planId === 'string' ? o.planId : null,
+    assignments: parseSprintAssignments(o.assignments),
+  };
+}
+
+/** Shared timer view of a sprint (all clients derive the countdown from the same timestamps). */
+export function sprintTimerInput(sprint: ClassFlowSprintState): CfTimerInput {
+  return {
+    status: sprint.status,
+    startedAtMs: tsToMillis(sprint.startedAt) ?? 0,
+    endsAtMs: tsToMillis(sprint.endsAt) ?? 0,
+    pausedAtMs: tsToMillis(sprint.pausedAt),
   };
 }
 
@@ -115,6 +138,12 @@ export type StartClassFlowSprintPayload = {
   rewardXP: number;
   /** Deduct this much vault PP from each session player not marked complete (0 = off). */
   incompletePenaltyVaultPP?: number;
+  /** Class Flow Sprint Management (optional). */
+  objective?: string;
+  planId?: string | null;
+  assignments?: CfSprintAssignment[];
+  /** Server-corrected clock so every client sees the same countdown. */
+  nowMs?: number;
 };
 
 export async function startClassFlowSprint(
@@ -123,7 +152,7 @@ export async function startClassFlowSprint(
   actingEmail: string | undefined,
   actingDisplayName: string | undefined,
   payload: StartClassFlowSprintPayload
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; sprintId?: string }> {
   try {
     const ref = roomRef(sessionId);
     const snap = await getDoc(ref);
@@ -140,7 +169,8 @@ export async function startClassFlowSprint(
     const title = payload.title.trim();
     if (!title) return { ok: false, error: 'Enter a sprint goal title' };
 
-    const durationSeconds = Math.max(60, Math.min(3600, Math.floor(payload.durationSeconds || 120)));
+    const maxDuration = payload.assignments?.length ? 7200 : 3600;
+    const durationSeconds = Math.max(60, Math.min(maxDuration, Math.floor(payload.durationSeconds || 120)));
     const rewardParticipationPoints = Math.max(1, Math.min(20, Math.floor(payload.rewardParticipationPoints || 1)));
     const rewardVaultPP = Math.max(0, Math.min(5000, Math.floor(payload.rewardVaultPP || 0)));
     const rewardXP = Math.max(0, Math.min(5000, Math.floor(payload.rewardXP || 0)));
@@ -149,9 +179,15 @@ export async function startClassFlowSprint(
       Math.min(5000, Math.floor(payload.incompletePenaltyVaultPP ?? 0))
     );
 
-    const now = Timestamp.now();
+    const now = payload.nowMs ? Timestamp.fromMillis(payload.nowMs) : Timestamp.now();
     const endsAt = Timestamp.fromMillis(now.toMillis() + durationSeconds * 1000);
     const id = `sprint_${Date.now()}`;
+    const workFields: Record<string, unknown> = {};
+    if (payload.assignments?.length || payload.objective || payload.planId) {
+      workFields.objective = (payload.objective || '').trim();
+      workFields.planId = payload.planId ?? null;
+      workFields.assignments = payload.assignments ?? [];
+    }
 
     const roomClassId =
       typeof snap.data()?.classId === 'string'
@@ -187,6 +223,7 @@ export async function startClassFlowSprint(
         markedCompleteUids: [],
         rewardsGrantedUids: [],
         incompletePenaltiesGrantedUids: [],
+        ...workFields,
       },
       updatedAt: serverTimestamp(),
       battleLog: arrayUnion(
@@ -213,7 +250,7 @@ export async function startClassFlowSprint(
       { liveEventMode, neutralFlowEnergyType }
     );
 
-    return { ok: true };
+    return { ok: true, sprintId: id };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
@@ -243,6 +280,71 @@ export async function closeClassFlowSprint(
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };
+  }
+}
+
+type SprintTimerAction =
+  | { kind: 'pause' }
+  | { kind: 'resume' }
+  | { kind: 'extend'; seconds: number }
+  | { kind: 'autoClose' };
+
+/**
+ * Pause / resume / extend / auto-close in a transaction so concurrent hosts cannot corrupt the
+ * shared timestamps. `nowMs` should be server-corrected (see useServerClock).
+ */
+export async function updateClassFlowSprintTimer(
+  sessionId: string,
+  actingUid: string,
+  actingEmail: string | undefined,
+  actingDisplayName: string | undefined,
+  action: SprintTimerAction,
+  nowMs: number = Date.now()
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const ref = roomRef(sessionId);
+    let logLine: string | null = null;
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error('Session not found');
+      if (!canActAsRoomHost(snap.data()?.hostUid, actingUid, actingEmail, actingDisplayName)) {
+        throw new Error('Only the session host can control the sprint timer');
+      }
+      const sprint = parseClassFlowSprint(snap.data()?.classFlowSprint);
+      if (!sprint) throw new Error('No active sprint');
+      const t = sprintTimerInput(sprint);
+      const patch: Record<string, unknown> = {};
+      if (action.kind === 'pause') {
+        if (sprint.status !== 'live' || t.pausedAtMs != null) return;
+        if (t.endsAtMs <= nowMs) return;
+        patch['classFlowSprint.pausedAt'] = Timestamp.fromMillis(nowMs);
+        logLine = `⏸️ Sprint paused: "${sprint.title}"`;
+      } else if (action.kind === 'resume') {
+        if (t.pausedAtMs == null) return;
+        const r = resumedEndsAtMs(t, nowMs);
+        patch['classFlowSprint.endsAt'] = Timestamp.fromMillis(r.endsAtMs);
+        patch['classFlowSprint.pausedAt'] = deleteField();
+        patch['classFlowSprint.pausedAccumMs'] = (sprint.pausedAccumMs || 0) + r.pausedMs;
+        logLine = `▶️ Sprint resumed: "${sprint.title}"`;
+      } else if (action.kind === 'extend') {
+        const seconds = Math.max(15, Math.min(3600, Math.floor(action.seconds)));
+        const live = { ...t, status: 'live' as const };
+        patch['classFlowSprint.endsAt'] = Timestamp.fromMillis(extendedEndsAtMs(live, nowMs, seconds));
+        patch['classFlowSprint.extendedSeconds'] = (sprint.extendedSeconds || 0) + seconds;
+        if (sprint.status !== 'live') patch['classFlowSprint.status'] = 'live';
+        logLine = `⏱️ Sprint extended by ${formatSprintDurationForLog(seconds)}: "${sprint.title}"`;
+      } else {
+        if (sprint.status !== 'live' || t.pausedAtMs != null || t.endsAtMs > nowMs) return;
+        patch['classFlowSprint.status'] = 'closed';
+        logLine = `🏁 Sprint time is up: "${sprint.title}" — submissions closed.`;
+      }
+      patch.updatedAt = serverTimestamp();
+      if (logLine) patch.battleLog = arrayUnion(logLine);
+      tx.update(ref, patch as DocumentData);
+    });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 

@@ -1,4 +1,5 @@
 import { doc, getDoc, runTransaction, setDoc, updateDoc } from 'firebase/firestore';
+import type { DocumentData, DocumentReference } from 'firebase/firestore';
 import { db } from '../firebase';
 import { recordPPChange, type RecordPPChangeInput } from './ppLedgerService';
 
@@ -130,16 +131,41 @@ export type PPDeltaResult = { previous: number; next: number; applied: number };
 export async function applyPlayerPPDelta(
   userId: string,
   delta: number,
-  options?: { mode?: PPCapMode; meta?: PPChangeMeta; extraVaultFields?: Record<string, unknown> }
-): Promise<PPDeltaResult> {
+  options?: {
+    mode?: PPCapMode;
+    meta?: PPChangeMeta;
+    extraVaultFields?: Record<string, unknown>;
+    /** Extra fields written to students/{uid} in the same transaction (e.g. an xp increment). */
+    extraStudentFields?: Record<string, unknown>;
+    /**
+     * Idempotency guard: the change only applies if `isClaimable(guard data)` is true, and
+     * `claimUpdate` is written to the guard doc atomically. Otherwise nothing changes (`skipped`).
+     */
+    guard?: {
+      ref: DocumentReference<DocumentData>;
+      isClaimable: (data: DocumentData | undefined) => boolean;
+      claimUpdate: Record<string, unknown>;
+    };
+  }
+): Promise<PPDeltaResult & { skipped?: boolean }> {
   if (!userId) throw new Error('applyPlayerPPDelta: missing userId');
   const mode = options?.mode ?? 'award';
   const vaultRef = doc(db, 'vaults', userId);
   const studentRef = doc(db, 'students', userId);
   const userRef = doc(db, 'users', userId);
 
+  const guard = options?.guard;
   const result = await runTransaction(db, async (tx) => {
+    const guardSnap = guard ? await tx.get(guard.ref) : null;
     const [vaultSnap, studentSnap] = await Promise.all([tx.get(vaultRef), tx.get(studentRef)]);
+    if (guard && guardSnap && !guard.isClaimable(guardSnap.exists() ? guardSnap.data() : undefined)) {
+      const current = resolveCanonicalPP({
+        vaultExists: vaultSnap.exists(),
+        vaultPP: vaultSnap.exists() ? vaultSnap.data()?.currentPP : undefined,
+        studentPP: studentSnap.exists() ? studentSnap.data()?.powerPoints : undefined,
+      });
+      return { previous: current, next: current, applied: 0, skipped: true };
+    }
     const previous = resolveCanonicalPP({
       vaultExists: vaultSnap.exists(),
       vaultPP: vaultSnap.exists() ? vaultSnap.data()?.currentPP : undefined,
@@ -153,9 +179,11 @@ export async function applyPlayerPPDelta(
     if (vaultSnap.exists()) {
       tx.update(vaultRef, { currentPP: next, ...(options?.extraVaultFields || {}) });
     }
-    if (studentSnap.exists()) tx.update(studentRef, { powerPoints: next });
-    return { previous, next, applied: next - previous };
+    if (studentSnap.exists()) tx.update(studentRef, { powerPoints: next, ...(options?.extraStudentFields || {}) });
+    if (guard) tx.update(guard.ref, guard.claimUpdate as DocumentData);
+    return { previous, next, applied: next - previous, skipped: false };
   });
+  if (result.skipped) return result;
 
   // users is a display mirror that some callers cannot read; never fail the change over it.
   try {

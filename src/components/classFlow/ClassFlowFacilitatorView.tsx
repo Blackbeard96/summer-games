@@ -1,0 +1,286 @@
+import React, { useState } from 'react';
+import type { CfRewardResult } from '../../utils/classFlowRewards';
+import { sprintPhase } from '../../utils/classFlowConfig';
+import { endPlannedSprint, startPlannedSprint, updateCfConfig } from '../../utils/classFlowWorkService';
+import { sprintTimerInput, updateClassFlowSprintTimer } from '../../utils/liveEventSprintService';
+import ClassFlowSprintTimer from './ClassFlowSprintTimer';
+import PlanEditor from './facilitator/PlanEditor';
+import ApprovalsTab from './facilitator/ApprovalsTab';
+import TeamsTab from './facilitator/TeamsTab';
+import RewardsTab from './facilitator/RewardsTab';
+import AnalyticsTab from './facilitator/AnalyticsTab';
+import SettingsTab from './facilitator/SettingsTab';
+import type { CfFacilitatorData, CfSharedProps } from './classFlowPanelTypes';
+
+type Tab = 'sprint' | 'approvals' | 'teams' | 'rewards' | 'analytics' | 'settings';
+
+type Props = CfSharedProps & { data: CfFacilitatorData; preview: CfRewardResult | null };
+
+const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
+  const { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, data, preview } = props;
+  const [tab, setTab] = useState<Tab>('sprint');
+  const [collapsed, setCollapsed] = useState(!config.workAssignmentsEnabled);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
+  const [startIndex, setStartIndex] = useState<number | null>(null);
+
+  const pendingCount = data.submissions.filter((s) => s.status === 'submitted' || s.status === 'awaiting_approval').length;
+  const phase = sprint ? sprintPhase(sprintTimerInput(sprint), nowMs) : null;
+  const isLive = phase === 'running' || phase === 'paused';
+  const plan = config.plan;
+  const currentIdx = sprint?.planId ? plan.findIndex((p) => p.planId === sprint.planId) : -1;
+  const nextIdx = startIndex ?? (currentIdx >= 0 ? currentIdx + 1 : 0);
+  const nextPlan = plan[nextIdx] || null;
+
+  const run = async (fn: () => Promise<{ ok: boolean; error?: string }>, success?: string) => {
+    setBusy(true);
+    setMessage(null);
+    const res = await fn();
+    setBusy(false);
+    if (!res.ok) setMessage({ text: res.error || 'Something went wrong', error: true });
+    else if (success) setMessage({ text: success });
+  };
+
+  const timer = (kind: 'pause' | 'resume' | 'extend', seconds = 0) =>
+    run(() =>
+      updateClassFlowSprintTimer(
+        sessionId,
+        actor.uid,
+        actor.email,
+        actor.displayName,
+        kind === 'extend' ? { kind, seconds } : { kind },
+        nowMs
+      )
+    );
+
+  const startNext = async (endCurrentFirst: boolean) => {
+    if (!nextPlan) return;
+    await run(async () => {
+      if (endCurrentFirst && sprint && sprint.status === 'live') {
+        const r = await endPlannedSprint(sessionId, actor, sprint.id);
+        if (!r.ok) return r;
+      }
+      const r = await startPlannedSprint(sessionId, actor, nextPlan, nowMs);
+      if (r.ok) setStartIndex(null);
+      return r.ok ? { ok: true } : r;
+    }, `Started “${nextPlan.title}”.`);
+  };
+
+  if (!config.workAssignmentsEnabled && collapsed) {
+    return (
+      <div className="cf-root">
+        <div className="cf-between">
+          <div>
+            <h3 className="cf-title">Class Flow Sprint Manager</h3>
+            <div className="cf-sub">Off for this session — the classic sprint tools work exactly as before.</div>
+          </div>
+          <div className="cf-row">
+            <button
+              type="button"
+              className="cf-btn cf-btn--primary"
+              onClick={async () => {
+                const res = await updateCfConfig(sessionId, { workAssignmentsEnabled: true, expandedTimerEnabled: true });
+                if (res.ok) setCollapsed(false);
+                else notify({ title: 'Could not enable', body: res.error, tone: 'bad' });
+              }}
+            >
+              Enable Work Assignments
+            </button>
+            <button type="button" className="cf-btn cf-btn--ghost" onClick={() => { setCollapsed(false); setTab('settings'); }}>
+              Settings
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const TABS: [Tab, string][] = [
+    ['sprint', 'Sprint'],
+    ['approvals', 'Approvals'],
+    ...(config.teamModeEnabled ? ([['teams', 'Teams']] as [Tab, string][]) : []),
+    ['rewards', 'Rewards'],
+    ['analytics', 'Analytics'],
+    ['settings', 'Settings'],
+  ];
+
+  return (
+    <div className="cf-root" aria-label="Class Flow facilitator dashboard">
+      <div className="cf-between">
+        <h3 className="cf-title">Class Flow Sprint Manager</h3>
+        <div className="cf-row">
+          {pendingCount > 0 && (
+            <button type="button" className="cf-btn cf-btn--ghost" onClick={() => setTab('approvals')}>
+              Pending <span className="cf-badge cf-badge--count">{pendingCount}</span>
+            </button>
+          )}
+          {!config.workAssignmentsEnabled && (
+            <button type="button" className="cf-btn cf-btn--ghost" onClick={() => setCollapsed(true)}>
+              Close
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="cf-tabs" role="tablist">
+        {TABS.map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            className={`cf-tab ${tab === id ? 'cf-tab--active' : ''}`}
+            onClick={() => setTab(id)}
+          >
+            {label}
+            {id === 'approvals' && pendingCount > 0 ? <span className="cf-badge cf-badge--count" style={{ marginLeft: 6 }}>{pendingCount}</span> : null}
+          </button>
+        ))}
+      </div>
+
+      {message && <div className={`cf-msg ${message.error ? 'cf-msg--error' : ''}`} style={{ marginBottom: 10 }}>{message.text}</div>}
+
+      {tab === 'sprint' && (
+        <div>
+          {sprint ? (
+            <ClassFlowSprintTimer sprint={sprint} nowMs={nowMs} expandable acceptLate={config.acceptLateSubmissions} availablePoints={preview?.pool.totalBase ?? null} />
+          ) : (
+            <div className="cf-empty">No sprint running.</div>
+          )}
+
+          <div className="cf-row" style={{ marginTop: 10 }}>
+            {phase === 'running' && (
+              <button type="button" className="cf-btn" disabled={busy} onClick={() => timer('pause')}>⏸ Pause</button>
+            )}
+            {phase === 'paused' && (
+              <button type="button" className="cf-btn cf-btn--green" disabled={busy} onClick={() => timer('resume')}>▶ Resume</button>
+            )}
+            {sprint && (
+              <>
+                <button type="button" className="cf-btn" disabled={busy} onClick={() => timer('extend', 60)}>+1 min</button>
+                <button type="button" className="cf-btn" disabled={busy} onClick={() => timer('extend', 300)}>+5 min</button>
+              </>
+            )}
+            {sprint && isLive && (
+              <button
+                type="button"
+                className="cf-btn cf-btn--red"
+                disabled={busy}
+                onClick={() => window.confirm(`End “${sprint.title}” now? Submissions will close.`) && run(() => endPlannedSprint(sessionId, actor, sprint.id), 'Sprint ended.')}
+              >
+                ■ End sprint
+              </button>
+            )}
+            {plan.length > 0 && (
+              <>
+                <select
+                  className="cf-select"
+                  value={nextIdx}
+                  onChange={(e) => setStartIndex(Number(e.target.value))}
+                  aria-label="Next sprint"
+                >
+                  {plan.map((p, i) => (
+                    <option key={p.planId} value={i}>
+                      {i + 1}. {p.title} ({p.durationMinutes} min · {p.assignments.length} tasks)
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="cf-btn cf-btn--primary"
+                  disabled={busy || !nextPlan}
+                  onClick={() => {
+                    if (isLive && !window.confirm('End the current sprint and start the next one?')) return;
+                    void startNext(isLive);
+                  }}
+                >
+                  {isLive ? '⏭ Next sprint' : '▶ Start sprint'}
+                </button>
+              </>
+            )}
+          </div>
+          {sprint && phase !== 'running' && phase !== 'paused' && config.workAssignmentsEnabled && (
+            <div className="cf-sub" style={{ marginTop: 8 }}>
+              Sprint ended. Review pending work, then finalize rewards in the Rewards tab.
+            </div>
+          )}
+
+          {preview && (
+            <div className="cf-grid" style={{ marginTop: 12 }}>
+              <div className="cf-card"><div className="cf-stat-label">Pending review</div><div className="cf-stat-value">{data.submissions.filter((s) => s.sprintId === sprint?.id && (s.status === 'submitted' || s.status === 'awaiting_approval')).length}</div></div>
+              <div className="cf-card"><div className="cf-stat-label">Approved base</div><div className="cf-stat-value">{preview.pool.approvedBase}</div></div>
+              <div className="cf-card"><div className="cf-stat-label">Remaining</div><div className="cf-stat-value">{preview.pool.remainingBase}</div></div>
+              <div className="cf-card"><div className="cf-stat-label">Projected payout</div><div className="cf-stat-value">{preview.pool.finalDistributed}</div></div>
+            </div>
+          )}
+
+          <PlanEditor
+            sessionId={sessionId}
+            plan={plan}
+            activePlanId={sprint?.planId ?? null}
+            onMessage={(text, error) => setMessage({ text, error })}
+          />
+        </div>
+      )}
+
+      {tab === 'approvals' && (
+        <ApprovalsTab
+          sessionId={sessionId}
+          reviewerUid={actor.uid}
+          submissions={data.submissions}
+          teams={data.teams}
+          tableByUid={data.tableByUid}
+          archive={data.archive}
+          currentSprintId={sprint?.id ?? null}
+          notify={notify}
+        />
+      )}
+
+      {tab === 'teams' && (
+        <TeamsTab
+          sessionId={sessionId}
+          actorUid={actor.uid}
+          config={config}
+          teams={data.teams}
+          storedTeams={data.storedTeams}
+          tableByUid={data.tableByUid}
+          nameOf={nameOf}
+          notify={notify}
+        />
+      )}
+
+      {tab === 'rewards' && (
+        <RewardsTab
+          sessionId={sessionId}
+          actorUid={actor.uid}
+          config={config}
+          currentSprint={sprint ? { id: sprint.id, title: sprint.title, assignments: sprint.assignments || [] } : null}
+          archive={data.archive}
+          submissions={data.submissions}
+          teams={data.teams}
+          players={players}
+          sharing={data.sharing}
+          allocations={data.allocations}
+          nameOf={nameOf}
+          notify={notify}
+        />
+      )}
+
+      {tab === 'analytics' && (
+        <AnalyticsTab
+          submissions={data.submissions}
+          allocations={data.allocations}
+          archive={data.archive}
+          currentAssignments={sprint?.assignments || []}
+          teams={data.teams}
+          players={players}
+          nameOf={nameOf}
+        />
+      )}
+
+      {tab === 'settings' && <SettingsTab sessionId={sessionId} config={config} notify={notify} />}
+    </div>
+  );
+};
+
+export default ClassFlowFacilitatorView;

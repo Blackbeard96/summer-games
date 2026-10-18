@@ -805,12 +805,15 @@ service cloud.firestore {
       
       // Host/admin OR students in the session class (live event battle state, moves, revive potion, etc.)
       // teacherId matches hostUid on new sessions; allow both so older docs or edge cases still authorize the teacher.
+      // Class Flow reward settings (classFlowConfig) are facilitator-only.
       allow update: if request.auth != null && (
         resource.data.hostUid == request.auth.uid ||
         resource.data.teacherId == request.auth.uid ||
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-        canAccessInSessionRoomByData(resource.data) ||
-        isSessionPresenceParticipant(sessionId)
+        (
+          (canAccessInSessionRoomByData(resource.data) || isSessionPresenceParticipant(sessionId)) &&
+          (isAppAdminUser() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['classFlowConfig']))
+        )
       );
       
       allow delete: if request.auth != null && (
@@ -821,6 +824,132 @@ service cloud.firestore {
       match /players/{playerId} {
         allow read: if request.auth != null; // Anyone in session can read player presence
         allow write: if request.auth != null && request.auth.uid == playerId; // Only own presence doc
+      }
+
+      // ---------------- Class Flow Sprint Management ----------------
+      // Facilitators review work and control rewards; players only submit their own work and
+      // claim their own payouts. PP/XP never comes from a player-written amount.
+      function isCfFacilitator() {
+        return isLiveEventStaff() || isInSessionRoomHost(sessionId) || isAppAdminUser();
+      }
+
+      // Server clock probe (one doc per player) so every countdown uses the same time.
+      match /cfClock/{uid} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+
+      match /cfSprints/{sprintId} {
+        allow read: if canReadInSessionRoomSession(sessionId);
+        allow write: if isCfFacilitator();
+      }
+
+      // Facilitator-published team progress (no evidence or other players' submissions).
+      match /cfPublic/{docId} {
+        allow read: if canReadInSessionRoomSession(sessionId);
+        allow write: if isCfFacilitator();
+      }
+
+      // Deterministic id `{sprintId}__{assignmentId}__{uid}` prevents duplicate submissions.
+      match /cfSubmissions/{submissionId} {
+        // `resource == null` lets the submit transaction check that its own doc does not exist yet.
+        allow read: if isCfFacilitator() || (
+          request.auth != null && (
+            resource == null ||
+            resource.data.playerId == request.auth.uid ||
+            request.auth.uid in resource.data.contributorIds
+          )
+        );
+        allow create: if isCfFacilitator() || (
+          canReadInSessionRoomSession(sessionId) &&
+          request.resource.data.playerId == request.auth.uid &&
+          submissionId == request.resource.data.sprintId + '__' + request.resource.data.assignmentId + '__' + request.auth.uid &&
+          request.resource.data.status in ['submitted', 'awaiting_approval'] &&
+          request.resource.data.approvedPoints == 0 &&
+          request.resource.data.reviewedBy == null &&
+          request.resource.data.contributorIds is list &&
+          request.resource.data.contributorIds.size() <= 12
+        );
+        // Players may only resubmit after a revision request.
+        allow update: if isCfFacilitator() || (
+          request.auth != null &&
+          resource.data.playerId == request.auth.uid &&
+          resource.data.status == 'revision_requested' &&
+          request.resource.data.playerId == request.auth.uid &&
+          request.resource.data.sprintId == resource.data.sprintId &&
+          request.resource.data.assignmentId == resource.data.assignmentId &&
+          request.resource.data.status in ['submitted', 'awaiting_approval'] &&
+          request.resource.data.approvedPoints == 0 &&
+          request.resource.data.reviewedBy == null &&
+          request.resource.data.contributorIds is list &&
+          request.resource.data.contributorIds.size() <= 12
+        );
+        allow delete: if isCfFacilitator();
+      }
+
+      // Event-scoped team names / manual teams. Players may only suggest a name.
+      match /cfTeams/{teamId} {
+        allow read: if canReadInSessionRoomSession(sessionId);
+        allow write: if isCfFacilitator();
+        allow create: if canReadInSessionRoomSession(sessionId) &&
+          request.resource.data.keys().hasOnly(['proposedName', 'proposedBy', 'proposedAt']) &&
+          request.resource.data.proposedBy == request.auth.uid &&
+          request.resource.data.proposedName is string &&
+          request.resource.data.proposedName.size() <= 32;
+        allow update: if canReadInSessionRoomSession(sessionId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['proposedName', 'proposedBy', 'proposedAt']) &&
+          request.resource.data.proposedBy == request.auth.uid &&
+          request.resource.data.proposedName is string &&
+          request.resource.data.proposedName.size() <= 32;
+      }
+
+      // Event-scoped table numbers (never written to permanent profiles).
+      match /cfTables/{uid} {
+        allow read: if canReadInSessionRoomSession(sessionId);
+        allow write: if isCfFacilitator();
+        allow create, update: if request.auth != null && request.auth.uid == uid &&
+          canReadInSessionRoomSession(sessionId) &&
+          request.resource.data.keys().hasOnly(['tableNumber', 'setBy', 'updatedAt']) &&
+          request.resource.data.tableNumber is int &&
+          request.resource.data.tableNumber >= 1 && request.resource.data.tableNumber <= 99;
+        allow delete: if request.auth != null && request.auth.uid == uid;
+      }
+
+      // Credit sharing: players vote (own key only) or a captain proposes; only facilitators approve.
+      match /cfSharing/{decisionId} {
+        allow read: if canReadInSessionRoomSession(sessionId);
+        allow write: if isCfFacilitator();
+        allow create: if canReadInSessionRoomSession(sessionId) &&
+          request.resource.data.keys().hasOnly(['sprintId', 'teamId', 'votes', 'proposedBy', 'proposedPercent', 'status']) &&
+          (!('votes' in request.resource.data) || request.resource.data.votes.keys().hasOnly([request.auth.uid])) &&
+          (!('proposedBy' in request.resource.data) || request.resource.data.proposedBy == request.auth.uid) &&
+          (!('status' in request.resource.data) || request.resource.data.status == 'proposed');
+        allow update: if canReadInSessionRoomSession(sessionId) &&
+          resource.data.get('status', 'open') in ['open', 'proposed'] &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['votes', 'proposedBy', 'proposedPercent', 'status']) &&
+          request.resource.data.get('votes', {}).diff(resource.data.get('votes', {})).affectedKeys().hasOnly([request.auth.uid]) &&
+          request.resource.data.get('proposedBy', request.auth.uid) in [request.auth.uid, resource.data.get('proposedBy', null)] &&
+          request.resource.data.get('status', 'open') in ['open', 'proposed'];
+      }
+
+      // Computed reward breakdowns — facilitator-written only.
+      match /cfAllocations/{allocationId} {
+        allow read: if isCfFacilitator() || (request.auth != null && resource.data.playerId == request.auth.uid);
+        allow write: if isCfFacilitator();
+      }
+
+      // Payouts: created once by a facilitator with immutable amounts; the player can only mark
+      // their own pending payout as claimed (done atomically with the PP/XP change).
+      match /cfPayouts/{payoutId} {
+        allow read: if isCfFacilitator() || (request.auth != null && resource.data.playerId == request.auth.uid);
+        allow create: if isCfFacilitator() &&
+          request.resource.data.status == 'pending' &&
+          request.resource.data.pp is int && request.resource.data.pp >= 0 &&
+          request.resource.data.xp is int && request.resource.data.xp >= 0;
+        allow update: if request.auth != null &&
+          resource.data.playerId == request.auth.uid &&
+          resource.data.status == 'pending' &&
+          request.resource.data.status == 'claimed' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'claimedAt']);
       }
       
       // Actions subcollection - students can create actions, host can resolve
@@ -1015,6 +1144,12 @@ service cloud.firestore {
     }
     
     // Squads collection - allow authenticated users to read/write
+    // Class Flow Work Library — hosts read it to plan sprints; only admins edit it.
+    match /classFlowWorkLibrary/{workId} {
+      allow read: if request.auth != null;
+      allow write: if isLiveEventStaff() || isAppAdminUser();
+    }
+
     match /squads/{squadId} {
       allow read, write: if request.auth != null;
       

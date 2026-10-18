@@ -26,6 +26,40 @@ export async function getUserSquadAbbreviation(userId: string): Promise<string |
   }
 }
 
+export interface UserSquadInfo {
+  squadId: string;
+  name: string;
+  abbreviation: string | null;
+}
+
+/** Read-only squad membership for many users (first squad found wins). */
+export async function getUserSquadInfo(userIds: string[]): Promise<Map<string, UserSquadInfo>> {
+  const result = new Map<string, UserSquadInfo>();
+  const wanted = new Set(userIds);
+  try {
+    const squadsSnapshot = await getDocs(collection(db, 'squads'));
+    squadsSnapshot.docs.forEach((squadDoc) => {
+      const data = squadDoc.data();
+      const info: UserSquadInfo = {
+        squadId: squadDoc.id,
+        name: typeof data.name === 'string' && data.name ? data.name : data.abbreviation || 'Squad',
+        abbreviation: data.abbreviation || null,
+      };
+      const uids = new Set<string>(Array.isArray(data.memberUids) ? data.memberUids : []);
+      (data.members || []).forEach((m: unknown) => {
+        const mid = squadMemberUid(m as never);
+        if (mid) uids.add(mid);
+      });
+      uids.forEach((uid) => {
+        if (wanted.has(uid) && !result.has(uid)) result.set(uid, info);
+      });
+    });
+  } catch (error) {
+    console.error('Error fetching squad info:', error);
+  }
+  return result;
+}
+
 /**
  * Fetches squad abbreviations for multiple users at once
  * @param userIds - Array of user IDs to look up

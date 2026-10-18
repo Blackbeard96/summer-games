@@ -47,6 +47,7 @@ import TrainingGroundsAdmin from '../components/TrainingGroundsAdmin';
 import SkillLibraryAdmin from './admin/SkillLibraryAdmin';
 import SkillAnalyticsAdmin from './admin/SkillAnalyticsAdmin';
 import LiveEventHistoryAdmin from './admin/LiveEventHistoryAdmin';
+import ClassFlowWorkLibraryAdmin from '../components/admin/ClassFlowWorkLibraryAdmin';
 import PopupControlsAdmin from './admin/PopupControlsAdmin';
 import SearchBar from '../components/SearchBar';
 import { searchStudents } from '../utils/searchUtils';
@@ -259,7 +260,7 @@ const AdminPanel: React.FC = () => {
     | 'manifests' | 'level2-manifest' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup'
     | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts'
     | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'weekly-goals-review' | 'work-board' | 'training-grounds'
-    | 'skill-library' | 'skill-analytics' | 'live-event-history' | 'popup-controls'
+    | 'skill-library' | 'skill-analytics' | 'live-event-history' | 'class-flow-work' | 'popup-controls'
     | 'season1' | 'rr-candies' | 'progression-repair' | 'vault-recovery' | 'uxp-approval' | 'missions'
     | 'island-raid-levels' | 'productivity-dashboard' | 'civic-economy';
   const ADMIN_TAB_STORAGE_KEY = 'adminPanel.activeTab.v1';
@@ -272,6 +273,7 @@ const AdminPanel: React.FC = () => {
       if (urlTab === 'level2-manifest') return 'level2-manifest';
       if (urlTab === 'productivity') return 'productivity-dashboard';
       if (urlTab === 'live-event-history') return 'live-event-history';
+      if (urlTab === 'class-flow-work') return 'class-flow-work';
       if (urlTab === 'popup-controls') return 'popup-controls';
       if (urlTab === 'work-board') return 'work-board';
       if (urlTab === 'civic-economy') return 'civic-economy';
@@ -3342,6 +3344,21 @@ const AdminPanel: React.FC = () => {
           ⚔ Live Event History
         </button>
         <button
+          onClick={() => setActiveTab('class-flow-work')}
+          style={{
+            backgroundColor: activeTab === 'class-flow-work' ? '#1e293b' : '#e5e7eb',
+            color: activeTab === 'class-flow-work' ? '#C9A227' : '#374151',
+            border: activeTab === 'class-flow-work' ? '1px solid #C9A227' : 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          🏃 Class Flow Work
+        </button>
+        <button
           onClick={() => setActiveTab('popup-controls')}
           style={{
             backgroundColor: activeTab === 'popup-controls' ? '#0f172a' : '#e5e7eb',
@@ -3560,6 +3577,8 @@ const AdminPanel: React.FC = () => {
         <SkillAnalyticsAdmin />
       ) : activeTab === 'live-event-history' ? (
         <LiveEventHistoryAdmin />
+      ) : activeTab === 'class-flow-work' ? (
+        <ClassFlowWorkLibraryAdmin />
       ) : activeTab === 'popup-controls' ? (
         <PopupControlsAdmin />
       ) : activeTab === 'rr-candies' ? (

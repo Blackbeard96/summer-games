@@ -12,7 +12,9 @@ import {
   toggleClassFlowSprintMark,
   grantClassFlowSprintRewards,
   applyClassFlowSprintIncompletePenalties,
+  sprintTimerInput,
 } from '../utils/liveEventSprintService';
+import { sprintRemainingMs } from '../utils/classFlowConfig';
 import { mergeSprintRosterForClassFlow, fetchClassroomStudentRoster } from '../utils/classFlowSprintRosterService';
 import {
   buildGameTimeRoster,
@@ -186,13 +188,15 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
     return () => clearInterval(id);
   }, [sprint?.id, sprint?.status]);
 
+  const sprintPaused = !!sprint?.pausedAt;
   const remainingSec = useMemo(() => {
     if (!sprint) return 0;
+    if (sprintPaused) return Math.ceil(sprintRemainingMs(sprintTimerInput(sprint), now) / 1000);
     const end = endsAtMs(sprint);
     return Math.max(0, Math.ceil((end - now) / 1000));
-  }, [sprint, now]);
+  }, [sprint, now, sprintPaused]);
 
-  const timerExpired = sprint && sprint.status === 'live' && remainingSec <= 0;
+  const timerExpired = sprint && sprint.status === 'live' && !sprintPaused && remainingSec <= 0;
 
   const sprintRosterRows = useMemo(
     () => mergeSprintRosterForClassFlow(effectiveClassRoster, sessionPlayers),
@@ -375,7 +379,11 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
         <h2 style={{ margin: 0, fontSize: '1.125rem', fontWeight: 700 }}>🏃 Class Flow Sprint</h2>
         {sprint && (
           <span style={{ fontSize: '0.8rem', opacity: 0.9 }}>
-            {sprint.status === 'live' ? (timerExpired ? 'Time window ended' : `Time left: ${fmt(remainingSec)}`) : 'Window closed — award when ready'}
+            {sprint.status === 'live'
+              ? timerExpired
+                ? 'Time window ended'
+                : `${sprintPaused ? 'Paused — ' : ''}Time left: ${fmt(remainingSec)}`
+              : 'Window closed — award when ready'}
           </span>
         )}
       </div>

@@ -1,0 +1,182 @@
+/* Class Flow Sprint Management — MST dark futuristic styling */
+.cf-root {
+  --cf-bg: #05070d;
+  --cf-panel: rgba(13, 17, 30, 0.92);
+  --cf-panel-2: rgba(22, 27, 45, 0.9);
+  --cf-line: rgba(212, 168, 79, 0.28);
+  --cf-gold: var(--mst-gold, #d4a84f);
+  --cf-gold-bright: var(--mst-gold-bright, #f0c96a);
+  --cf-purple: var(--mst-purple, #6d3ef2);
+  --cf-teal: #2dd4bf;
+  --cf-green: #34d399;
+  --cf-amber: #fbbf24;
+  --cf-red: #f87171;
+  --cf-text: #e8e6f0;
+  --cf-muted: #9aa0b8;
+  font-family: 'Outfit', system-ui, sans-serif;
+  color: var(--cf-text);
+  background: radial-gradient(120% 140% at 0% 0%, rgba(109, 62, 242, 0.16), transparent 55%),
+    radial-gradient(120% 140% at 100% 0%, rgba(212, 168, 79, 0.1), transparent 55%), var(--cf-bg);
+  border: 1px solid var(--cf-line);
+  border-radius: 16px;
+  padding: 16px;
+  margin: 12px 0;
+  box-shadow: 0 0 0 1px rgba(109, 62, 242, 0.12), 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+.cf-root, .cf-root * { box-sizing: border-box; }
+.cf-root { max-width: 100%; }
+.cf-title {
+  font-family: 'Cinzel', serif;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cf-gold-bright);
+  margin: 0;
+  font-size: 15px;
+}
+.cf-sub { color: var(--cf-muted); font-size: 12px; }
+.cf-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.cf-between { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cf-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.cf-card {
+  background: var(--cf-panel);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  padding: 12px;
+}
+.cf-card--gold { border-color: var(--cf-line); }
+.cf-stat-label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cf-muted); }
+.cf-stat-value { font-family: 'Cinzel', serif; font-size: 22px; color: var(--cf-gold-bright); }
+.cf-btn {
+  appearance: none;
+  border: 1px solid var(--cf-line);
+  background: rgba(212, 168, 79, 0.12);
+  color: var(--cf-gold-bright);
+  padding: 7px 12px;
+  border-radius: 9px;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  font-family: inherit;
+}
+.cf-btn:hover:not(:disabled) { background: rgba(212, 168, 79, 0.22); }
+.cf-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.cf-btn--primary { background: linear-gradient(135deg, var(--cf-gold), #b8862e); color: #120c02; border-color: transparent; }
+.cf-btn--primary:hover:not(:disabled) { background: linear-gradient(135deg, var(--cf-gold-bright), var(--cf-gold)); }
+.cf-btn--purple { background: rgba(109, 62, 242, 0.2); border-color: rgba(109, 62, 242, 0.5); color: #cbb8ff; }
+.cf-btn--green { background: rgba(52, 211, 153, 0.15); border-color: rgba(52, 211, 153, 0.45); color: #a7f3d0; }
+.cf-btn--red { background: rgba(248, 113, 113, 0.12); border-color: rgba(248, 113, 113, 0.45); color: #fecaca; }
+.cf-btn--ghost { background: transparent; border-color: rgba(255, 255, 255, 0.12); color: var(--cf-text); }
+.cf-input, .cf-select, .cf-textarea {
+  background: rgba(5, 7, 13, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--cf-text);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-family: inherit;
+  font-size: 13px;
+}
+.cf-textarea { width: 100%; min-height: 80px; resize: vertical; }
+.cf-label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--cf-muted); letter-spacing: 0.04em; }
+.cf-check { display: flex; gap: 8px; align-items: center; font-size: 13px; cursor: pointer; }
+.cf-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--cf-line); margin: 12px 0; flex-wrap: wrap; }
+.cf-tab {
+  background: transparent;
+  border: none;
+  color: var(--cf-muted);
+  padding: 8px 12px;
+  font-family: 'Cinzel', serif;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.cf-tab--active { color: var(--cf-gold-bright); border-bottom-color: var(--cf-gold); }
+.cf-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.cf-badge--count { background: var(--cf-red); color: #fff; border-color: transparent; min-width: 18px; justify-content: center; }
+.cf-status-not_started { color: var(--cf-muted); }
+.cf-status-in_progress { color: #93c5fd; }
+.cf-status-submitted, .cf-status-awaiting_approval { color: var(--cf-amber); }
+.cf-status-approved { color: var(--cf-green); }
+.cf-status-revision_requested { color: #fb923c; }
+.cf-status-rejected { color: var(--cf-red); }
+.cf-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cf-table th { text-align: left; color: var(--cf-muted); font-weight: 600; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; padding: 6px; border-bottom: 1px solid var(--cf-line); }
+.cf-table td { padding: 7px 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); vertical-align: top; }
+.cf-msg { font-size: 12px; padding: 8px 10px; border-radius: 8px; background: rgba(109, 62, 242, 0.14); border: 1px solid rgba(109, 62, 242, 0.35); }
+.cf-msg--error { background: rgba(248, 113, 113, 0.12); border-color: rgba(248, 113, 113, 0.4); color: #fecaca; }
+.cf-empty { color: var(--cf-muted); font-size: 13px; text-align: center; padding: 16px; }
+.cf-team-tag { font-family: 'Cinzel', serif; letter-spacing: 0.1em; font-size: 12px; color: var(--cf-gold-bright); }
+.cf-progress { height: 6px; background: rgba(255, 255, 255, 0.08); border-radius: 999px; overflow: hidden; }
+.cf-progress > span { display: block; height: 100%; background: linear-gradient(90deg, var(--cf-purple), var(--cf-gold)); transition: width 0.4s ease; }
+
+/* Timer */
+.cf-timer {
+  border: 1px solid var(--cf-line);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(109, 62, 242, 0.18), rgba(5, 7, 13, 0.92));
+  padding: 10px 14px;
+}
+.cf-timer-clock {
+  font-family: 'Cinzel', serif;
+  font-variant-numeric: tabular-nums;
+  font-size: 28px;
+  color: var(--cf-gold-bright);
+  text-shadow: 0 0 18px rgba(240, 201, 106, 0.35);
+  line-height: 1;
+}
+.cf-timer--expanded .cf-timer-clock { font-size: 56px; }
+.cf-timer--low .cf-timer-clock { color: #fca5a5; text-shadow: 0 0 18px rgba(248, 113, 113, 0.5); animation: cf-pulse 1s ease-in-out infinite; }
+.cf-timer--paused .cf-timer-clock { color: #93c5fd; text-shadow: none; }
+@keyframes cf-pulse { 50% { opacity: 0.6; } }
+
+/* Modal */
+.cf-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 3, 8, 0.78);
+  backdrop-filter: blur(4px);
+  z-index: 100000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.cf-modal { max-width: 620px; width: 100%; max-height: 90vh; overflow-y: auto; margin: 0; }
+
+/* Notification */
+.cf-toast-stack { position: fixed; right: 18px; bottom: 18px; z-index: 100001; display: flex; flex-direction: column; gap: 10px; max-width: 340px; }
+.cf-toast {
+  font-family: 'Outfit', system-ui, sans-serif;
+  color: #e8e6f0;
+  background: linear-gradient(135deg, rgba(13, 17, 30, 0.97), rgba(30, 20, 60, 0.97));
+  border: 1px solid rgba(212, 168, 79, 0.5);
+  border-left: 4px solid #d4a84f;
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5), 0 0 24px rgba(212, 168, 79, 0.2);
+  animation: cf-toast-in 0.35s ease-out;
+}
+.cf-toast--good { border-left-color: #34d399; }
+.cf-toast--warn { border-left-color: #fb923c; }
+.cf-toast--bad { border-left-color: #f87171; }
+.cf-toast-title { font-family: 'Cinzel', serif; letter-spacing: 0.14em; font-size: 13px; color: #f0c96a; text-transform: uppercase; }
+.cf-toast-body { font-size: 12px; margin-top: 4px; white-space: pre-line; }
+@keyframes cf-toast-in { from { transform: translateY(14px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .cf-toast, .cf-timer--low .cf-timer-clock { animation: none; }
+}
