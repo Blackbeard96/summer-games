@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { CfPlayerTaskStatus, CfSprintAssignment, CfSubmission } from '../../types/classFlowWork';
-import { sprintPhase } from '../../utils/classFlowConfig';
+import { formatClock, sprintPhase, sprintRemainingMs } from '../../utils/classFlowConfig';
 import { UNASSIGNED_TEAM_ID } from '../../utils/classFlowRewards';
 import { sanitizeTeamName } from '../../utils/classFlowTeams';
 import {
@@ -11,7 +12,7 @@ import {
   submitWork,
 } from '../../utils/classFlowWorkService';
 import { sprintTimerInput } from '../../utils/liveEventSprintService';
-import ClassFlowSprintTimer from './ClassFlowSprintTimer';
+import ClassFlowSprintTimer, { type CfTimerItem } from './ClassFlowSprintTimer';
 import ClassFlowSubmitModal, { type CfSubmitDraft } from './ClassFlowSubmitModal';
 import type { CfPlayerData, CfSharedProps } from './classFlowPanelTypes';
 
@@ -38,6 +39,7 @@ const ClassFlowPlayerView: React.FC<Props> = ({ sessionId, actor, sprint, config
   const [nameDraft, setNameDraft] = useState('');
   const [customShare, setCustomShare] = useState('');
   const [busy, setBusy] = useState(false);
+  const [fullScreen, setFullScreen] = useState(false);
 
   useEffect(() => {
     if (!sprint) return;
@@ -177,6 +179,26 @@ const ClassFlowPlayerView: React.FC<Props> = ({ sessionId, actor, sprint, config
 
   const myTable = data.tableByUid[uid];
 
+  const canSubmit = (a: CfSprintAssignment) => {
+    const st = statusOf(a);
+    const s = byAssignment[a.assignmentId];
+    return (st === 'not_started' || st === 'in_progress' || st === 'revision_requested') && !(s && s.playerId !== uid);
+  };
+  const submittable = assignments.filter(canSubmit);
+  const acceptingWork = phase === 'running' || phase === 'paused' || (phase === 'expired' && config.acceptLateSubmissions);
+  const showBar = !!sprint && acceptingWork && submittable.length > 0 && modalFor === undefined && !fullScreen;
+  const timerItems: CfTimerItem[] = assignments.map((a) => {
+    const st = statusOf(a);
+    return {
+      assignment: a,
+      statusLabel: CF_STATUS_LABEL[st],
+      statusClass: `cf-status-${st}`,
+      ...(canSubmit(a)
+        ? { actionLabel: st === 'revision_requested' ? 'Resubmit' : 'Submit', onAction: () => setModalFor(a.assignmentId) }
+        : {}),
+    };
+  });
+
   return (
     <div className={`cf-root${embedded ? ' cf-embedded' : ''}`} aria-label="Class Flow sprint">
       <div className="cf-between" style={{ marginBottom: 10 }}>
@@ -191,13 +213,33 @@ const ClassFlowPlayerView: React.FC<Props> = ({ sessionId, actor, sprint, config
           <ClassFlowSprintTimer
             sprint={sprint}
             nowMs={nowMs}
-            expandable={config.expandedTimerEnabled}
+            expandable
             acceptLate={config.acceptLateSubmissions}
             teamLabel={myTeam?.tag ?? null}
             availablePoints={availablePoints}
             submissionSummary={summaryText}
-            onSubmitWork={assignments.length ? () => setModalFor(null) : undefined}
+            onSubmitWork={submittable.length ? () => setModalFor(null) : undefined}
+            items={timerItems}
+            fullScreen={fullScreen}
+            onFullScreenChange={setFullScreen}
           />
+          {showBar &&
+            createPortal(
+              <div className="cf-root cf-sprint-bar" role="region" aria-label="Sprint in progress">
+                <span className="cf-timer-clock">{formatClock(t ? sprintRemainingMs(t, nowMs) : 0)}</span>
+                <span style={{ fontSize: 13 }}>
+                  <strong>{sprint.title}</strong>
+                  <span className="cf-sub"> · {submittable.length} to submit</span>
+                </span>
+                <button type="button" className="cf-btn cf-btn--primary" onClick={() => setModalFor(null)}>
+                  Submit Work
+                </button>
+                <button type="button" className="cf-btn cf-btn--ghost" onClick={() => setFullScreen(true)}>
+                  ⛶ View tasks
+                </button>
+              </div>,
+              document.body
+            )}
 
           {assignments.length > 0 && (
             <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>

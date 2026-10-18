@@ -142,6 +142,57 @@
   line-height: 1;
 }
 .cf-timer--expanded .cf-timer-clock { font-size: 56px; }
+
+/* Full-screen timer (sits under the submit modal and toasts) */
+.cf-root.cf-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 99990;
+  margin: 0;
+  border-radius: 0;
+  border: none;
+  padding: clamp(16px, 3vw, 40px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.cf-fullscreen-title { font-size: clamp(18px, 2.4vw, 30px); margin-bottom: 6px; }
+.cf-root .cf-fullscreen-clock {
+  font-size: clamp(84px, 18vw, 260px);
+  text-align: center;
+  margin: clamp(8px, 2vh, 28px) 0 8px;
+}
+.cf-fullscreen-objective { text-align: center; font-size: clamp(16px, 1.8vw, 24px); margin-bottom: 18px; }
+.cf-fullscreen-items { width: 100%; max-width: 980px; margin: 0 auto; display: grid; gap: 10px; }
+.cf-fullscreen-item { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.cf-fullscreen-item-num {
+  font-family: 'Cinzel', serif;
+  font-size: 22px;
+  color: var(--cf-gold-bright);
+  min-width: 30px;
+  text-align: center;
+}
+.cf-fullscreen-item-title { font-size: clamp(16px, 1.6vw, 21px); font-weight: 600; }
+.cf-btn--lg { font-size: 17px; padding: 12px 28px; }
+
+/* Floating sprint bar for players */
+.cf-root.cf-sprint-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 9990;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 24px);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.cf-sprint-bar .cf-timer-clock { font-size: 22px; }
 .cf-timer--low .cf-timer-clock { color: #fca5a5; text-shadow: 0 0 18px rgba(248, 113, 113, 0.5); animation: cf-pulse 1s ease-in-out infinite; }
 .cf-timer--paused .cf-timer-clock { color: #93c5fd; text-shadow: none; }
 @keyframes cf-pulse { 50% { opacity: 0.6; } }

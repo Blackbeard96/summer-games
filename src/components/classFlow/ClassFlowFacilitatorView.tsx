@@ -162,7 +162,18 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
       {tab === 'sprint' && (
         <div>
           {sprint ? (
-            <ClassFlowSprintTimer sprint={sprint} nowMs={nowMs} expandable acceptLate={config.acceptLateSubmissions} availablePoints={preview?.pool.totalBase ?? null} />
+            <ClassFlowSprintTimer
+              sprint={sprint}
+              nowMs={nowMs}
+              expandable
+              acceptLate={config.acceptLateSubmissions}
+              availablePoints={preview?.pool.totalBase ?? null}
+              items={(sprint.assignments || []).map((a) => {
+                const subs = data.submissions.filter((s) => s.sprintId === sprint.id && s.assignmentId === a.assignmentId);
+                const approvedN = subs.filter((s) => s.status === 'approved').length;
+                return { assignment: a, detail: `${subs.length} submitted · ${approvedN} approved` };
+              })}
+            />
           ) : (
             <div className="cf-empty">No sprint running.</div>
           )}

@@ -1,4 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { CfToastInput } from './classFlowPanelTypes';
 
 interface ToastItem extends CfToastInput {
@@ -22,7 +23,7 @@ export const ClassFlowToastStack: React.FC<{ items: ToastItem[]; onDismiss: (id:
   onDismiss,
 }) => {
   if (!items.length) return null;
-  return (
+  return createPortal(
     <div className="cf-toast-stack" aria-live="polite">
       {items.map((t) => (
         <div
@@ -35,6 +36,7 @@ export const ClassFlowToastStack: React.FC<{ items: ToastItem[]; onDismiss: (id:
           {t.body && <div className="cf-toast-body">{t.body}</div>}
         </div>
       ))}
-    </div>
+    </div>,
+    document.body
   );
 };

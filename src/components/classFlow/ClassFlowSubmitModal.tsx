@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { CfEvidence, CfSprintAssignment, CfSubmission, CfSubmissionMethod } from '../../types/classFlowWork';
 import { CF_METHOD_LABELS } from '../../utils/classFlowConfig';
 import { uploadEvidenceFile } from '../../utils/classFlowWorkService';
@@ -125,7 +126,7 @@ const ClassFlowSubmitModal: React.FC<Props> = ({
     }
   };
 
-  return (
+  return createPortal(
     <div className="cf-modal-backdrop" role="dialog" aria-modal="true" aria-label="Submit work" onClick={onClose}>
       <div className="cf-root cf-modal" onClick={(e) => e.stopPropagation()}>
         <div className="cf-between">
@@ -283,7 +284,8 @@ const ClassFlowSubmitModal: React.FC<Props> = ({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 

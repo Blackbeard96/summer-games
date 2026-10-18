@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import ClassFlowSprintTimer from '../ClassFlowSprintTimer';
 import ClassFlowSubmitModal from '../ClassFlowSubmitModal';
 import type { ClassFlowSprintState } from '../../../types/season1';
@@ -60,12 +60,16 @@ describe('ClassFlowSprintTimer', () => {
     );
     expect(screen.getAllByText('1:00').length).toBeGreaterThan(0);
     expect(screen.getByText('Submissions open')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
-    expect(screen.getByText('Ship the MVP')).toBeInTheDocument();
-    expect(screen.getByText('THE ARCHITECTS | 4 Players')).toBeInTheDocument();
-    expect(screen.getByText(/Build the prototype/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Submit Work' }));
+    fireEvent.click(screen.getByRole('button', { name: /Full screen/ }));
+    const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.getByText('Ship the MVP')).toBeInTheDocument();
+    expect(dialog.getByText('THE ARCHITECTS | 4 Players')).toBeInTheDocument();
+    expect(dialog.getByText('Complete these items')).toBeInTheDocument();
+    expect(dialog.getByText(/Build the prototype/)).toBeInTheDocument();
+    fireEvent.click(dialog.getByRole('button', { name: 'Submit Work' }));
     expect(onSubmit).toHaveBeenCalled();
+    fireEvent.click(dialog.getByRole('button', { name: /Exit full screen/ }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('freezes while paused and closes submissions when time is up', () => {
