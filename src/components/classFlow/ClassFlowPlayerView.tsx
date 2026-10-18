@@ -26,13 +26,30 @@ export const CF_STATUS_LABEL: Record<CfPlayerTaskStatus, string> = {
   rejected: 'Rejected',
 };
 
-type Props = CfSharedProps & { data: CfPlayerData };
+type Props = CfSharedProps & {
+  data: CfPlayerData;
+  /** Only the floating Submit bar, submit form, and full-screen view (facilitators outside "My work"). */
+  barOnly?: boolean;
+  onOpenMyWork?: () => void;
+};
 
 function draftKey(sprintId: string, uid: string) {
   return `cf_in_progress_${sprintId}_${uid}`;
 }
 
-const ClassFlowPlayerView: React.FC<Props> = ({ sessionId, actor, sprint, config, nowMs, nameOf, notify, data, embedded }) => {
+const ClassFlowPlayerView: React.FC<Props> = ({
+  sessionId,
+  actor,
+  sprint,
+  config,
+  nowMs,
+  nameOf,
+  notify,
+  data,
+  embedded,
+  barOnly = false,
+  onOpenMyWork,
+}) => {
   const uid = actor.uid;
   const [modalFor, setModalFor] = useState<string | null | undefined>(undefined);
   const [inProgress, setInProgress] = useState<string[]>([]);
@@ -199,6 +216,56 @@ const ClassFlowPlayerView: React.FC<Props> = ({ sessionId, actor, sprint, config
     };
   });
 
+  const barEl =
+    showBar && sprint
+      ? createPortal(
+          <div className="cf-root cf-sprint-bar" role="region" aria-label="Sprint in progress">
+            <span className="cf-timer-clock">{formatClock(t ? sprintRemainingMs(t, nowMs) : 0)}</span>
+            <span style={{ fontSize: 13 }}>
+              <strong>{sprint.title}</strong>
+              <span className="cf-sub"> · {submittable.length} to submit</span>
+            </span>
+            <button type="button" className="cf-btn cf-btn--primary" onClick={() => setModalFor(null)}>
+              Submit Work
+            </button>
+            <button
+              type="button"
+              className="cf-btn cf-btn--ghost"
+              onClick={() => (barOnly ? onOpenMyWork?.() : setFullScreen(true))}
+            >
+              {barOnly ? 'My work' : '⛶ View tasks'}
+            </button>
+          </div>,
+          document.body
+        )
+      : null;
+
+  const modalEl =
+    modalFor !== undefined && sprint ? (
+      <ClassFlowSubmitModal
+        sessionId={sessionId}
+        uid={uid}
+        assignments={assignments.filter((a) => {
+          const s = byAssignment[a.assignmentId];
+          return !s || (s.playerId === uid && s.status === 'revision_requested');
+        })}
+        existing={byAssignment}
+        teammates={teammates}
+        initialAssignmentId={modalFor}
+        onSubmit={handleSubmit}
+        onClose={() => setModalFor(undefined)}
+      />
+    ) : null;
+
+  if (barOnly) {
+    return (
+      <>
+        {barEl}
+        {modalEl}
+      </>
+    );
+  }
+
   return (
     <div className={`cf-root${embedded ? ' cf-embedded' : ''}`} aria-label="Class Flow sprint">
       <div className="cf-between" style={{ marginBottom: 10 }}>
@@ -223,23 +290,7 @@ const ClassFlowPlayerView: React.FC<Props> = ({ sessionId, actor, sprint, config
             fullScreen={fullScreen}
             onFullScreenChange={setFullScreen}
           />
-          {showBar &&
-            createPortal(
-              <div className="cf-root cf-sprint-bar" role="region" aria-label="Sprint in progress">
-                <span className="cf-timer-clock">{formatClock(t ? sprintRemainingMs(t, nowMs) : 0)}</span>
-                <span style={{ fontSize: 13 }}>
-                  <strong>{sprint.title}</strong>
-                  <span className="cf-sub"> · {submittable.length} to submit</span>
-                </span>
-                <button type="button" className="cf-btn cf-btn--primary" onClick={() => setModalFor(null)}>
-                  Submit Work
-                </button>
-                <button type="button" className="cf-btn cf-btn--ghost" onClick={() => setFullScreen(true)}>
-                  ⛶ View tasks
-                </button>
-              </div>,
-              document.body
-            )}
+          {barEl}
 
           {assignments.length > 0 && (
             <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
@@ -481,21 +532,7 @@ const ClassFlowPlayerView: React.FC<Props> = ({ sessionId, actor, sprint, config
         </div>
       )}
 
-      {modalFor !== undefined && sprint && (
-        <ClassFlowSubmitModal
-          sessionId={sessionId}
-          uid={uid}
-          assignments={assignments.filter((a) => {
-            const s = byAssignment[a.assignmentId];
-            return !s || (s.playerId === uid && s.status === 'revision_requested');
-          })}
-          existing={byAssignment}
-          teammates={teammates}
-          initialAssignmentId={modalFor}
-          onSubmit={handleSubmit}
-          onClose={() => setModalFor(undefined)}
-        />
-      )}
+      {modalEl}
     </div>
   );
 };

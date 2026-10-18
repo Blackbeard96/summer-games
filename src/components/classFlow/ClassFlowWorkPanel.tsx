@@ -90,21 +90,33 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
     [currentUserId, userEmail, userDisplayName]
   );
 
+  /* ----------------------------- Facilitator data ----------------------------- */
+  const [allSubs, setAllSubs] = useState<CfSubmission[]>([]);
+
+  // The host and admins are participants only once they have submitted work themselves,
+  // so a facilitator who is just running the event is never paid a share.
+  const facilitatorSubmitted =
+    isFacilitator && !!currentUserId && allSubs.some((s) => s.playerId === currentUserId || s.contributorIds.includes(currentUserId));
   const players: CfPlayerRef[] = useMemo(() => {
     const seen = new Set<string>();
     const out: CfPlayerRef[] = [];
     for (const p of sessionPlayers) {
-      if (!p.userId || seen.has(p.userId) || p.userId === hostUid) continue;
+      if (!p.userId || seen.has(p.userId)) continue;
+      if (p.userId === hostUid && !(facilitatorSubmitted && p.userId === currentUserId)) continue;
       seen.add(p.userId);
       out.push({ uid: p.userId, name: p.displayName || 'Player' });
     }
+    if (facilitatorSubmitted && !seen.has(currentUserId)) {
+      out.push({ uid: currentUserId, name: userDisplayName || 'Host' });
+    }
     return out.sort((a, b) => a.name.localeCompare(b.name));
-  }, [sessionPlayers, hostUid]);
+  }, [sessionPlayers, hostUid, facilitatorSubmitted, currentUserId, userDisplayName]);
   const nameMap = useMemo(() => new Map(players.map((p) => [p.uid, p.name])), [players]);
-  const nameOf = useCallback((uid: string) => nameMap.get(uid) || 'Player', [nameMap]);
+  const nameOf = useCallback(
+    (uid: string) => nameMap.get(uid) || (uid === currentUserId ? userDisplayName || 'Host' : 'Player'),
+    [nameMap, currentUserId, userDisplayName]
+  );
 
-  /* ----------------------------- Facilitator data ----------------------------- */
-  const [allSubs, setAllSubs] = useState<CfSubmission[]>([]);
   const [storedTeams, setStoredTeams] = useState<Record<string, CfStoredTeam>>({});
   const [tableByUid, setTableByUid] = useState<Record<string, number>>({});
   const [sharing, setSharing] = useState<CfSharingDecision[]>([]);
@@ -268,7 +280,8 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
   const [myAllocs, setMyAllocs] = useState<CfAllocation[]>([]);
   const [myPayouts, setMyPayouts] = useState<CfPayout[]>([]);
   const [publicState, setPublicState] = useState<CfPublicState | null>(null);
-  const isPlayerView = !isFacilitator && enabled;
+  /** Everyone in the event (facilitators included) can submit their own work. */
+  const isPlayerView = enabled && !!currentUserId;
 
   useEffect(() => {
     if (!isPlayerView || !currentUserId) return;
@@ -343,6 +356,7 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
   if (!active) return null;
 
   const shared: CfSharedProps = { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, embedded, classId };
+  const playerData = { submissions: mySubs, allocations: myAllocs, payouts: myPayouts, sharing, tableByUid, publicState };
 
   return (
     <>
@@ -351,12 +365,10 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
           {...shared}
           data={{ submissions: allSubs, teams, storedTeams, tableByUid, sharing, allocations, archive }}
           preview={livePreview}
+          playerData={isPlayerView ? playerData : undefined}
         />
       ) : (
-        <ClassFlowPlayerView
-          {...shared}
-          data={{ submissions: mySubs, allocations: myAllocs, payouts: myPayouts, sharing, tableByUid, publicState }}
-        />
+        <ClassFlowPlayerView {...shared} data={playerData} />
       )}
       <ClassFlowToastStack items={toasts} onDismiss={dismiss} />
     </>

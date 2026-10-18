@@ -17,14 +17,16 @@ import TeamsTab from './facilitator/TeamsTab';
 import RewardsTab from './facilitator/RewardsTab';
 import AnalyticsTab from './facilitator/AnalyticsTab';
 import SettingsTab from './facilitator/SettingsTab';
-import type { CfFacilitatorData, CfSharedProps } from './classFlowPanelTypes';
+import ClassFlowPlayerView from './ClassFlowPlayerView';
+import type { CfFacilitatorData, CfPlayerData, CfSharedProps } from './classFlowPanelTypes';
 
-type Tab = 'sprint' | 'approvals' | 'teams' | 'rewards' | 'analytics' | 'settings';
+type Tab = 'sprint' | 'mywork' | 'approvals' | 'teams' | 'rewards' | 'analytics' | 'settings';
 
-type Props = CfSharedProps & { data: CfFacilitatorData; preview: CfRewardResult | null };
+type Props = CfSharedProps & { data: CfFacilitatorData; preview: CfRewardResult | null; playerData?: CfPlayerData };
 
 const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
-  const { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, data, preview, embedded, classId } = props;
+  const { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, data, preview, embedded, classId, playerData } = props;
+  const sharedProps: CfSharedProps = { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, classId, embedded: true };
   const rootClass = `cf-root${embedded ? ' cf-embedded' : ''}`;
   const [tab, setTab] = useState<Tab>('sprint');
   const [workDraft, setWorkDraft] = useState<CfSprintAssignment[] | null>(null);
@@ -116,6 +118,7 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
 
   const TABS: [Tab, string][] = [
     ['sprint', 'Sprint'],
+    ...(playerData ? ([['mywork', 'My work']] as [Tab, string][]) : []),
     ['approvals', 'Approvals'],
     ...(config.teamModeEnabled ? ([['teams', 'Teams']] as [Tab, string][]) : []),
     ['rewards', 'Rewards'],
@@ -299,6 +302,18 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
             onMessage={(text, error) => setMessage({ text, error })}
           />
         </div>
+      )}
+
+      {playerData && tab === 'mywork' && (
+        <div>
+          <div className="cf-sub" style={{ marginBottom: 8 }}>
+            Submit your own work as a participant. It goes to Approvals like everyone else's and counts toward rewards.
+          </div>
+          <ClassFlowPlayerView {...sharedProps} data={playerData} />
+        </div>
+      )}
+      {playerData && tab !== 'mywork' && (
+        <ClassFlowPlayerView {...sharedProps} data={playerData} barOnly onOpenMyWork={() => setTab('mywork')} />
       )}
 
       {tab === 'approvals' && (
