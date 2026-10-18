@@ -51,12 +51,26 @@ const EMPTY_NEW: NewWork = {
 /** Attach library work or create new work inside a sprint. Points here apply to this sprint only. */
 const SprintWorkPicker: React.FC<Props> = ({ assignments, onChange, actorUid, classId, lockedIds = [], onMessage, standalone }) => {
   const [library, setLibrary] = useState<CfWorkAssignment[]>([]);
+  const [libraryBlocked, setLibraryBlocked] = useState(false);
   const [pick, setPick] = useState('');
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<NewWork>(EMPTY_NEW);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => subscribeWorkLibrary(setLibrary, () => setLibrary([])), []);
+  useEffect(
+    () =>
+      subscribeWorkLibrary(
+        (items) => {
+          setLibraryBlocked(false);
+          setLibrary(items);
+        },
+        () => {
+          setLibraryBlocked(true);
+          setLibrary([]);
+        }
+      ),
+    []
+  );
 
   const available = useMemo(
     () =>
@@ -148,7 +162,13 @@ const SprintWorkPicker: React.FC<Props> = ({ assignments, onChange, actorUid, cl
 
       <div className="cf-row">
         <select className="cf-select" value={pick} onChange={(e) => setPick(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label="Add work from library">
-          <option value="">{available.length ? 'Add work from library…' : 'No more active library work'}</option>
+          <option value="">
+            {libraryBlocked
+              ? 'Work Library unavailable — create work below'
+              : available.length
+                ? 'Add work from library…'
+                : 'No more active library work'}
+          </option>
           {available.map((w) => (
             <option key={w.id} value={w.id}>
               {w.title} ({w.basePoints} pts · {w.workType}

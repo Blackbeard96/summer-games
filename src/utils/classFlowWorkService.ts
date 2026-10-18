@@ -23,7 +23,6 @@ import {
   getDoc,
   getDocs,
   increment,
-  onSnapshot,
   query,
   runTransaction,
   serverTimestamp,
@@ -32,7 +31,8 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import type { DocumentData } from 'firebase/firestore';
+import type { DocumentData, DocumentSnapshot, QuerySnapshot } from 'firebase/firestore';
+import { sharedSnapshot } from './sharedSnapshot';
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 import { storage } from '../firebase';
 import type {
@@ -85,7 +85,8 @@ function clean<T extends Record<string, unknown>>(o: T): T {
 /* ------------------------------- Work Library ------------------------------ */
 
 export function subscribeWorkLibrary(cb: (items: CfWorkAssignment[]) => void, onError?: (e: Error) => void) {
-  return onSnapshot(
+  return sharedSnapshot<QuerySnapshot>(
+    'classFlowWorkLibrary',
     collection(db, 'classFlowWorkLibrary'),
     (snap) => {
       const items = snap.docs.map((d) => parseWorkAssignment(d.id, d.data()));
@@ -312,7 +313,8 @@ export interface CfSprintArchive {
 }
 
 export function subscribeSprintArchive(sessionId: string, cb: (rows: CfSprintArchive[]) => void) {
-  return onSnapshot(
+  return sharedSnapshot<QuerySnapshot>(
+    `${sessionId}/cfSprints`,
     sub(sessionId, 'cfSprints'),
     (snap) => {
       const rows = snap.docs.map((d) => ({ ...(d.data() as CfSprintArchive), sprintId: d.id }));
@@ -354,7 +356,8 @@ function parseSubmission(id: string, raw: Record<string, unknown>): CfSubmission
 
 /** Facilitator view: every submission in the room. */
 export function subscribeAllSubmissions(sessionId: string, cb: (rows: CfSubmission[]) => void) {
-  return onSnapshot(
+  return sharedSnapshot<QuerySnapshot>(
+    `${sessionId}/cfSubmissions`,
     sub(sessionId, 'cfSubmissions'),
     (snap) => cb(snap.docs.map((d) => parseSubmission(d.id, d.data()))),
     () => cb([])
@@ -370,7 +373,8 @@ export function subscribeMySubmissions(sessionId: string, uid: string, cb: (rows
     [...own, ...shared].forEach((s) => m.set(s.id, s));
     cb(Array.from(m.values()));
   };
-  const u1 = onSnapshot(
+  const u1 = sharedSnapshot<QuerySnapshot>(
+    `${sessionId}/cfSubmissions?playerId=${uid}`,
     query(sub(sessionId, 'cfSubmissions'), where('playerId', '==', uid)),
     (snap) => {
       own = snap.docs.map((d) => parseSubmission(d.id, d.data()));
@@ -378,7 +382,8 @@ export function subscribeMySubmissions(sessionId: string, uid: string, cb: (rows
     },
     () => undefined
   );
-  const u2 = onSnapshot(
+  const u2 = sharedSnapshot<QuerySnapshot>(
+    `${sessionId}/cfSubmissions?contributorIds~${uid}`,
     query(sub(sessionId, 'cfSubmissions'), where('contributorIds', 'array-contains', uid)),
     (snap) => {
       shared = snap.docs.map((d) => parseSubmission(d.id, d.data()));
@@ -545,7 +550,8 @@ export interface CfStoredTeam {
 }
 
 export function subscribeStoredTeams(sessionId: string, cb: (rows: Record<string, CfStoredTeam>) => void) {
-  return onSnapshot(
+  return sharedSnapshot<QuerySnapshot>(
+    `${sessionId}/cfTeams`,
     sub(sessionId, 'cfTeams'),
     (snap) => {
       const out: Record<string, CfStoredTeam> = {};
@@ -610,7 +616,8 @@ export async function resolveTeamName(
 }
 
 export function subscribeTables(sessionId: string, cb: (byUid: Record<string, number>) => void) {
-  return onSnapshot(
+  return sharedSnapshot<QuerySnapshot>(
+    `${sessionId}/cfTables`,
     sub(sessionId, 'cfTables'),
     (snap) => {
       const out: Record<string, number> = {};
@@ -654,7 +661,8 @@ function parseSharing(id: string, raw: Record<string, unknown>): CfSharingDecisi
 }
 
 export function subscribeSharing(sessionId: string, cb: (rows: CfSharingDecision[]) => void) {
-  return onSnapshot(
+  return sharedSnapshot<QuerySnapshot>(
+    `${sessionId}/cfSharing`,
     sub(sessionId, 'cfSharing'),
     (snap) => cb(snap.docs.map((d) => parseSharing(d.id, d.data()))),
     () => cb([])
@@ -746,7 +754,8 @@ export async function decideShare(
 /* ------------------------------ Allocations & payouts ------------------------------ */
 
 export function subscribeAllocations(sessionId: string, cb: (rows: CfAllocation[]) => void) {
-  return onSnapshot(
+  return sharedSnapshot<QuerySnapshot>(
+    `${sessionId}/cfAllocations`,
     sub(sessionId, 'cfAllocations'),
     (snap) => cb(snap.docs.map((d) => ({ ...(d.data() as CfAllocation), id: d.id }))),
     () => cb([])
@@ -754,7 +763,8 @@ export function subscribeAllocations(sessionId: string, cb: (rows: CfAllocation[
 }
 
 export function subscribeMyAllocations(sessionId: string, uid: string, cb: (rows: CfAllocation[]) => void) {
-  return onSnapshot(
+  return sharedSnapshot<QuerySnapshot>(
+    `${sessionId}/cfAllocations?playerId=${uid}`,
     query(sub(sessionId, 'cfAllocations'), where('playerId', '==', uid)),
     (snap) => cb(snap.docs.map((d) => ({ ...(d.data() as CfAllocation), id: d.id }))),
     () => cb([])
@@ -762,7 +772,8 @@ export function subscribeMyAllocations(sessionId: string, uid: string, cb: (rows
 }
 
 export function subscribeMyPayouts(sessionId: string, uid: string, cb: (rows: CfPayout[]) => void) {
-  return onSnapshot(
+  return sharedSnapshot<QuerySnapshot>(
+    `${sessionId}/cfPayouts?playerId=${uid}`,
     query(sub(sessionId, 'cfPayouts'), where('playerId', '==', uid)),
     (snap) => cb(snap.docs.map((d) => ({ ...(d.data() as CfPayout), id: d.id }))),
     () => cb([])
@@ -940,7 +951,8 @@ export async function publishPublicState(sessionId: string, state: Record<string
 }
 
 export function subscribePublicState(sessionId: string, cb: (state: Record<string, unknown> | null) => void) {
-  return onSnapshot(
+  return sharedSnapshot<DocumentSnapshot>(
+    `${sessionId}/cfPublic/state`,
     subDoc(sessionId, 'cfPublic', 'state'),
     (snap) => cb(snap.exists() ? (snap.data() as Record<string, unknown>) : null),
     () => cb(null)
