@@ -9,6 +9,7 @@ import type {
 } from '../../types/classFlowWork';
 import { parseCfConfig, sprintPhase } from '../../utils/classFlowConfig';
 import { computeSprintRewards } from '../../utils/classFlowRewards';
+import { buildSprintRosterStatus, type CfRosterStatusRow } from '../../utils/classFlowAnalytics';
 import { buildTeams, formatTeamTag, teamTableNumber } from '../../utils/classFlowTeams';
 import {
   claimMyPayouts,
@@ -48,6 +49,8 @@ export interface ClassFlowWorkPanelProps {
   /** Rendered inside the Class Flow Sprint panel. */
   embedded?: boolean;
   classId?: string | null;
+  /** Full class roster, so students who have not joined still show as "not submitted". */
+  classRoster?: { userId: string; displayName?: string }[] | null;
 }
 
 function parsePublicState(raw: Record<string, unknown> | null): CfPublicState | null {
@@ -56,6 +59,7 @@ function parsePublicState(raw: Record<string, unknown> | null): CfPublicState | 
     sprintId: typeof raw.sprintId === 'string' ? raw.sprintId : null,
     teams: Array.isArray(raw.teams) ? (raw.teams as CfPublicTeam[]) : [],
     pool: (raw.pool as CfPublicState['pool']) || null,
+    roster: Array.isArray(raw.roster) ? (raw.roster as CfRosterStatusRow[]) : [],
   };
 }
 
@@ -71,6 +75,7 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
   userDisplayName,
   embedded = false,
   classId = null,
+  classRoster = null,
 }) => {
   const config = useMemo(() => parseCfConfig(rawConfig), [rawConfig]);
   const enabled = config.workAssignmentsEnabled;
@@ -187,6 +192,21 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
     });
   }, [isFacilitator, sprint, enabled, config, currentSprintSubs, players, teams, sharing]);
 
+  /** Whole class (plus anyone who joined from outside it) with this sprint's submission status. */
+  const classRosterKey = JSON.stringify((classRoster || []).map((s) => [s.userId, s.displayName || '']));
+  const rosterRows = useMemo(() => {
+    if (!isFacilitator || !enabled || !sprint) return null;
+    const inSession = new Set(sessionPlayers.map((p) => p.userId));
+    const merged = new Map<string, { uid: string; name: string; inSession: boolean }>();
+    (JSON.parse(classRosterKey) as [string, string][]).map(([userId, displayName]) => ({ userId, displayName })).forEach((s) => {
+      if (s.userId && s.userId !== hostUid) merged.set(s.userId, { uid: s.userId, name: s.displayName || 'Student', inSession: inSession.has(s.userId) });
+    });
+    players.forEach((p) => {
+      if (!merged.has(p.uid)) merged.set(p.uid, { uid: p.uid, name: p.name, inSession: true });
+    });
+    return buildSprintRosterStatus(Array.from(merged.values()), sprint.assignments || [], currentSprintSubs, sprint.id);
+  }, [isFacilitator, enabled, sprint, sessionPlayers, classRosterKey, hostUid, players, currentSprintSubs]);
+
   // Publish team progress for players (debounced; facilitator only).
   const publishKey = useMemo(() => {
     if (!isFacilitator || !enabled) return '';
@@ -217,9 +237,10 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
             extraApproved: livePreview.pool.extraApproved,
           }
         : null,
+      roster: rosterRows ?? [],
     };
     return JSON.stringify(state);
-  }, [isFacilitator, enabled, teams, currentSprintSubs, config.tagDisplay, tableByUid, livePreview, sprint?.id]);
+  }, [isFacilitator, enabled, teams, currentSprintSubs, config.tagDisplay, tableByUid, livePreview, sprint?.id, rosterRows]);
 
   const lastPublished = useRef('');
   useEffect(() => {
@@ -355,7 +376,12 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
 
   if (!active) return null;
 
-  const shared: CfSharedProps = { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, embedded, classId };
+  const roster = isFacilitator
+    ? rosterRows
+    : sprint && publicState?.sprintId === sprint.id
+      ? publicState.roster ?? null
+      : null;
+  const shared: CfSharedProps = { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, embedded, classId, roster };
   const playerData = { submissions: mySubs, allocations: myAllocs, payouts: myPayouts, sharing, tableByUid, publicState };
 
   return (

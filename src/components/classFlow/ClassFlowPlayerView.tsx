@@ -47,6 +47,7 @@ const ClassFlowPlayerView: React.FC<Props> = ({
   notify,
   data,
   embedded,
+  roster,
   barOnly = false,
   onOpenMyWork,
 }) => {
@@ -287,6 +288,8 @@ const ClassFlowPlayerView: React.FC<Props> = ({
             submissionSummary={summaryText}
             onSubmitWork={submittable.length ? () => setModalFor(null) : undefined}
             items={timerItems}
+            roster={roster}
+            viewerUid={uid}
             fullScreen={fullScreen}
             onFullScreenChange={setFullScreen}
           />

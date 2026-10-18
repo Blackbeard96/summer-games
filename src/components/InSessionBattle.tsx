@@ -4252,6 +4252,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           <ClassFlowWorkPanel
             embedded
             classId={classId || null}
+            classRoster={students.length > 0 ? students.map((s) => ({ userId: s.id, displayName: s.displayName || 'Student' })) : null}
             sessionId={sessionId}
             sprint={roomClassFlowSprint}
             rawConfig={roomClassFlowConfig}

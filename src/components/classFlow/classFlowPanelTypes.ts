@@ -8,6 +8,7 @@ import type {
   CfTeam,
 } from '../../types/classFlowWork';
 import type { CfSprintArchive, CfStoredTeam, CfActor } from '../../utils/classFlowWorkService';
+import type { CfRosterStatusRow } from '../../utils/classFlowAnalytics';
 
 export interface CfPlayerRef {
   uid: string;
@@ -31,6 +32,8 @@ export interface CfPublicState {
   sprintId: string | null;
   teams: CfPublicTeam[];
   pool: { totalBase: number; approvedBase: number; remainingBase: number; extraApproved: number } | null;
+  /** Who has / has not submitted this sprint's work (shown on the full-screen countdown). */
+  roster?: CfRosterStatusRow[];
 }
 
 export interface CfSharedProps {
@@ -44,6 +47,7 @@ export interface CfSharedProps {
   notify: (n: CfToastInput) => void;
   embedded?: boolean;
   classId?: string | null;
+  roster?: CfRosterStatusRow[] | null;
 }
 
 export interface CfFacilitatorData {

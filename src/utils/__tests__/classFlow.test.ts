@@ -11,7 +11,7 @@ import {
 } from '../classFlowConfig';
 import { computeSprintRewards, majorityShareVote, splitEvenly, UNASSIGNED_TEAM_ID } from '../classFlowRewards';
 import { buildTeams, formatTeamTag } from '../classFlowTeams';
-import { computeClassFlowAnalytics } from '../classFlowAnalytics';
+import { buildSprintRosterStatus, computeClassFlowAnalytics } from '../classFlowAnalytics';
 import type { CfConfig, CfSprintAssignment, CfSubmission } from '../../types/classFlowWork';
 
 const cfg = (over: Partial<CfConfig> = {}): CfConfig => ({
@@ -410,5 +410,28 @@ describe('Class Flow analytics', () => {
     expect(a.revisionRate).toBe(50);
     expect(a.avgApprovalTurnaroundSec).toBe(10);
     expect(a.rewards.pointsAllocated).toBe(0);
+  });
+});
+
+describe('buildSprintRosterStatus', () => {
+  const roster = [
+    { uid: 'cara', name: 'Cara', inSession: false },
+    { uid: 'ava', name: 'Ava', inSession: true },
+    { uid: 'ben', name: 'Ben', inSession: true },
+  ];
+  const assignments = [asg('w1', 100), asg('team', 200, { workType: 'team' }), asg('bonus', 50, { isExtraCredit: true })];
+
+  it('counts own and team submissions, ignores rejected, extra credit and other sprints', () => {
+    const rows = buildSprintRosterStatus(roster, assignments, [
+      sub('ava', 'w1', 100),
+      sub('ava', 'team', 0, { status: 'submitted', approvedPoints: 0, workType: 'team', contributorIds: ['ava', 'ben'] }),
+      sub('ben', 'w1', 0, { status: 'rejected', approvedPoints: 0 }),
+      sub('ben', 'bonus', 50, { isExtraCredit: true }),
+      sub('cara', 'w1', 100, { sprintId: 'old' }),
+    ], 'sp1');
+    expect(rows.map((r) => r.name)).toEqual(['Ava', 'Ben', 'Cara']);
+    expect(rows[0]).toMatchObject({ submitted: 2, approved: 1, total: 2 });
+    expect(rows[1]).toMatchObject({ submitted: 1, approved: 0, total: 2 });
+    expect(rows[2]).toMatchObject({ submitted: 0, approved: 0, inSession: false });
   });
 });

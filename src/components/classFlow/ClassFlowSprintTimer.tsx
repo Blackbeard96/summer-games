@@ -4,6 +4,47 @@ import type { ClassFlowSprintState } from '../../types/season1';
 import type { CfSprintAssignment } from '../../types/classFlowWork';
 import { formatClock, sprintPhase, sprintRemainingMs, submissionsOpen } from '../../utils/classFlowConfig';
 import { sprintTimerInput } from '../../utils/liveEventSprintService';
+import type { CfRosterStatusRow } from '../../utils/classFlowAnalytics';
+
+function rosterChip(r: CfRosterStatusRow): { label: string; cls: string } {
+  if (r.total === 0) return { label: r.submitted ? 'Submitted' : '—', cls: '' };
+  if (r.approved >= r.total) return { label: 'All approved', cls: 'cf-status-approved' };
+  if (r.revisions > 0) return { label: `${r.submitted}/${r.total} · revise`, cls: 'cf-status-revision_requested' };
+  if (r.submitted >= r.total) return { label: 'All submitted', cls: 'cf-status-submitted' };
+  return { label: `${r.submitted}/${r.total} submitted`, cls: 'cf-status-in_progress' };
+}
+
+const RosterColumn: React.FC<{ title: string; rows: CfRosterStatusRow[]; viewerUid?: string; tone: 'todo' | 'done' }> = ({
+  title,
+  rows,
+  viewerUid,
+  tone,
+}) => (
+  <div className={`cf-roster-col cf-roster-col--${tone}`}>
+    <div className="cf-stat-label" style={{ marginBottom: 6 }}>
+      {title} ({rows.length})
+    </div>
+    {rows.length === 0 ? (
+      <div className="cf-sub">{tone === 'todo' ? 'Everyone has submitted.' : 'No submissions yet.'}</div>
+    ) : (
+      <ul className="cf-roster-list">
+        {rows.map((r) => {
+          const chip = rosterChip(r);
+          return (
+            <li key={r.uid} className={r.uid === viewerUid ? 'cf-roster-me' : undefined}>
+              <span className="cf-roster-name">
+                {r.name}
+                {r.uid === viewerUid ? ' (you)' : ''}
+                {!r.inSession && <span className="cf-sub"> · not in event</span>}
+              </span>
+              {tone === 'done' || r.submitted > 0 ? <span className={`cf-badge ${chip.cls}`}>{chip.label}</span> : null}
+            </li>
+          );
+        })}
+      </ul>
+    )}
+  </div>
+);
 
 /** One row of the work list shown in the full-screen timer. */
 export interface CfTimerItem {
@@ -26,6 +67,10 @@ interface Props {
   submissionSummary?: string | null;
   onSubmitWork?: () => void;
   items?: CfTimerItem[];
+  /** Class roster with submission status for this sprint. */
+  roster?: CfRosterStatusRow[] | null;
+  /** Highlight the viewer in the roster. */
+  viewerUid?: string;
   /** Controlled full-screen state (optional). */
   fullScreen?: boolean;
   onFullScreenChange?: (open: boolean) => void;
@@ -48,6 +93,8 @@ const ClassFlowSprintTimer: React.FC<Props> = ({
   submissionSummary,
   onSubmitWork,
   items,
+  roster,
+  viewerUid,
   fullScreen,
   onFullScreenChange,
 }) => {
@@ -62,6 +109,9 @@ const ClassFlowSprintTimer: React.FC<Props> = ({
   const low = phase === 'running' && remaining <= 60_000;
   const statusText = open ? (phase === 'expired' || phase === 'closed' ? 'Late submissions accepted' : PHASE_LABEL[phase]) : PHASE_LABEL[phase];
   const rows: CfTimerItem[] = items ?? (sprint.assignments || []).map((assignment) => ({ assignment }));
+  const isDone = (r: CfRosterStatusRow) => (r.total > 0 ? r.submitted >= r.total : r.submitted > 0);
+  const doneRows = (roster || []).filter(isDone);
+  const todoRows = (roster || []).filter((r) => !isDone(r));
   const timerClass = `${low ? 'cf-timer--low' : ''} ${phase === 'paused' ? 'cf-timer--paused' : ''}`;
 
   useEffect(() => {
@@ -116,6 +166,7 @@ const ClassFlowSprintTimer: React.FC<Props> = ({
             </div>
           )}
 
+          <div className={`cf-fullscreen-body${roster && roster.length ? ' cf-fullscreen-body--roster' : ''}`}>
           {rows.length > 0 ? (
             <div className="cf-fullscreen-items">
               <div className="cf-stat-label" style={{ marginBottom: 8 }}>Complete these items</div>
@@ -148,6 +199,25 @@ const ClassFlowSprintTimer: React.FC<Props> = ({
           ) : (
             <div className="cf-empty">No work attached to this sprint.</div>
           )}
+
+          {roster && roster.length > 0 && (
+            <div className="cf-card cf-card--gold cf-roster" aria-label="Class submission status">
+              <div className="cf-between" style={{ marginBottom: 10 }}>
+                <div className="cf-stat-label">Class</div>
+                <div className="cf-sub">
+                  {doneRows.length} of {roster.length} submitted everything
+                </div>
+              </div>
+              <div className="cf-progress" style={{ marginBottom: 12 }}>
+                <span style={{ width: `${(doneRows.length / roster.length) * 100}%` }} />
+              </div>
+              <div className="cf-roster-cols">
+                <RosterColumn title="Not submitted yet" rows={todoRows} viewerUid={viewerUid} tone="todo" />
+                <RosterColumn title="Submitted" rows={doneRows} viewerUid={viewerUid} tone="done" />
+              </div>
+            </div>
+          )}
+          </div>
 
           {onSubmitWork && (
             <div style={{ textAlign: 'center', marginTop: 18 }}>

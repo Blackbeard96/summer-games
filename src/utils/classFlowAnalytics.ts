@@ -135,3 +135,50 @@ export function computeClassFlowAnalytics(args: {
     },
   };
 }
+
+/** Per-student submission status for one sprint (names and counts only — no evidence). */
+export interface CfRosterStatusRow {
+  uid: string;
+  name: string;
+  /** Required (non-extra) tasks with a live submission: submitted, awaiting approval, revision or approved. */
+  submitted: number;
+  approved: number;
+  /** Required tasks waiting on the student to resubmit. */
+  revisions: number;
+  total: number;
+  inSession: boolean;
+}
+
+export function buildSprintRosterStatus(
+  roster: { uid: string; name: string; inSession: boolean }[],
+  assignments: CfSprintAssignment[],
+  submissions: CfSubmission[],
+  sprintId: string
+): CfRosterStatusRow[] {
+  const required = new Set(assignments.filter((a) => !a.isExtraCredit).map((a) => a.assignmentId));
+  const byUid = new Map<string, Map<string, CfSubmission['status']>>();
+  for (const s of submissions) {
+    if (s.sprintId !== sprintId || !required.has(s.assignmentId) || s.status === 'rejected') continue;
+    const people = new Set([s.playerId, ...s.contributorIds]);
+    people.forEach((uid) => {
+      const m = byUid.get(uid) ?? new Map<string, CfSubmission['status']>();
+      const prev = m.get(s.assignmentId);
+      if (prev !== 'approved') m.set(s.assignmentId, s.status);
+      byUid.set(uid, m);
+    });
+  }
+  return roster
+    .map((p) => {
+      const statuses = Array.from(byUid.get(p.uid)?.values() ?? []);
+      return {
+        uid: p.uid,
+        name: p.name,
+        inSession: p.inSession,
+        submitted: statuses.length,
+        approved: statuses.filter((s) => s === 'approved').length,
+        revisions: statuses.filter((s) => s === 'revision_requested').length,
+        total: required.size,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}

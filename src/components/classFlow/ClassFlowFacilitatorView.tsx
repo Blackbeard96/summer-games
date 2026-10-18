@@ -25,8 +25,8 @@ type Tab = 'sprint' | 'mywork' | 'approvals' | 'teams' | 'rewards' | 'analytics'
 type Props = CfSharedProps & { data: CfFacilitatorData; preview: CfRewardResult | null; playerData?: CfPlayerData };
 
 const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
-  const { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, data, preview, embedded, classId, playerData } = props;
-  const sharedProps: CfSharedProps = { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, classId, embedded: true };
+  const { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, data, preview, embedded, classId, playerData, roster } = props;
+  const sharedProps: CfSharedProps = { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, classId, roster, embedded: true };
   const rootClass = `cf-root${embedded ? ' cf-embedded' : ''}`;
   const [tab, setTab] = useState<Tab>('sprint');
   const [workDraft, setWorkDraft] = useState<CfSprintAssignment[] | null>(null);
@@ -176,6 +176,7 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
                 const approvedN = subs.filter((s) => s.status === 'approved').length;
                 return { assignment: a, detail: `${subs.length} submitted · ${approvedN} approved` };
               })}
+              roster={roster}
             />
           ) : (
             <div className="cf-empty">No sprint running.</div>
