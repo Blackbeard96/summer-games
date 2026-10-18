@@ -1,7 +1,14 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import type { CfRewardResult } from '../../utils/classFlowRewards';
+import type { CfSprintAssignment } from '../../types/classFlowWork';
 import { sprintPhase } from '../../utils/classFlowConfig';
-import { endPlannedSprint, startPlannedSprint, updateCfConfig } from '../../utils/classFlowWorkService';
+import {
+  endPlannedSprint,
+  startPlannedSprint,
+  updateCfConfig,
+  updateLiveSprintAssignments,
+} from '../../utils/classFlowWorkService';
+import SprintWorkPicker from './SprintWorkPicker';
 import { sprintTimerInput, updateClassFlowSprintTimer } from '../../utils/liveEventSprintService';
 import ClassFlowSprintTimer from './ClassFlowSprintTimer';
 import PlanEditor from './facilitator/PlanEditor';
@@ -17,8 +24,17 @@ type Tab = 'sprint' | 'approvals' | 'teams' | 'rewards' | 'analytics' | 'setting
 type Props = CfSharedProps & { data: CfFacilitatorData; preview: CfRewardResult | null };
 
 const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
-  const { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, data, preview } = props;
+  const { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, data, preview, embedded, classId } = props;
+  const rootClass = `cf-root${embedded ? ' cf-embedded' : ''}`;
   const [tab, setTab] = useState<Tab>('sprint');
+  const [workDraft, setWorkDraft] = useState<CfSprintAssignment[] | null>(null);
+  const liveWork = useMemo(() => sprint?.assignments || [], [sprint?.assignments]);
+  const workDirty = workDraft !== null && JSON.stringify(workDraft) !== JSON.stringify(liveWork);
+  const lockedWorkIds = useMemo(
+    () => Array.from(new Set(data.submissions.filter((s) => s.sprintId === sprint?.id).map((s) => s.assignmentId))),
+    [data.submissions, sprint?.id]
+  );
+  useEffect(() => setWorkDraft(null), [sprint?.id]);
   const [collapsed, setCollapsed] = useState(!config.workAssignmentsEnabled);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
@@ -68,11 +84,14 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
 
   if (!config.workAssignmentsEnabled && collapsed) {
     return (
-      <div className="cf-root">
+      <div className={rootClass}>
         <div className="cf-between">
           <div>
-            <h3 className="cf-title">Class Flow Sprint Manager</h3>
-            <div className="cf-sub">Off for this session — the classic sprint tools work exactly as before.</div>
+            <h3 className="cf-title">Sprint Manager</h3>
+            <div className="cf-sub">
+              Work assignments, approvals, teams and rewards are off for this session. Attaching work to a sprint turns
+              them on automatically.
+            </div>
           </div>
           <div className="cf-row">
             <button
@@ -105,9 +124,9 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
   ];
 
   return (
-    <div className="cf-root" aria-label="Class Flow facilitator dashboard">
+    <div className={rootClass} aria-label="Class Flow facilitator dashboard">
       <div className="cf-between">
-        <h3 className="cf-title">Class Flow Sprint Manager</h3>
+        <h3 className="cf-title">Sprint Manager</h3>
         <div className="cf-row">
           {pendingCount > 0 && (
             <button type="button" className="cf-btn cf-btn--ghost" onClick={() => setTab('approvals')}>
@@ -214,10 +233,58 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
             </div>
           )}
 
+          {sprint && (
+            <div className="cf-card cf-card--gold" style={{ marginTop: 12 }}>
+              <div className="cf-between" style={{ marginBottom: 8 }}>
+                <div>
+                  <div className="cf-stat-label">Work in this sprint</div>
+                  <div className="cf-sub">
+                    {sprint.title} — add library work or create new work. Players see changes right away.
+                  </div>
+                </div>
+                {workDirty && (
+                  <div className="cf-row">
+                    <button type="button" className="cf-btn cf-btn--ghost" disabled={busy} onClick={() => setWorkDraft(null)}>
+                      Discard
+                    </button>
+                    <button
+                      type="button"
+                      className="cf-btn cf-btn--primary"
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          const r = await updateLiveSprintAssignments(sessionId, sprint.id, workDraft || []);
+                          if (!r.ok) return r;
+                          setWorkDraft(null);
+                          if (!config.workAssignmentsEnabled && (workDraft || []).length) {
+                            return updateCfConfig(sessionId, { workAssignmentsEnabled: true, expandedTimerEnabled: true });
+                          }
+                          return r;
+                        }, 'Sprint work saved.')
+                      }
+                    >
+                      Save sprint work
+                    </button>
+                  </div>
+                )}
+              </div>
+              <SprintWorkPicker
+                assignments={workDraft ?? liveWork}
+                onChange={setWorkDraft}
+                actorUid={actor.uid}
+                classId={classId}
+                lockedIds={lockedWorkIds}
+                onMessage={(text, error) => setMessage({ text, error })}
+              />
+            </div>
+          )}
+
           <PlanEditor
             sessionId={sessionId}
             plan={plan}
             activePlanId={sprint?.planId ?? null}
+            classId={classId}
+            actorUid={actor.uid}
             onMessage={(text, error) => setMessage({ text, error })}
           />
         </div>

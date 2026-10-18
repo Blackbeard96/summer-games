@@ -45,6 +45,9 @@ export interface ClassFlowWorkPanelProps {
   currentUserId: string;
   userEmail?: string | null;
   userDisplayName?: string | null;
+  /** Rendered inside the Class Flow Sprint panel. */
+  embedded?: boolean;
+  classId?: string | null;
 }
 
 function parsePublicState(raw: Record<string, unknown> | null): CfPublicState | null {
@@ -66,6 +69,8 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
   currentUserId,
   userEmail,
   userDisplayName,
+  embedded = false,
+  classId = null,
 }) => {
   const config = useMemo(() => parseCfConfig(rawConfig), [rawConfig]);
   const enabled = config.workAssignmentsEnabled;
@@ -337,7 +342,7 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
 
   if (!active) return null;
 
-  const shared: CfSharedProps = { sessionId, actor, sprint, config, nowMs, players, nameOf, notify };
+  const shared: CfSharedProps = { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, embedded, classId };
 
   return (
     <>

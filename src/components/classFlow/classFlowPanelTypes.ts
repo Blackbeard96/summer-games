@@ -42,6 +42,8 @@ export interface CfSharedProps {
   players: CfPlayerRef[];
   nameOf: (uid: string) => string;
   notify: (n: CfToastInput) => void;
+  embedded?: boolean;
+  classId?: string | null;
 }
 
 export interface CfFacilitatorData {

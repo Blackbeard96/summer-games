@@ -128,6 +128,7 @@ import LiveEventReflectionPanel from './LiveEventReflectionPanel';
 import LiveEventGoalSettingPanel from './LiveEventGoalSettingPanel';
 import LiveEventSprintPanel from './LiveEventSprintPanel';
 import ClassFlowWorkPanel from './classFlow/ClassFlowWorkPanel';
+import { parseCfConfig } from '../utils/classFlowConfig';
 import LiveEventMstMktModal from './LiveEventMstMktModal';
 import FlowStateActivationOverlay from './liveEvent/FlowStateActivationOverlay';
 import FlowStateBoonModal from './liveEvent/FlowStateBoonModal';
@@ -4246,25 +4247,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           userDisplayName={currentUser.displayName}
           classId={classId}
           goalSettingAssessmentId={roomReflectionMeta.goalSettingAssessmentId}
-        />
-      )}
-
-      {(isSessionHost || isAdminUser || roomClassFlowSprint) &&
-        !quizSession &&
-        roomReflectionMeta.liveEventMode !== 'reflection' &&
-        !isExamLiveEventMode(roomReflectionMeta.liveEventMode) &&
-        currentUser && (
-        <ClassFlowWorkPanel
-          sessionId={sessionId}
-          sprint={roomClassFlowSprint}
-          rawConfig={roomClassFlowConfig}
-          sessionPlayers={sessionPlayers.map((p) => ({ userId: p.userId, displayName: p.displayName }))}
-          hostUid={sessionRoomHostUid}
-          isFacilitator={isSessionHost || isAdminUser}
-          currentUserId={currentUser.uid}
-          userEmail={currentUser.email}
-          userDisplayName={currentUser.displayName}
-        />
+          classFlowWorkEnabled={parseCfConfig(roomClassFlowConfig).workAssignmentsEnabled}
+        >
+          <ClassFlowWorkPanel
+            embedded
+            classId={classId || null}
+            sessionId={sessionId}
+            sprint={roomClassFlowSprint}
+            rawConfig={roomClassFlowConfig}
+            sessionPlayers={sessionPlayers.map((p) => ({ userId: p.userId, displayName: p.displayName }))}
+            hostUid={sessionRoomHostUid}
+            isFacilitator={isSessionHost || isAdminUser}
+            currentUserId={currentUser.uid}
+            userEmail={currentUser.email}
+            userDisplayName={currentUser.displayName}
+          />
+        </LiveEventSprintPanel>
       )}
 
       {/* Quiz setup modal (host only) */}

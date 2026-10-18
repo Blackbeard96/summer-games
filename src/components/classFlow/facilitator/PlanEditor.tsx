@@ -1,13 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import type { CfSprintPlanItem, CfWorkAssignment } from '../../../types/classFlowWork';
-import { toSprintAssignment } from '../../../utils/classFlowConfig';
-import { newPlanItem, subscribeWorkLibrary, updateCfConfig } from '../../../utils/classFlowWorkService';
+import React, { useEffect, useState } from 'react';
+import type { CfSprintPlanItem } from '../../../types/classFlowWork';
+import { newPlanItem, updateCfConfig } from '../../../utils/classFlowWorkService';
+import SprintWorkPicker from '../SprintWorkPicker';
 
 interface Props {
   sessionId: string;
   plan: CfSprintPlanItem[];
   activePlanId: string | null;
   classId?: string | null;
+  actorUid: string;
   onMessage: (msg: string, error?: boolean) => void;
 }
 
@@ -19,24 +20,16 @@ function move<T>(list: T[], from: number, to: number): T[] {
   return next;
 }
 
-const PlanEditor: React.FC<Props> = ({ sessionId, plan, activePlanId, classId, onMessage }) => {
+const PlanEditor: React.FC<Props> = ({ sessionId, plan, activePlanId, classId, actorUid, onMessage }) => {
   const [draft, setDraft] = useState<CfSprintPlanItem[]>(plan);
   const [dirty, setDirty] = useState(false);
-  const [library, setLibrary] = useState<CfWorkAssignment[]>([]);
-  const [pick, setPick] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => subscribeWorkLibrary(setLibrary, () => setLibrary([])), []);
   const planKey = JSON.stringify(plan);
   useEffect(() => {
     if (!dirty) setDraft(JSON.parse(planKey));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planKey]);
-
-  const activeLibrary = useMemo(
-    () => library.filter((w) => w.status === 'active' && (!w.classId || !classId || w.classId === classId)),
-    [library, classId]
-  );
 
   const update = (fn: (p: CfSprintPlanItem[]) => CfSprintPlanItem[]) => {
     setDraft((d) => fn(d));
@@ -60,7 +53,7 @@ const PlanEditor: React.FC<Props> = ({ sessionId, plan, activePlanId, classId, o
       <div className="cf-between">
         <div>
           <div className="cf-title" style={{ fontSize: 13 }}>Sprint plan</div>
-          <div className="cf-sub">Attach Work Library items to each sprint. Points set here apply to this sprint only.</div>
+          <div className="cf-sub">Attach library work or create new work for each sprint. Points set here apply to that sprint only.</div>
         </div>
         <div className="cf-row">
           <button type="button" className="cf-btn" onClick={() => update((d) => [...d, newPlanItem(d.length)])}>
@@ -72,11 +65,6 @@ const PlanEditor: React.FC<Props> = ({ sessionId, plan, activePlanId, classId, o
         </div>
       </div>
       {draft.length === 0 && <div className="cf-empty">No sprints planned yet.</div>}
-      {activeLibrary.length === 0 && (
-        <div className="cf-sub" style={{ marginTop: 6 }}>
-          The Work Library has no active items. Add some in Admin → Class Flow Work.
-        </div>
-      )}
       <div style={{ display: 'grid', gap: 10, marginTop: 10 }}>
         {draft.map((item, i) => (
           <div key={item.planId} className="cf-card cf-card--gold">
@@ -121,70 +109,14 @@ const PlanEditor: React.FC<Props> = ({ sessionId, plan, activePlanId, classId, o
               value={item.objective}
               onChange={(e) => patchItem(i, { objective: e.target.value })}
             />
-            <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
-              {item.assignments.map((a, k) => (
-                <div key={a.assignmentId} className="cf-row" style={{ fontSize: 13 }}>
-                  <span style={{ flex: 1 }}>
-                    {a.title} <span className="cf-sub">· {a.workType}{a.isExtraCredit ? ' · extra' : ''}</span>
-                  </span>
-                  <input
-                    className="cf-input"
-                    type="number"
-                    min={0}
-                    value={a.points}
-                    style={{ width: 80 }}
-                    aria-label={`Points for ${a.title}`}
-                    onChange={(e) =>
-                      patchItem(i, {
-                        assignments: item.assignments.map((x, j) =>
-                          j === k ? { ...x, points: Math.max(0, Math.floor(Number(e.target.value) || 0)) } : x
-                        ),
-                      })
-                    }
-                  />
-                  <span className="cf-sub">pts</span>
-                  <button type="button" className="cf-btn cf-btn--ghost" onClick={() => patchItem(i, { assignments: move(item.assignments, k, k - 1) })} aria-label="Move up">↑</button>
-                  <button type="button" className="cf-btn cf-btn--ghost" onClick={() => patchItem(i, { assignments: move(item.assignments, k, k + 1) })} aria-label="Move down">↓</button>
-                  <button
-                    type="button"
-                    className="cf-btn cf-btn--ghost"
-                    onClick={() => patchItem(i, { assignments: item.assignments.filter((_, j) => j !== k) })}
-                    aria-label={`Remove ${a.title}`}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-              <div className="cf-row">
-                <select
-                  className="cf-select"
-                  value={pick[item.planId] || ''}
-                  onChange={(e) => setPick((p) => ({ ...p, [item.planId]: e.target.value }))}
-                  style={{ flex: 1 }}
-                >
-                  <option value="">Add work from library…</option>
-                  {activeLibrary
-                    .filter((w) => !item.assignments.some((a) => a.assignmentId === w.id))
-                    .map((w) => (
-                      <option key={w.id} value={w.id}>
-                        {w.title} ({w.basePoints} pts · {w.workType}{w.isExtraCredit ? ' · extra' : ''})
-                      </option>
-                    ))}
-                </select>
-                <button
-                  type="button"
-                  className="cf-btn"
-                  disabled={!pick[item.planId]}
-                  onClick={() => {
-                    const w = activeLibrary.find((x) => x.id === pick[item.planId]);
-                    if (!w) return;
-                    patchItem(i, { assignments: [...item.assignments, toSprintAssignment(w)] });
-                    setPick((p) => ({ ...p, [item.planId]: '' }));
-                  }}
-                >
-                  Attach
-                </button>
-              </div>
+            <div style={{ marginTop: 8 }}>
+              <SprintWorkPicker
+                assignments={item.assignments}
+                onChange={(assignments) => patchItem(i, { assignments })}
+                actorUid={actorUid}
+                classId={classId}
+                onMessage={onMessage}
+              />
             </div>
           </div>
         ))}

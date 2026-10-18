@@ -26,6 +26,9 @@ import {
   listWorkPeriodsForClass,
 } from '../utils/workBoardService';
 import LiveEventWeeklyDeliverableMarkPanel from './LiveEventWeeklyDeliverableMarkPanel';
+import SprintWorkPicker from './classFlow/SprintWorkPicker';
+import type { CfSprintAssignment } from '../types/classFlowWork';
+import { recordSprintArchive, updateCfConfig } from '../utils/classFlowWorkService';
 
 export interface LiveEventSprintPanelProps {
   sessionId: string;
@@ -44,6 +47,10 @@ export interface LiveEventSprintPanelProps {
   /** When set with goalSettingAssessmentId, host can mark weekly deliverable completion here. */
   classId?: string;
   goalSettingAssessmentId?: string | null;
+  /** Class Flow Work Assignments already enabled for this room. */
+  classFlowWorkEnabled?: boolean;
+  /** Integrated Sprint Manager (work, approvals, teams, rewards). */
+  children?: React.ReactNode;
 }
 
 function endsAtMs(s: ClassFlowSprintState): number {
@@ -66,6 +73,8 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
   userDisplayName,
   classId = '',
   goalSettingAssessmentId = null,
+  classFlowWorkEnabled = false,
+  children,
 }) => {
   const [now, setNow] = useState(() => Date.now());
   const [title, setTitle] = useState('');
@@ -76,6 +85,7 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
   const [rewardVaultPP, setRewardVaultPP] = useState(25);
   const [rewardXP, setRewardXP] = useState(10);
   const [incompletePenaltyVaultPP, setIncompletePenaltyVaultPP] = useState(0);
+  const [sprintWork, setSprintWork] = useState<CfSprintAssignment[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [fetchedClassRoster, setFetchedClassRoster] = useState<
@@ -215,6 +225,9 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
     setMessage(null);
     setBusy(true);
     try {
+      const hasWork = sprintWork.length > 0;
+      const durationSeconds = Math.round(durationMinutes * 60);
+      const startedAtMs = Date.now();
       const res = await startClassFlowSprint(
         sessionId,
         currentUserId,
@@ -223,17 +236,33 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
         {
           title,
           description,
-          durationSeconds: Math.round(durationMinutes * 60),
+          durationSeconds,
           rewardParticipationPoints,
           rewardVaultPP,
           rewardXP,
           incompletePenaltyVaultPP,
+          ...(hasWork ? { objective: description, assignments: sprintWork, nowMs: startedAtMs } : {}),
         }
       );
       if (!res.ok) setMessage(res.error || 'Could not start sprint');
       else {
+        if (hasWork && res.sprintId) {
+          await recordSprintArchive(sessionId, res.sprintId, {
+            title: title.trim(),
+            objective: description.trim(),
+            durationSeconds,
+            assignments: sprintWork,
+            startedAtMs,
+            startedBy: currentUserId,
+          });
+          if (!classFlowWorkEnabled) {
+            const cfg = await updateCfConfig(sessionId, { workAssignmentsEnabled: true, expandedTimerEnabled: true });
+            if (!cfg.ok) setMessage('Sprint started, but Work Assignments could not be switched on for this room.');
+          }
+        }
         setTitle('');
         setDescription('');
+        setSprintWork([]);
       }
     } finally {
       setBusy(false);
@@ -250,6 +279,8 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
     rewardVaultPP,
     rewardXP,
     incompletePenaltyVaultPP,
+    sprintWork,
+    classFlowWorkEnabled,
   ]);
 
   const onToggle = useCallback(
@@ -563,10 +594,12 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
               <input
                 type="number"
                 min={1}
-                max={60}
+                max={sprintWork.length ? 120 : 60}
                 value={durationMinutes}
                 onChange={(e) =>
-                  setDurationMinutes(Math.max(1, Math.min(60, parseInt(e.target.value, 10) || 2)))
+                  setDurationMinutes(
+                    Math.max(1, Math.min(sprintWork.length ? 120 : 60, parseInt(e.target.value, 10) || 2))
+                  )
                 }
                 style={{ width: '100%', marginTop: 4, padding: '0.35rem', borderRadius: 6 }}
               />
@@ -623,6 +656,21 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
           <p style={{ fontSize: '0.75rem', opacity: 0.85, margin: '8px 0 0' }}>
             Each participation point adds {LIVE_EVENT_PP_PER_PARTICIPATION_POINT} session PP and moves toward your live-event streak.
           </p>
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontWeight: 600, fontSize: '0.85rem', marginBottom: 4 }}>Work for this sprint (optional)</div>
+            <p style={{ fontSize: '0.75rem', opacity: 0.85, margin: '0 0 6px' }}>
+              Attach work from the library or create it here. Players submit it from their Sprint view and you approve it
+              in the Sprint Manager below. Attaching work turns on Work Assignments for this room.
+            </p>
+            <SprintWorkPicker
+              standalone
+              assignments={sprintWork}
+              onChange={setSprintWork}
+              actorUid={currentUserId}
+              classId={classId || null}
+              onMessage={(text) => setMessage(text)}
+            />
+          </div>
           <button
             type="button"
             disabled={busy || !title.trim()}
@@ -846,6 +894,8 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
           )}
         </div>
       )}
+
+      {children}
 
       {isSessionHost && classId && goalSettingAssessmentId?.trim() && (
         <LiveEventWeeklyDeliverableMarkPanel

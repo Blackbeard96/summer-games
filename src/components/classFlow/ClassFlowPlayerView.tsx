@@ -31,7 +31,7 @@ function draftKey(sprintId: string, uid: string) {
   return `cf_in_progress_${sprintId}_${uid}`;
 }
 
-const ClassFlowPlayerView: React.FC<Props> = ({ sessionId, actor, sprint, config, nowMs, nameOf, notify, data }) => {
+const ClassFlowPlayerView: React.FC<Props> = ({ sessionId, actor, sprint, config, nowMs, nameOf, notify, data, embedded }) => {
   const uid = actor.uid;
   const [modalFor, setModalFor] = useState<string | null | undefined>(undefined);
   const [inProgress, setInProgress] = useState<string[]>([]);
@@ -178,7 +178,7 @@ const ClassFlowPlayerView: React.FC<Props> = ({ sessionId, actor, sprint, config
   const myTable = data.tableByUid[uid];
 
   return (
-    <div className="cf-root" aria-label="Class Flow sprint">
+    <div className={`cf-root${embedded ? ' cf-embedded' : ''}`} aria-label="Class Flow sprint">
       <div className="cf-between" style={{ marginBottom: 10 }}>
         <h3 className="cf-title">Class Flow · Sprint</h3>
         {myTeam && <span className="cf-team-tag">{myTeam.tag}</span>}

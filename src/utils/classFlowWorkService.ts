@@ -196,23 +196,93 @@ export async function startPlannedSprint(
     nowMs,
   });
   if (!res.ok || !res.sprintId) return { ok: false, error: res.error || 'Could not start sprint' };
+  await recordSprintArchive(sessionId, res.sprintId, {
+    planId: plan.planId,
+    title: plan.title,
+    objective: plan.objective,
+    durationSeconds: plan.durationMinutes * 60,
+    assignments: plan.assignments,
+    startedAtMs: nowMs,
+    startedBy: actor.uid,
+  });
+  return { ok: true, value: res.sprintId };
+}
+
+/** Sprint archive used by reviews (credit caps), rewards, and analytics after the sprint is replaced. */
+export async function recordSprintArchive(
+  sessionId: string,
+  sprintId: string,
+  data: {
+    planId?: string | null;
+    title: string;
+    objective?: string;
+    durationSeconds: number;
+    assignments: CfSprintAssignment[];
+    startedAtMs: number;
+    startedBy: string;
+  }
+): Promise<void> {
   try {
-    await setDoc(subDoc(sessionId, 'cfSprints', res.sprintId), {
-      sprintId: res.sprintId,
-      planId: plan.planId,
-      title: plan.title,
-      objective: plan.objective,
-      durationSeconds: plan.durationMinutes * 60,
-      assignments: plan.assignments,
-      startedAtMs: nowMs,
+    await setDoc(subDoc(sessionId, 'cfSprints', sprintId), {
+      sprintId,
+      planId: data.planId ?? null,
+      title: data.title,
+      objective: data.objective || '',
+      durationSeconds: data.durationSeconds,
+      assignments: data.assignments,
+      startedAtMs: data.startedAtMs,
       status: 'live',
-      startedBy: actor.uid,
+      startedBy: data.startedBy,
       createdAt: serverTimestamp(),
     });
   } catch (e) {
     console.warn('[classFlow] sprint archive write failed', e);
   }
-  return { ok: true, value: res.sprintId };
+}
+
+/**
+ * Replace the work attached to the current sprint (add, remove, reorder, re-point).
+ * Work that already has submissions cannot be removed.
+ */
+export async function updateLiveSprintAssignments(
+  sessionId: string,
+  sprintId: string,
+  assignments: CfSprintAssignment[]
+): Promise<Result> {
+  try {
+    const existing = await getDocs(query(sub(sessionId, 'cfSubmissions'), where('sprintId', '==', sprintId)));
+    const submitted = new Set(existing.docs.map((d) => String(d.data()?.assignmentId || '')));
+    const keep = new Set(assignments.map((a) => a.assignmentId));
+    const removedWithWork = Array.from(submitted).filter((id) => id && !keep.has(id));
+    if (removedWithWork.length) return { ok: false, error: 'Work that players already submitted cannot be removed.' };
+    await runTransaction(db, async (tx) => {
+      const roomSnap = await tx.get(room(sessionId));
+      const live = roomSnap.data()?.classFlowSprint;
+      if (!live || live.id !== sprintId) throw new Error('That sprint is no longer current.');
+      const archiveRef = subDoc(sessionId, 'cfSprints', sprintId);
+      const archiveSnap = await tx.get(archiveRef);
+      tx.update(room(sessionId), { 'classFlowSprint.assignments': assignments, updatedAt: serverTimestamp() });
+      if (archiveSnap.exists()) {
+        tx.update(archiveRef, { assignments });
+      } else {
+        const started = live.startedAt?.toMillis?.() ?? Date.now();
+        tx.set(archiveRef, {
+          sprintId,
+          planId: live.planId ?? null,
+          title: String(live.title || 'Sprint'),
+          objective: String(live.objective || live.description || ''),
+          durationSeconds: Number(live.durationSeconds) || 0,
+          assignments,
+          startedAtMs: started,
+          status: live.status === 'closed' ? 'closed' : 'live',
+          createdAt: serverTimestamp(),
+        });
+      }
+    });
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
 }
 
 export async function endPlannedSprint(sessionId: string, actor: CfActor, sprintId: string): Promise<Result> {

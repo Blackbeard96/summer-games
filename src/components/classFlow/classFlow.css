@@ -25,6 +25,8 @@
 }
 .cf-root, .cf-root * { box-sizing: border-box; }
 .cf-root { max-width: 100%; }
+.cf-root.cf-embedded { margin: 12px 0 0; padding: 12px; border-radius: 12px; box-shadow: none; background: rgba(5, 7, 13, 0.72); }
+.cf-root.cf-inline { margin: 0; padding: 10px; border-radius: 10px; box-shadow: none; background: rgba(5, 7, 13, 0.55); }
 .cf-title {
   font-family: 'Cinzel', serif;
   letter-spacing: 0.12em;
