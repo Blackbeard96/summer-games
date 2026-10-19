@@ -4,9 +4,10 @@ import type { ClassFlowSprintState } from '../../types/season1';
 import type { CfSprintAssignment } from '../../types/classFlowWork';
 import { formatClock, sprintPhase, sprintRemainingMs, submissionsOpen } from '../../utils/classFlowConfig';
 import { sprintTimerInput } from '../../utils/liveEventSprintService';
-import type { CfRosterStatusRow } from '../../utils/classFlowAnalytics';
+import { rosterReviewState, type CfRosterStatusRow } from '../../utils/classFlowAnalytics';
 
 function rosterChip(r: CfRosterStatusRow): { label: string; cls: string } {
+  if (rosterReviewState(r) === 'pending') return { label: '📝 Awaiting review', cls: 'cf-status-awaiting_approval' };
   if (r.total === 0) return { label: r.submitted ? 'Submitted' : '—', cls: '' };
   if (r.approved >= r.total) return { label: 'All approved', cls: 'cf-status-approved' };
   if (r.revisions > 0) return { label: `${r.submitted}/${r.total} · revise`, cls: 'cf-status-revision_requested' };
@@ -31,7 +32,12 @@ const RosterColumn: React.FC<{ title: string; rows: CfRosterStatusRow[]; viewerU
         {rows.map((r) => {
           const chip = rosterChip(r);
           return (
-            <li key={r.uid} className={r.uid === viewerUid ? 'cf-roster-me' : undefined}>
+            <li
+              key={r.uid}
+              className={[r.uid === viewerUid ? 'cf-roster-me' : '', rosterReviewState(r) === 'pending' ? 'cf-roster-pending' : '']
+                .filter(Boolean)
+                .join(' ') || undefined}
+            >
               <span className="cf-roster-name">
                 {r.name}
                 {r.uid === viewerUid ? ' (you)' : ''}

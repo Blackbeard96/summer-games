@@ -11,7 +11,7 @@ import {
 } from '../classFlowConfig';
 import { computeSprintRewards, majorityShareVote, splitEvenly, UNASSIGNED_TEAM_ID } from '../classFlowRewards';
 import { buildTeams, formatTeamTag } from '../classFlowTeams';
-import { buildSprintRosterStatus, computeClassFlowAnalytics } from '../classFlowAnalytics';
+import { buildSprintRosterStatus, computeClassFlowAnalytics, rosterReviewState } from '../classFlowAnalytics';
 import type { CfConfig, CfSprintAssignment, CfSubmission } from '../../types/classFlowWork';
 
 const cfg = (over: Partial<CfConfig> = {}): CfConfig => ({
@@ -433,5 +433,16 @@ describe('buildSprintRosterStatus', () => {
     expect(rows[0]).toMatchObject({ submitted: 2, approved: 1, total: 2 });
     expect(rows[1]).toMatchObject({ submitted: 1, approved: 0, total: 2 });
     expect(rows[2]).toMatchObject({ submitted: 0, approved: 0, inSession: false });
+  });
+});
+
+describe('rosterReviewState', () => {
+  it('highlights players with work waiting on the facilitator first', () => {
+    expect(rosterReviewState({ submitted: 0, approved: 0, revisions: 0, total: 2 })).toBe('none');
+    expect(rosterReviewState({ submitted: 1, approved: 0, revisions: 0, total: 2 })).toBe('pending');
+    expect(rosterReviewState({ submitted: 2, approved: 0, revisions: 1, total: 2 })).toBe('pending');
+    expect(rosterReviewState({ submitted: 1, approved: 0, revisions: 1, total: 2 })).toBe('revision');
+    expect(rosterReviewState({ submitted: 2, approved: 2, revisions: 0, total: 2 })).toBe('approved');
+    expect(rosterReviewState({ submitted: 1, approved: 1, revisions: 0, total: 2 })).toBe('none');
   });
 });

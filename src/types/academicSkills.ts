@@ -25,6 +25,8 @@ export interface AcademicSkill {
   description?: string;
   category?: string;
   courseId?: string | null;
+  /** Classes this skill is tracked for. Empty or missing = every class. */
+  classIds?: string[] | null;
   parentSkillId?: string | null;
   icon?: string;
   color?: string;

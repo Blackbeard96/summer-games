@@ -149,6 +149,16 @@ export interface CfRosterStatusRow {
   inSession: boolean;
 }
 
+export type CfRosterReviewState = 'pending' | 'revision' | 'approved' | 'none';
+
+/** Work waiting on the facilitator wins over revisions, which win over fully approved. */
+export function rosterReviewState(row: Pick<CfRosterStatusRow, 'submitted' | 'approved' | 'revisions' | 'total'>): CfRosterReviewState {
+  if (row.submitted - row.approved - row.revisions > 0) return 'pending';
+  if (row.revisions > 0) return 'revision';
+  if (row.total > 0 && row.approved >= row.total) return 'approved';
+  return 'none';
+}
+
 export function buildSprintRosterStatus(
   roster: { uid: string; name: string; inSession: boolean }[],
   assignments: CfSprintAssignment[],

@@ -34,6 +34,7 @@ import { useServerClockOffset } from '../../hooks/useServerClock';
 import ClassFlowPlayerView from './ClassFlowPlayerView';
 import ClassFlowFacilitatorView from './ClassFlowFacilitatorView';
 import { ClassFlowToastStack, useClassFlowToasts } from './ClassFlowToasts';
+import { useReportClassFlowRosterStatus } from './ClassFlowRosterStatusContext';
 import type { CfPlayerRef, CfPublicState, CfPublicTeam, CfSharedProps } from './classFlowPanelTypes';
 
 export interface ClassFlowWorkPanelProps {
@@ -374,13 +375,21 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
     lastSprintKey.current = key ?? '';
   }, [sprint, phase, isPlayerView, notify]);
 
-  if (!active) return null;
-
   const roster = isFacilitator
     ? rosterRows
     : sprint && publicState?.sprintId === sprint.id
       ? publicState.roster ?? null
       : null;
+
+  const reportRosterStatus = useReportClassFlowRosterStatus();
+  const rosterReportKey = active && roster ? JSON.stringify(roster) : '';
+  useEffect(() => {
+    if (!reportRosterStatus) return;
+    reportRosterStatus(rosterReportKey ? (JSON.parse(rosterReportKey) as CfRosterStatusRow[]) : null);
+  }, [reportRosterStatus, rosterReportKey]);
+  useEffect(() => () => reportRosterStatus?.(null), [reportRosterStatus]);
+
+  if (!active) return null;
   const shared: CfSharedProps = { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, embedded, classId, roster };
   const playerData = { submissions: mySubs, allocations: myAllocs, payouts: myPayouts, sharing, tableByUid, publicState };
 

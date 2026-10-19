@@ -29,6 +29,29 @@ import LiveEventWeeklyDeliverableMarkPanel from './LiveEventWeeklyDeliverableMar
 import SprintWorkPicker from './classFlow/SprintWorkPicker';
 import type { CfSprintAssignment } from '../types/classFlowWork';
 import { recordSprintArchive, updateCfConfig } from '../utils/classFlowWorkService';
+import { rosterReviewState, type CfRosterReviewState, type CfRosterStatusRow } from '../utils/classFlowAnalytics';
+import { ClassFlowRosterStatusContext } from './classFlow/ClassFlowRosterStatusContext';
+
+const REVIEW_HIGHLIGHT: Record<Exclude<CfRosterReviewState, 'none'>, { row: React.CSSProperties; badge: React.CSSProperties; label: string }> = {
+  pending: {
+    row: {
+      background: 'rgba(251, 191, 36, 0.24)',
+      boxShadow: 'inset 4px 0 0 #fbbf24, 0 0 0 1px rgba(251, 191, 36, 0.7)',
+    },
+    badge: { background: '#fbbf24', color: '#422006' },
+    label: '📝 Submitted for review',
+  },
+  revision: {
+    row: { background: 'rgba(251, 146, 60, 0.16)', boxShadow: 'inset 4px 0 0 #fb923c' },
+    badge: { background: 'rgba(251, 146, 60, 0.3)', color: '#ffedd5', border: '1px solid rgba(251, 146, 60, 0.7)' },
+    label: '↺ Revision requested',
+  },
+  approved: {
+    row: { background: 'rgba(52, 211, 153, 0.16)', boxShadow: 'inset 4px 0 0 #34d399' },
+    badge: { background: 'rgba(52, 211, 153, 0.3)', color: '#d1fae5', border: '1px solid rgba(52, 211, 153, 0.6)' },
+    label: '✓ Work approved',
+  },
+};
 
 export interface LiveEventSprintPanelProps {
   sessionId: string;
@@ -96,6 +119,11 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
   const [workProgressByUid, setWorkProgressByUid] = useState<Record<string, WorkPeriodProgress>>({});
   const [gameTimeBusy, setGameTimeBusy] = useState(false);
   const [showGameTimeRoster, setShowGameTimeRoster] = useState(true);
+  const [workStatusRows, setWorkStatusRows] = useState<CfRosterStatusRow[] | null>(null);
+  const workStatusByUid = useMemo(
+    () => new Map((workStatusRows || []).map((r) => [r.uid, r])),
+    [workStatusRows]
+  );
 
   useEffect(() => {
     if (!showGameTimeControls || !sessionId) return;
@@ -804,6 +832,26 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
             {sprintRosterRows.map((p) => {
               const isMarked = marked.has(p.userId);
               const isPaid = granted.has(p.userId);
+              const work = workStatusByUid.get(p.userId);
+              const reviewState = work ? rosterReviewState(work) : 'none';
+              const highlight = reviewState === 'none' ? null : REVIEW_HIGHLIGHT[reviewState];
+              const workBadge = highlight ? (
+                <span
+                  title={work ? `${work.submitted} of ${work.total} task(s) submitted · ${work.approved} approved` : undefined}
+                  style={{
+                    fontSize: '0.68rem',
+                    fontWeight: 800,
+                    padding: '2px 7px',
+                    borderRadius: 999,
+                    flexShrink: 0,
+                    ...highlight.badge,
+                  }}
+                >
+                  {highlight.label}
+                </span>
+              ) : null;
+              const nameStyle: React.CSSProperties | undefined =
+                reviewState === 'pending' ? { fontWeight: 800, color: '#fef3c7' } : undefined;
               const canToggle = isSessionHost && (sprint.status === 'live' || sprint.status === 'closed');
               const sessionBadge = showPresenceBadges ? (
                 <span
@@ -826,6 +874,7 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
               return (
                 <div
                   key={p.userId}
+                  data-review-state={reviewState}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -834,19 +883,23 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
                     background: 'rgba(0,0,0,0.12)',
                     borderRadius: 6,
                     fontSize: '0.875rem',
+                    transition: 'background 0.3s, box-shadow 0.3s',
+                    ...(highlight?.row || {}),
                   }}
                 >
                   {canToggle ? (
                     <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flex: 1 }}>
                       <input type="checkbox" checked={isMarked} onChange={() => void onToggle(p.userId)} />
                       <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
-                        <span>{p.displayName}</span>
+                        <span style={nameStyle}>{p.displayName}</span>
+                        {workBadge}
                         {sessionBadge}
                       </span>
                     </label>
                   ) : (
                     <span style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
-                      <span>{p.displayName}</span>
+                      <span style={nameStyle}>{p.displayName}</span>
+                      {workBadge}
                       {sessionBadge}
                       {isMarked && (
                         <span style={{ marginLeft: 8, opacity: 0.9, color: '#a7f3d0' }}>
@@ -895,7 +948,7 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
         </div>
       )}
 
-      {children}
+      <ClassFlowRosterStatusContext.Provider value={setWorkStatusRows}>{children}</ClassFlowRosterStatusContext.Provider>
 
       {isSessionHost && classId && goalSettingAssessmentId?.trim() && (
         <LiveEventWeeklyDeliverableMarkPanel

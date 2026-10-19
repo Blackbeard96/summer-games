@@ -12,7 +12,11 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { listAcademicSkills } from './academicSkillService';
+import { getClassroomIdsForEnrolledStudent } from './classroomQueries';
+import { filterSkillIdsForStudent } from './skillClassScope';
 import {
+  AcademicSkill,
   PlayerSkillMastery,
   SkillEvidenceEvent,
   SkillEvidenceMode,
@@ -31,6 +35,26 @@ function masteryDocRef(userId: string, skillId: string) {
 
 function evidenceCol() {
   return collection(db, 'skillEvidence');
+}
+
+type SkillIdFilter = (skillIds: string[]) => string[];
+
+/**
+ * Drops skills attached only to classes this student is not in. Never blocks evidence on a lookup
+ * failure: if skills or classes cannot be read, every tagged skill is kept.
+ */
+async function loadSkillScopeFilter(userId: string, skills?: AcademicSkill[]): Promise<SkillIdFilter> {
+  try {
+    const [skillRows, classIds] = await Promise.all([
+      skills ? Promise.resolve(skills) : listAcademicSkills(),
+      getClassroomIdsForEnrolledStudent(userId),
+    ]);
+    const byId = new Map(skillRows.map((s) => [s.id, s]));
+    return (ids) => filterSkillIdsForStudent(ids, byId, classIds);
+  } catch (e) {
+    console.warn('[mastery] skill class scope unavailable; tracking all tagged skills', e);
+    return (ids) => ids;
+  }
 }
 
 export async function getPlayerSkillMastery(userId: string): Promise<PlayerSkillMastery[]> {
@@ -74,7 +98,11 @@ export async function recordSkillEvidenceFromAttempt(params: {
   mode: SkillEvidenceMode;
 }): Promise<void> {
   const { userId, quizSetId, attemptId, answers, mode } = params;
-  const tagged = answers.filter((a) => Array.isArray(a.skillIds) && a.skillIds!.length > 0);
+  if (!answers.some((a) => Array.isArray(a.skillIds) && a.skillIds.length > 0)) return;
+  const scope = await loadSkillScopeFilter(userId);
+  const tagged = answers
+    .map((a) => ({ ...a, skillIds: scope(Array.isArray(a.skillIds) ? a.skillIds : []) }))
+    .filter((a) => a.skillIds.length > 0);
   if (tagged.length === 0) return;
 
   // Idempotent: same attemptId already recorded
@@ -323,10 +351,43 @@ function masteryWithReplayedTrend(
   return next;
 }
 
+/** Recompute a player's mastery docs for the given skills from all of their stored evidence. */
+export async function rebuildSkillMasteryFromEvidence(userId: string, skillIds: string[]): Promise<number> {
+  const wanted = new Set(skillIds.filter(Boolean));
+  if (wanted.size === 0) return 0;
+  const evidenceSnap = await getDocs(query(evidenceCol(), where('userId', '==', userId)));
+  const samplesBySkill = new Map<string, HistoryEvidenceSample[]>();
+  evidenceSnap.docs.forEach((d) => {
+    const e = d.data();
+    if (!e.skillId || !wanted.has(e.skillId)) return;
+    if (!samplesBySkill.has(e.skillId)) samplesBySkill.set(e.skillId, []);
+    samplesBySkill.get(e.skillId)!.push({
+      correct: !!e.correct,
+      partialCredit: typeof e.partialCredit === 'number' ? e.partialCredit : e.correct ? 1 : 0,
+      weight: typeof e.weight === 'number' ? e.weight : 1,
+      difficulty: e.difficulty || undefined,
+      timestampMs: e.createdAtMs || anyToMillis(e.timestamp) || Date.now(),
+    });
+  });
+  if (samplesBySkill.size === 0) return 0;
+
+  const existing = await getPlayerSkillMastery(userId);
+  const masteryById = new Map(existing.map((m) => [m.skillId, m]));
+  const batch = writeBatch(db);
+  samplesBySkill.forEach((samples, skillId) => {
+    const next = masteryWithReplayedTrend(userId, skillId, samples, masteryById.get(skillId) || null);
+    const clean = Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined));
+    batch.set(masteryDocRef(userId, skillId), { ...clean, updatedAt: serverTimestamp() }, { merge: true });
+  });
+  await batch.commit();
+  return samplesBySkill.size;
+}
+
 async function syncUserSkillHistory(
   userId: string,
   loadQuestionTags: (quizSetId: string) => Promise<Map<string, QuestionTag>>,
-  result: SkillHistorySyncResult
+  result: SkillHistorySyncResult,
+  scope: SkillIdFilter
 ): Promise<void> {
   const attemptsSnap = await getDocs(
     query(collection(db, 'trainingAttempts'), where('userId', '==', userId))
@@ -391,12 +452,13 @@ async function syncUserSkillHistory(
       questionAttemptCount.set(questionId, attemptNumber);
 
       const bank = tags.get(questionId);
-      const skillIds =
+      const skillIds = scope(
         bank && bank.skillIds.length > 0
           ? bank.skillIds
           : Array.isArray(answer.skillIds)
             ? answer.skillIds.filter((s) => typeof s === 'string' && s)
-            : [];
+            : []
+      );
       if (skillIds.length === 0) continue;
 
       const weight = getAttemptWeight(attemptNumber);
@@ -504,10 +566,12 @@ export async function syncSkillMasteryFromAttemptHistory(
     return questionCache.get(quizSetId)!;
   };
 
+  const skills = await listAcademicSkills().catch(() => undefined);
   let done = 0;
   for (const userId of userIds) {
     try {
-      await syncUserSkillHistory(userId, loadQuestionTags, result);
+      const scope = await loadSkillScopeFilter(userId, skills);
+      await syncUserSkillHistory(userId, loadQuestionTags, result, scope);
     } catch (e) {
       result.errors += 1;
       console.warn('[mastery] history sync failed for', userId, e);
@@ -518,8 +582,21 @@ export async function syncSkillMasteryFromAttemptHistory(
   return result;
 }
 
+/** Every student's mastery docs, keyed by uid. */
+export async function getClassPlayerSkillMastery(classStudentIds: string[]): Promise<Map<string, PlayerSkillMastery[]>> {
+  const out = new Map<string, PlayerSkillMastery[]>();
+  for (let i = 0; i < classStudentIds.length; i += 20) {
+    const chunk = classStudentIds.slice(i, i + 20);
+    const rows = await Promise.all(chunk.map((uid) => getPlayerSkillMastery(uid).catch(() => [] as PlayerSkillMastery[])));
+    chunk.forEach((uid, idx) => out.set(uid, rows[idx]));
+  }
+  return out;
+}
+
 export async function getClassSkillAnalytics(params: {
   classStudentIds: string[];
+  /** Already-loaded mastery (skips re-reading Firestore). */
+  masteryByUser?: Map<string, PlayerSkillMastery[]>;
 }): Promise<
   {
     skillId: string;
@@ -532,7 +609,7 @@ export async function getClassSkillAnalytics(params: {
     studentCount: number;
   }[]
 > {
-  const { classStudentIds } = params;
+  const { classStudentIds, masteryByUser } = params;
   if (classStudentIds.length === 0) return [];
 
   const bySkill = new Map<
@@ -549,7 +626,7 @@ export async function getClassSkillAnalytics(params: {
 
   // Limit concurrency for cost control
   for (const uid of classStudentIds) {
-    const rows = await getPlayerSkillMastery(uid);
+    const rows = masteryByUser?.get(uid) ?? (await getPlayerSkillMastery(uid));
     const seen = new Set(rows.map((r) => r.skillId));
     for (const row of rows) {
       if (!bySkill.has(row.skillId)) {

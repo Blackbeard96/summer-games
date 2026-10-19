@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AcademicSkill } from '../../types/academicSkills';
 import { groupSkillsByCategory, listAcademicSkills } from '../../utils/academicSkillService';
 import SkillChip from './SkillChip';
+import { skillAppliesToAnyClass } from '../../utils/skillClassScope';
 
 interface SkillPickerProps {
   selectedIds: string[];
@@ -9,6 +10,8 @@ interface SkillPickerProps {
   suggestedIds?: string[];
   disabled?: boolean;
   label?: string;
+  /** Only offer skills tracked for at least one of these classes (unscoped skills always show). */
+  classIds?: string[] | null;
 }
 
 /**
@@ -20,6 +23,7 @@ const SkillPicker: React.FC<SkillPickerProps> = ({
   suggestedIds = [],
   disabled,
   label = 'Skills Assessed',
+  classIds = null,
 }) => {
   const [skills, setSkills] = useState<AcademicSkill[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,12 +58,15 @@ const SkillPicker: React.FC<SkillPickerProps> = ({
 
   const filtered = useMemo(() => {
     const q = queryText.trim().toLowerCase();
-    const pool = skills.filter((s) => !selectedIds.includes(s.id));
+    const scoped = classIds && classIds.length > 0;
+    const pool = skills.filter(
+      (s) => !selectedIds.includes(s.id) && (!scoped || skillAppliesToAnyClass(s, classIds!))
+    );
     if (!q) return pool;
     return pool.filter((s) =>
       [s.name, s.category, s.description].some((v) => String(v ?? '').toLowerCase().includes(q))
     );
-  }, [skills, selectedIds, queryText]);
+  }, [skills, selectedIds, queryText, classIds]);
 
   const grouped = groupSkillsByCategory(filtered);
 

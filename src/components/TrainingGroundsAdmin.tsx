@@ -48,6 +48,8 @@ import SkillPicker from './skills/SkillPicker';
 import SkillChip from './skills/SkillChip';
 import { listAcademicSkills } from '../utils/academicSkillService';
 import { AcademicSkill } from '../types/academicSkills';
+import { buildOptionRemap, questionEditNeedsRegrade } from '../utils/trainingRegrade';
+import { describeRegradeSummary, regradeQuestionResponses } from '../utils/trainingRegradeService';
 
 const MIN_TRAINING_ANSWER_CHOICES = 2;
 const MAX_TRAINING_ANSWER_CHOICES = 6;
@@ -172,6 +174,7 @@ const TrainingGroundsAdmin: React.FC = () => {
   const [showQuestionForm, setShowQuestionForm] = useState(false);
   const [showImportForm, setShowImportForm] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<TrainingQuestion | null>(null);
+  const [regradingQuestionId, setRegradingQuestionId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [sourceQuizSetId, setSourceQuizSetId] = useState('');
@@ -1094,7 +1097,36 @@ const TrainingGroundsAdmin: React.FC = () => {
       
       await updateQuestion(selectedQuizSet.id, editingQuestion.id, updateData);
 
-      alert('Question updated successfully!');
+      let regradeNote = '';
+      const savedQuestion: TrainingQuestion = {
+        ...editingQuestion,
+        options: validOptions,
+        correctIndices,
+        correctIndex: correctIndices.length === 1 ? correctIndices[0] : undefined,
+        questionType: undefined,
+        matchPairs: undefined,
+      };
+      if (questionEditNeedsRegrade(editingQuestion, savedQuestion)) {
+        setRegradingQuestionId(editingQuestion.id);
+        try {
+          const fresh = await getQuestions(selectedQuizSet.id);
+          const summary = await regradeQuestionResponses({
+            quizSetId: selectedQuizSet.id,
+            question: fresh.find((q) => q.id === editingQuestion.id) || savedQuestion,
+            questions: fresh,
+            optionRemap: buildOptionRemap(editingQuestion.options, validOptions),
+          });
+          regradeNote = `\n\nThe answer key changed, so past responses were regraded.\n${describeRegradeSummary(summary)}`;
+        } catch (regradeError) {
+          console.error('Error regrading past responses:', regradeError);
+          regradeNote =
+            '\n\n⚠️ Past responses could not be regraded. Use "Re-check answers" on this question to try again.';
+        } finally {
+          setRegradingQuestionId(null);
+        }
+      }
+
+      alert(`Question updated successfully!${regradeNote}`);
       setEditingQuestion(null);
       setShowQuestionForm(false);
       setQuestionForm(emptyQuestionForm());
@@ -1104,6 +1136,33 @@ const TrainingGroundsAdmin: React.FC = () => {
       alert('Failed to update question');
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleRecheckAnswers = async (question: TrainingQuestion) => {
+    if (!selectedQuizSet || regradingQuestionId) return;
+    if (
+      !window.confirm(
+        'Re-check every saved student answer to this question against its current answer key? ' +
+          'Scores, PP/XP, and Skill Analytics will be updated for any answers graded with an old key.'
+      )
+    ) {
+      return;
+    }
+    setRegradingQuestionId(question.id);
+    try {
+      const fresh = await getQuestions(selectedQuizSet.id);
+      const summary = await regradeQuestionResponses({
+        quizSetId: selectedQuizSet.id,
+        question: fresh.find((q) => q.id === question.id) || question,
+        questions: fresh,
+      });
+      alert(describeRegradeSummary(summary));
+    } catch (error) {
+      console.error('Error re-checking answers:', error);
+      alert('Failed to re-check past answers. See the console for details.');
+    } finally {
+      setRegradingQuestionId(null);
     }
   };
 
@@ -2056,6 +2115,7 @@ const TrainingGroundsAdmin: React.FC = () => {
                   <SkillPicker
                     selectedIds={editSkillIds}
                     onChange={setEditSkillIds}
+                    classIds={editClassIds}
                     label="Skills Assessed (CFU topics)"
                   />
                   <p style={{ margin: '0.35rem 0 0.65rem', fontSize: '0.75rem', color: '#9ca3af' }}>
@@ -2494,6 +2554,24 @@ const TrainingGroundsAdmin: React.FC = () => {
                       >
                         Duplicate
                       </button>
+                      {!isMatchingQuestion(question) && (
+                        <button
+                          onClick={() => handleRecheckAnswers(question)}
+                          disabled={!!regradingQuestionId}
+                          title="Regrade saved student answers against this question's current answer key"
+                          style={{
+                            padding: '0.25rem 0.5rem',
+                            background: regradingQuestionId ? '#e5e7eb' : '#d97706',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            cursor: regradingQuestionId ? 'not-allowed' : 'pointer',
+                            fontSize: '0.75rem',
+                          }}
+                        >
+                          {regradingQuestionId === question.id ? 'Re-checking…' : 'Re-check answers'}
+                        </button>
+                      )}
                       <button
                         onClick={() => handleDeleteQuestion(question.id)}
                         style={{
@@ -2790,6 +2868,7 @@ const TrainingGroundsAdmin: React.FC = () => {
                 selectedIds={questionForm.skillIds}
                 onChange={(ids) => setQuestionForm({ ...questionForm, skillIds: ids })}
                 suggestedIds={editSkillIds}
+                classIds={selectedQuizSet ? assignedClassIdsForQuiz(selectedQuizSet) : null}
                 label="Skills Assessed"
               />
             </div>

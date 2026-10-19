@@ -1163,6 +1163,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   /** Move/target at animation start — multiplayer can clear selection mid-VFX when opponent rows resync. */
   const pendingAnimationMoveRef = useRef<{ move: Move; target: string } | null>(null);
+  /**
+   * Held from executePlayerMove until handleAnimationComplete finishes. The execute effect re-fires on
+   * every allies/session update while the selection is still set, and the VFX overlay is dismissed
+   * before the server write resolves, so without this one click could submit the same move repeatedly.
+   */
+  const playerMoveInFlightRef = useRef<number | null>(null);
+  const PLAYER_MOVE_LOCK_MAX_MS = 20000;
 
   /** Latest CPU turn runner (not stable across renders) for stunned skip-turn. */
   const executeOpponentTurnRef = useRef<
@@ -5473,6 +5480,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   }, [isMultiplayer, battleState.phase, battleState.isPlayerTurn, battleState.turnOrder, battleState.selectedTarget, battleState.isAnimating, currentUser, allies, opponents, gameId, isInSession]);
 
   const executePlayerMove = useCallback(async () => {
+    const lockedAt = playerMoveInFlightRef.current;
+    if (lockedAt !== null && Date.now() - lockedAt < PLAYER_MOVE_LOCK_MAX_MS) return;
+    if (!battleState.selectedMove || !battleState.selectedTarget) return;
+    playerMoveInFlightRef.current = Date.now();
+    const releaseLock = () => {
+      playerMoveInFlightRef.current = null;
+    };
+
     // Detect Island Raid mode once at the start (has gameId but not isInSession)
     const isIslandRaid = !!gameId && !isInSession;
     
@@ -5492,8 +5507,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       cooldown: battleState.selectedMove?.cooldown,
       phase: battleState.phase
     });
-    if (!battleState.selectedMove || !battleState.selectedTarget) return;
-    if (!vault && !allowsIslandSummonWithoutVault(battleState.selectedMove, gameId, isInSession)) return;
+    if (!battleState.selectedMove || !battleState.selectedTarget) {
+      releaseLock();
+      return;
+    }
+    if (!vault && !allowsIslandSummonWithoutVault(battleState.selectedMove, gameId, isInSession)) {
+      releaseLock();
+      return;
+    }
 
     const move = battleState.selectedMove;
     pendingAnimationMoveRef.current = {
@@ -5528,6 +5549,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         isSinglePlayerWithAI,
         reason: 'Waiting for turn order calculation'
       });
+      releaseLock();
       return;
     }
     
@@ -8064,6 +8086,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
     } finally {
       pendingAnimationMoveRef.current = null;
+      playerMoveInFlightRef.current = null;
     }
   };
 

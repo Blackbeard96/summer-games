@@ -231,7 +231,7 @@ async function inChunks<T, R>(items: T[], size: number, fn: (item: T) => Promise
   return out;
 }
 
-async function loadPlayerNames(userIds: string[]): Promise<Map<string, string>> {
+export async function loadPlayerNames(userIds: string[]): Promise<Map<string, string>> {
   const entries = await inChunks(userIds, 20, async (uid) => {
     for (const col of ['users', 'students']) {
       try {

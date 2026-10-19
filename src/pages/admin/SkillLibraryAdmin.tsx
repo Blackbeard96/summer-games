@@ -9,10 +9,15 @@ import {
   updateAcademicSkill,
 } from '../../utils/academicSkillService';
 import SkillChip from '../../components/skills/SkillChip';
+import { collection, getDocs } from 'firebase/firestore';
+import { db } from '../../firebase';
+import { skillAppliesToClass, skillClassIds } from '../../utils/skillClassScope';
 
 const SkillLibraryAdmin: React.FC = () => {
   const { currentUser } = useAuth();
   const [skills, setSkills] = useState<AcademicSkill[]>([]);
+  const [classrooms, setClassrooms] = useState<{ id: string; name: string }[]>([]);
+  const [classFilter, setClassFilter] = useState('all');
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
@@ -28,7 +33,20 @@ const SkillLibraryAdmin: React.FC = () => {
     icon: '✦',
     color: '#d4a84f',
     active: true,
+    classIds: [] as string[],
   });
+
+  useEffect(() => {
+    getDocs(collection(db, 'classrooms'))
+      .then((snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, name: String(d.data().name || d.id) }));
+        rows.sort((a, b) => a.name.localeCompare(b.name));
+        setClassrooms(rows);
+      })
+      .catch((e) => console.warn('Skill Library: classrooms unavailable', e));
+  }, []);
+
+  const className = useMemo(() => new Map(classrooms.map((c) => [c.id, c.name])), [classrooms]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -57,6 +75,7 @@ const SkillLibraryAdmin: React.FC = () => {
     return skills.filter((s) => {
       if (!showInactive && s.active === false) return false;
       if (categoryFilter !== 'all' && (s.category || 'Uncategorized') !== categoryFilter) return false;
+      if (classFilter !== 'all' && !skillAppliesToClass(s, classFilter)) return false;
       if (!q) return true;
       return (
         s.name.toLowerCase().includes(q) ||
@@ -64,7 +83,7 @@ const SkillLibraryAdmin: React.FC = () => {
         (s.category || '').toLowerCase().includes(q)
       );
     });
-  }, [skills, search, categoryFilter, showInactive]);
+  }, [skills, search, categoryFilter, classFilter, showInactive]);
 
   const resetForm = () => {
     setEditing(null);
@@ -76,6 +95,7 @@ const SkillLibraryAdmin: React.FC = () => {
       icon: '✦',
       color: '#d4a84f',
       active: true,
+      classIds: [],
     });
   };
 
@@ -89,8 +109,15 @@ const SkillLibraryAdmin: React.FC = () => {
       icon: skill.icon || '✦',
       color: skill.color || '#d4a84f',
       active: skill.active !== false,
+      classIds: skillClassIds(skill),
     });
   };
+
+  const toggleFormClass = (classId: string) =>
+    setForm((f) => ({
+      ...f,
+      classIds: f.classIds.includes(classId) ? f.classIds.filter((id) => id !== classId) : [...f.classIds, classId],
+    }));
 
   const save = async () => {
     if (!currentUser || !form.name.trim()) return;
@@ -106,6 +133,7 @@ const SkillLibraryAdmin: React.FC = () => {
           icon: form.icon,
           color: form.color,
           active: form.active,
+          classIds: form.classIds,
         });
       } else {
         await createAcademicSkill(
@@ -117,6 +145,7 @@ const SkillLibraryAdmin: React.FC = () => {
             icon: form.icon,
             color: form.color,
             active: form.active,
+            classIds: form.classIds,
           },
           currentUser.uid
         );
@@ -225,6 +254,33 @@ const SkillLibraryAdmin: React.FC = () => {
                 </option>
               ))}
           </select>
+          <label style={{ fontSize: '0.75rem', color: '#9ca3af' }}>Classes</label>
+          <div
+            style={{
+              ...inputStyle,
+              maxHeight: 160,
+              overflowY: 'auto',
+              display: 'grid',
+              gap: 4,
+              padding: '0.45rem 0.6rem',
+            }}
+          >
+            {classrooms.length === 0 ? (
+              <span style={{ color: '#9ca3af', fontSize: '0.8rem' }}>No classes found.</span>
+            ) : (
+              classrooms.map((c) => (
+                <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={form.classIds.includes(c.id)} onChange={() => toggleFormClass(c.id)} />
+                  {c.name}
+                </label>
+              ))
+            )}
+          </div>
+          <p style={{ margin: '-0.25rem 0 0.6rem', fontSize: '0.72rem', color: '#9ca3af' }}>
+            {form.classIds.length === 0
+              ? 'No classes selected: tracked for every class.'
+              : `Only tracked and counted for students in ${form.classIds.length} selected class${form.classIds.length === 1 ? '' : 'es'}.`}
+          </p>
           <label style={{ fontSize: '0.75rem', color: '#9ca3af' }}>Description</label>
           <textarea
             value={form.description}
@@ -299,6 +355,19 @@ const SkillLibraryAdmin: React.FC = () => {
                 </option>
               ))}
             </select>
+            <select
+              value={classFilter}
+              onChange={(e) => setClassFilter(e.target.value)}
+              style={{ ...inputStyle, marginBottom: 0, width: 'auto' }}
+              aria-label="Filter by class"
+            >
+              <option value="all">All classes</option>
+              {classrooms.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', color: '#9ca3af' }}>
               <input
                 type="checkbox"
@@ -346,6 +415,17 @@ const SkillLibraryAdmin: React.FC = () => {
                         {skill.description}
                       </div>
                     )}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: '0.4rem' }}>
+                      {skillClassIds(skill).length === 0 ? (
+                        <span style={classChip}>All classes</span>
+                      ) : (
+                        skillClassIds(skill).map((id) => (
+                          <span key={id} style={{ ...classChip, color: '#f0c96a', borderColor: 'rgba(212,168,79,0.45)' }}>
+                            {className.get(id) || id}
+                          </span>
+                        ))
+                      )}
+                    </div>
                   </div>
                   <div style={{ display: 'flex', gap: '0.35rem' }}>
                     <button type="button" onClick={() => startEdit(skill)} style={secondaryBtn}>
@@ -383,6 +463,14 @@ const inputStyle: React.CSSProperties = {
   background: '#05070d',
   color: '#f4f0e6',
   fontSize: '0.875rem',
+};
+
+const classChip: React.CSSProperties = {
+  fontSize: '0.7rem',
+  padding: '1px 8px',
+  borderRadius: 999,
+  border: '1px solid rgba(156,163,175,0.35)',
+  color: '#9ca3af',
 };
 
 const primaryBtn: React.CSSProperties = {

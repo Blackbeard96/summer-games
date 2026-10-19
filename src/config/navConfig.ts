@@ -227,6 +227,12 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
               visibility: 'all'
             },
             {
+              label: 'Skill Mastery',
+              path: '/profile?view=skill-mastery',
+              icon: '📘',
+              visibility: 'all'
+            },
+            {
               label: 'In Game Abilities',
               path: '/profile?view=skill-tree&mode=in-game',
               icon: '🎮',
