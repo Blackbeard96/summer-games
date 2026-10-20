@@ -224,7 +224,7 @@ const ProfileSkillMasterySection: React.FC<Props> = ({ userId }) => {
   }
 
   const renderList = (title: string, rows: PlayerSkillMastery[]) => (
-    <div style={{ marginBottom: '1rem' }}>
+    <div style={{ marginBottom: '1rem', minWidth: 0 }}>
       <h3 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem', color: '#f0c96a' }}>{title}</h3>
       {rows.length === 0 ? (
         <div style={{ color: '#9ca3af', fontSize: '0.85rem' }}>None yet</div>
@@ -243,6 +243,8 @@ const ProfileSkillMasterySection: React.FC<Props> = ({ userId }) => {
                   gap: '0.75rem',
                   alignItems: 'center',
                   textAlign: 'left',
+                  width: '100%',
+                  minWidth: 0,
                   padding: '0.55rem 0.7rem',
                   borderRadius: '0.5rem',
                   border: '1px solid rgba(255,255,255,0.08)',
@@ -251,10 +253,12 @@ const ProfileSkillMasterySection: React.FC<Props> = ({ userId }) => {
                   cursor: 'pointer',
                 }}
               >
-                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <SkillChip skill={skill || { name: skillNames[m.skillId] || m.skillId }} />
+                <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, flex: '1 1 auto' }}>
+                  <SkillChip truncate skill={skill || { name: skillNames[m.skillId] || m.skillId }} />
                 </div>
-                <MasteryBadge band={m.masteryBand} score={m.masteryScore} showScore />
+                <span style={{ flexShrink: 0 }}>
+                  <MasteryBadge band={m.masteryBand} score={m.masteryScore} showScore />
+                </span>
               </button>
             );
           })}
@@ -369,7 +373,7 @@ const ProfileSkillMasterySection: React.FC<Props> = ({ userId }) => {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))',
             gap: '1rem',
           }}
         >

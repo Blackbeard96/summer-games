@@ -20,6 +20,7 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import ProfileSkillMasterySection from '../components/skills/ProfileSkillMasterySection';
+import ProfileLiveAssessmentReview from '../components/profile/ProfileLiveAssessmentReview';
 import type { ProductivityStatDoc } from '../utils/productivityTracking';
 import { tsMs } from '../utils/productivityTracking';
 import {
@@ -2108,6 +2109,8 @@ const Profile = () => {
           )}
         </div>
       )}
+
+      {currentUser && <ProfileLiveAssessmentReview userId={currentUser.uid} />}
 
       {currentUser && <ProfileSkillMasterySection userId={currentUser.uid} />}
 
