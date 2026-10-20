@@ -6847,6 +6847,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 isInSession={true}
                 sessionId={sessionId}
                 inSessionActorEmail={currentUser?.email ?? undefined}
+                inSessionWaiveSkillCost={isSessionHost}
                 onArtifactUsed={() => {
                   // Handle artifact used - end turn
                   setShowBagModal(false);

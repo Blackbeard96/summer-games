@@ -617,6 +617,8 @@ interface BattleEngineProps {
   sessionId?: string; // Session ID for In-Session mode (required if isInSession is true)
   /** Passed to applyInSessionMove for global-host checks when Fight is negated. */
   inSessionActorEmail?: string;
+  /** Live Events: the host's skills are not gated by Participation Points (matches applyInSessionMove's host waiver). */
+  inSessionWaiveSkillCost?: boolean;
   battleName?: string; // Battle name for invitations
   onInviteClick?: () => void; // Callback when invite button is clicked
   allowInvites?: boolean; // Whether to show invite buttons (for Chapter 2-3+)
@@ -693,6 +695,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   isInSession = false,
   sessionId,
   inSessionActorEmail,
+  inSessionWaiveSkillCost = false,
   battleName,
   onInviteClick,
   allowInvites = false,
@@ -1169,6 +1172,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
    * before the server write resolves, so without this one click could submit the same move repeatedly.
    */
   const playerMoveInFlightRef = useRef<number | null>(null);
+  const waiveLiveEventSkillCost = isInSession && inSessionWaiveSkillCost;
   const PLAYER_MOVE_LOCK_MAX_MS = 20000;
 
   /** Latest CPU turn runner (not stable across renders) for stunned skip-turn. */
@@ -2914,7 +2918,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       battleModeLabel: isInSession ? 'live' : mindforgeMode ? 'mindforge' : isPvP ? 'pvp' : isMultiplayer ? 'multiplayer' : 'solo',
       waveNumber: currentWaveIndex,
       turnOwnerId: currentUser.uid,
-      participationPointsAvailable: typeof movesEarned === 'number' ? movesEarned : undefined,
+      participationPointsAvailable: waiveLiveEventSkillCost
+        ? Number.MAX_SAFE_INTEGER
+        : typeof movesEarned === 'number'
+          ? movesEarned
+          : undefined,
       isActorStunned: isStunned,
       hasShieldBreak,
     };
@@ -2954,6 +2962,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     equippableCatalogRaw,
     universalLawEffects,
     isConstructSkillId,
+    waiveLiveEventSkillCost,
   ]);
 
   const showSkipStunnedTurn = useMemo(() => {
@@ -5809,7 +5818,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         battleModeLabel: isInSession ? 'live' : mindforgeMode ? 'mindforge' : isPvP ? 'pvp' : isMultiplayer ? 'multiplayer' : 'solo',
         waveNumber: currentWaveIndex,
         turnOwnerId: currentUser?.uid,
-        participationPointsAvailable: typeof movesEarnedAvail === 'number' ? movesEarnedAvail : undefined,
+        participationPointsAvailable: waiveLiveEventSkillCost
+          ? Number.MAX_SAFE_INTEGER
+          : typeof movesEarnedAvail === 'number'
+            ? movesEarnedAvail
+            : undefined,
         liveEventFinalCost: liveBreakdownAvail?.finalCost,
         isActorStunned: isStunnedAvail,
         hasShieldBreak: hasShieldBreakAvail,
@@ -5834,6 +5847,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // Live Events: afford participation cost before heavy execution (server still authoritative)
     if (
       isInSession &&
+      !waiveLiveEventSkillCost &&
       currentUser &&
       move &&
       !(move.id?.startsWith('construct-skill::'))
@@ -8965,7 +8979,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           battleModeLabel: isInSession ? 'live' : 'standard',
           waveNumber: currentWaveIndex,
           turnOwnerId: currentUser.uid,
-          participationPointsAvailable: typeof movesEarned === 'number' ? movesEarned : undefined,
+          participationPointsAvailable: waiveLiveEventSkillCost
+            ? Number.MAX_SAFE_INTEGER
+            : typeof movesEarned === 'number'
+              ? movesEarned
+              : undefined,
           liveEventFinalCost: liveBd?.finalCost,
           isActorStunned: isStunned,
           hasShieldBreak,

@@ -1127,6 +1127,12 @@
   position: relative;
   width: 90%;
   max-width: 600px;
+  box-sizing: border-box;
+  max-height: calc(100vh - 2rem);
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 2rem 1.75rem 1.75rem;
   border-radius: 12px;
   background:
@@ -1234,6 +1240,13 @@
   display: flex;
   gap: 1rem;
   justify-content: center;
+}
+
+.mst-siege-result-modal .mst-siege-result-continue-row {
+  position: sticky;
+  bottom: 0;
+  padding: 1rem 0 0.25rem;
+  background: linear-gradient(to bottom, rgba(7, 11, 20, 0), #070b14 40%);
 }
 
 /* ── Footer ── */
