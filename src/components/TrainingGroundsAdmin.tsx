@@ -1234,6 +1234,7 @@ const TrainingGroundsAdmin: React.FC = () => {
         pointsPP: question.pointsPP ?? 10,
         pointsXP: question.pointsXP ?? 10,
         order: questions.length,
+        skillIds: Array.isArray(question.skillIds) ? [...question.skillIds] : [],
       };
       if (correctIndices.length === 1) (duplicateData as any).correctIndex = correctIndices[0];
       if (question.category?.trim()) (duplicateData as any).category = question.category.trim();
@@ -1334,6 +1335,7 @@ const TrainingGroundsAdmin: React.FC = () => {
             pointsPP: question.pointsPP ?? DEFAULT_REWARDS[question.difficulty || 'medium']?.basePP ?? 10,
             pointsXP: question.pointsXP ?? DEFAULT_REWARDS[question.difficulty || 'medium']?.baseXP ?? 10,
             order: baseOrder + i,
+            skillIds: Array.isArray(question.skillIds) ? [...question.skillIds] : [],
           };
           if (question.category?.trim()) matchingImport.category = question.category.trim();
           if (question.artifactRewards?.length) matchingImport.artifactRewards = [...question.artifactRewards];
@@ -1361,6 +1363,7 @@ const TrainingGroundsAdmin: React.FC = () => {
           pointsPP: question.pointsPP ?? DEFAULT_REWARDS[question.difficulty || 'medium']?.basePP ?? 10,
           pointsXP: question.pointsXP ?? DEFAULT_REWARDS[question.difficulty || 'medium']?.baseXP ?? 10,
           order: baseOrder + i,
+          skillIds: Array.isArray(question.skillIds) ? [...question.skillIds] : [],
         };
 
         if (correctIndices.length === 1) {
