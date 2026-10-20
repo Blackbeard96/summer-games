@@ -673,6 +673,40 @@ const TrainingGroundsAdmin: React.FC = () => {
     }
   };
 
+  const [renamingQuizSet, setRenamingQuizSet] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [savingTitle, setSavingTitle] = useState(false);
+
+  useEffect(() => {
+    setRenamingQuizSet(false);
+    setTitleDraft('');
+  }, [selectedQuizSet?.id]);
+
+  const handleRenameQuizSet = async () => {
+    if (!selectedQuizSet) return;
+    const title = titleDraft.trim();
+    if (!title) {
+      alert('Please enter a name.');
+      return;
+    }
+    if (title === selectedQuizSet.title) {
+      setRenamingQuizSet(false);
+      return;
+    }
+    setSavingTitle(true);
+    try {
+      await updateQuizSet(selectedQuizSet.id, { title });
+      setSelectedQuizSet({ ...selectedQuizSet, title });
+      setRenamingQuizSet(false);
+      await loadQuizSets();
+    } catch (error) {
+      console.error('Error renaming quiz set:', error);
+      alert('Failed to rename');
+    } finally {
+      setSavingTitle(false);
+    }
+  };
+
   const handleSaveQuizSetSkills = async () => {
     if (!selectedQuizSet) return;
     setSavingSkillIds(true);
@@ -2049,15 +2083,84 @@ const TrainingGroundsAdmin: React.FC = () => {
         {/* Questions Editor */}
         {selectedQuizSet ? (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1rem' }}>
               <div>
-                <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold' }}>{selectedQuizSet.title}</h3>
+                {renamingQuizSet ? (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleRenameQuizSet();
+                    }}
+                    style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}
+                  >
+                    <input
+                      type="text"
+                      value={titleDraft}
+                      onChange={(e) => setTitleDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') setRenamingQuizSet(false);
+                      }}
+                      autoFocus
+                      disabled={savingTitle}
+                      aria-label="Quiz name"
+                      style={{
+                        fontSize: '1rem',
+                        fontWeight: 600,
+                        padding: '0.35rem 0.5rem',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '0.375rem',
+                        width: '100%',
+                        minWidth: '12rem',
+                      }}
+                    />
+                    <button
+                      type="submit"
+                      disabled={savingTitle || !titleDraft.trim()}
+                      style={{
+                        padding: '0.35rem 0.75rem',
+                        background: '#4f46e5',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '0.375rem',
+                        cursor: savingTitle ? 'not-allowed' : 'pointer',
+                        opacity: savingTitle || !titleDraft.trim() ? 0.7 : 1,
+                      }}
+                    >
+                      {savingTitle ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRenamingQuizSet(false)}
+                      disabled={savingTitle}
+                      style={{
+                        padding: '0.35rem 0.75rem',
+                        background: 'white',
+                        color: '#374151',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '0.375rem',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </form>
+                ) : (
+                  <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold' }}>{selectedQuizSet.title}</h3>
+                )}
                 <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
                   {selectedQuizSet.questionCount} questions
                 </div>
                 <div
                   style={{
                     marginTop: '0.75rem',
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
+                    gap: '0.75rem',
+                    alignItems: 'start',
+                  }}
+                >
+                <div
+                  style={{
                     padding: '0.75rem',
                     background: '#f9fafb',
                     borderRadius: '0.5rem',
@@ -2067,7 +2170,7 @@ const TrainingGroundsAdmin: React.FC = () => {
                   <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.35rem', color: '#374151' }}>
                     Classes (who can see this CFU when published)
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginBottom: '0.5rem' }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem 0.9rem', marginBottom: '0.5rem' }}>
                     {classrooms.map((classroom) => (
                       <label key={classroom.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
                         <input
@@ -2107,7 +2210,6 @@ const TrainingGroundsAdmin: React.FC = () => {
 
                 <div
                   style={{
-                    marginTop: '0.75rem',
                     padding: '0.75rem',
                     background: '#0e1420',
                     borderRadius: '0.5rem',
@@ -2146,7 +2248,6 @@ const TrainingGroundsAdmin: React.FC = () => {
 
                 <div
                   style={{
-                    marginTop: '0.75rem',
                     padding: '0.75rem',
                     background: '#fffbeb',
                     borderRadius: '0.5rem',
@@ -2182,8 +2283,29 @@ const TrainingGroundsAdmin: React.FC = () => {
                     <div style={{ fontSize: '0.72rem', color: '#92400e', marginTop: '0.35rem' }}>Saving…</div>
                   )}
                 </div>
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleDraft(selectedQuizSet.title);
+                    setRenamingQuizSet(true);
+                  }}
+                  disabled={renamingQuizSet}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    background: '#7c3aed',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    cursor: renamingQuizSet ? 'not-allowed' : 'pointer',
+                    opacity: renamingQuizSet ? 0.7 : 1,
+                    fontSize: '0.875rem',
+                  }}
+                >
+                  ✏️ Rename
+                </button>
                 <button
                   type="button"
                   onClick={() => void handleExportSelectedQuizCsv()}
