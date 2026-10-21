@@ -4241,7 +4241,6 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           }
           sessionHostUid={sessionRoomHostUid}
           isSessionHost={isSessionHost || isAdminUser}
-          showGameTimeControls={isSessionHost || isAdminUser}
           currentUserId={currentUser.uid}
           userEmail={currentUser.email}
           userDisplayName={currentUser.displayName}

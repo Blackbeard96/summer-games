@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { CfRewardResult } from '../../utils/classFlowRewards';
 import type { CfSprintAssignment } from '../../types/classFlowWork';
-import { sprintPhase } from '../../utils/classFlowConfig';
+import { sprintPhase, sprintTasks } from '../../utils/classFlowConfig';
 import {
   endPlannedSprint,
   startPlannedSprint,
@@ -17,15 +17,21 @@ import TeamsTab from './facilitator/TeamsTab';
 import RewardsTab from './facilitator/RewardsTab';
 import AnalyticsTab from './facilitator/AnalyticsTab';
 import SettingsTab from './facilitator/SettingsTab';
+import SprintSubmissionsCard, { type SprintReviewActions } from './facilitator/SprintSubmissionsCard';
 import ClassFlowPlayerView from './ClassFlowPlayerView';
 import type { CfFacilitatorData, CfPlayerData, CfSharedProps } from './classFlowPanelTypes';
 
 type Tab = 'sprint' | 'mywork' | 'approvals' | 'teams' | 'rewards' | 'analytics' | 'settings';
 
-type Props = CfSharedProps & { data: CfFacilitatorData; preview: CfRewardResult | null; playerData?: CfPlayerData };
+type Props = CfSharedProps & {
+  data: CfFacilitatorData;
+  preview: CfRewardResult | null;
+  playerData?: CfPlayerData;
+  review: SprintReviewActions | null;
+};
 
 const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
-  const { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, data, preview, embedded, classId, playerData, roster } = props;
+  const { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, data, preview, embedded, classId, playerData, roster, review } = props;
   const sharedProps: CfSharedProps = { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, classId, roster, embedded: true };
   const rootClass = `cf-root${embedded ? ' cf-embedded' : ''}`;
   const [tab, setTab] = useState<Tab>('sprint');
@@ -131,6 +137,11 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
       <div className="cf-between">
         <h3 className="cf-title">Sprint Manager</h3>
         <div className="cf-row">
+          {data.support.length > 0 && (
+            <button type="button" className="cf-btn cf-btn--ghost" onClick={() => setTab('sprint')}>
+              🙋 Support <span className="cf-badge cf-badge--count">{data.support.length}</span>
+            </button>
+          )}
           {pendingCount > 0 && (
             <button type="button" className="cf-btn cf-btn--ghost" onClick={() => setTab('approvals')}>
               Pending <span className="cf-badge cf-badge--count">{pendingCount}</span>
@@ -155,6 +166,7 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
             onClick={() => setTab(id)}
           >
             {label}
+            {id === 'sprint' && data.support.length > 0 ? <span className="cf-badge cf-badge--count" style={{ marginLeft: 6 }}>{data.support.length}</span> : null}
             {id === 'approvals' && pendingCount > 0 ? <span className="cf-badge cf-badge--count" style={{ marginLeft: 6 }}>{pendingCount}</span> : null}
           </button>
         ))}
@@ -171,7 +183,7 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
               expandable
               acceptLate={config.acceptLateSubmissions}
               availablePoints={preview?.pool.totalBase ?? null}
-              items={(sprint.assignments || []).map((a) => {
+              items={sprintTasks(sprint).map((a) => {
                 const subs = data.submissions.filter((s) => s.sprintId === sprint.id && s.assignmentId === a.assignmentId);
                 const approvedN = subs.filter((s) => s.status === 'approved').length;
                 return { assignment: a, detail: `${subs.length} submitted · ${approvedN} approved` };
@@ -237,6 +249,18 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
             <div className="cf-sub" style={{ marginTop: 8 }}>
               Sprint ended. Review pending work, then finalize rewards in the Rewards tab.
             </div>
+          )}
+
+          {sprint && (
+            <SprintSubmissionsCard
+              sessionId={sessionId}
+              actorUid={actor.uid}
+              rows={roster || []}
+              support={data.support}
+              rewardedUids={sprint.rewardsGrantedUids || []}
+              actions={review}
+              notify={notify}
+            />
           )}
 
           {preview && (
@@ -348,7 +372,7 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
           sessionId={sessionId}
           actorUid={actor.uid}
           config={config}
-          currentSprint={sprint ? { id: sprint.id, title: sprint.title, assignments: sprint.assignments || [] } : null}
+          currentSprint={sprint ? { id: sprint.id, title: sprint.title, assignments: sprintTasks(sprint) } : null}
           archive={data.archive}
           submissions={data.submissions}
           teams={data.teams}
@@ -365,7 +389,7 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
           submissions={data.submissions}
           allocations={data.allocations}
           archive={data.archive}
-          currentAssignments={sprint?.assignments || []}
+          currentAssignments={sprintTasks(sprint)}
           teams={data.teams}
           players={players}
           nameOf={nameOf}

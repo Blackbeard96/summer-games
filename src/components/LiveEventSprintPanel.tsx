@@ -1,57 +1,20 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { db } from '../firebase';
 import type { ClassFlowSprintState } from '../types/season1';
-import type { InSessionRoom } from '../types/inSession';
-import type { WorkPeriodProgress } from '../types/workBoard';
 import { LIVE_EVENT_PP_PER_PARTICIPATION_POINT } from '../utils/inSessionStatsService';
 import {
   startClassFlowSprint,
   closeClassFlowSprint,
   clearClassFlowSprint,
-  toggleClassFlowSprintMark,
   grantClassFlowSprintRewards,
   applyClassFlowSprintIncompletePenalties,
   sprintTimerInput,
 } from '../utils/liveEventSprintService';
 import { sprintRemainingMs } from '../utils/classFlowConfig';
 import { mergeSprintRosterForClassFlow, fetchClassroomStudentRoster } from '../utils/classFlowSprintRosterService';
-import {
-  buildGameTimeRoster,
-  setGameTimeStatus,
-  type GameTimeStatus,
-} from '../utils/liveEventGameTimeService';
-import {
-  getStudentPeriodProgress,
-  listWorkPeriodsForClass,
-} from '../utils/workBoardService';
 import LiveEventWeeklyDeliverableMarkPanel from './LiveEventWeeklyDeliverableMarkPanel';
 import SprintWorkPicker from './classFlow/SprintWorkPicker';
 import type { CfSprintAssignment } from '../types/classFlowWork';
 import { recordSprintArchive, updateCfConfig } from '../utils/classFlowWorkService';
-import { rosterReviewState, type CfRosterReviewState, type CfRosterStatusRow } from '../utils/classFlowAnalytics';
-import { ClassFlowRosterStatusContext } from './classFlow/ClassFlowRosterStatusContext';
-
-const REVIEW_HIGHLIGHT: Record<Exclude<CfRosterReviewState, 'none'>, { row: React.CSSProperties; badge: React.CSSProperties; label: string }> = {
-  pending: {
-    row: {
-      background: 'rgba(251, 191, 36, 0.24)',
-      boxShadow: 'inset 4px 0 0 #fbbf24, 0 0 0 1px rgba(251, 191, 36, 0.7)',
-    },
-    badge: { background: '#fbbf24', color: '#422006' },
-    label: '📝 Submitted for review',
-  },
-  revision: {
-    row: { background: 'rgba(251, 146, 60, 0.16)', boxShadow: 'inset 4px 0 0 #fb923c' },
-    badge: { background: 'rgba(251, 146, 60, 0.3)', color: '#ffedd5', border: '1px solid rgba(251, 146, 60, 0.7)' },
-    label: '↺ Revision requested',
-  },
-  approved: {
-    row: { background: 'rgba(52, 211, 153, 0.16)', boxShadow: 'inset 4px 0 0 #34d399' },
-    badge: { background: 'rgba(52, 211, 153, 0.3)', color: '#d1fae5', border: '1px solid rgba(52, 211, 153, 0.6)' },
-    label: '✓ Work approved',
-  },
-};
 
 export interface LiveEventSprintPanelProps {
   sessionId: string;
@@ -62,8 +25,6 @@ export interface LiveEventSprintPanelProps {
   /** Room host — excluded from incomplete PP penalties */
   sessionHostUid?: string;
   isSessionHost: boolean;
-  /** Host or admin: Open / Pause / End Game Time + roster columns */
-  showGameTimeControls?: boolean;
   currentUserId: string;
   userEmail?: string | null;
   userDisplayName?: string | null;
@@ -90,7 +51,6 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
   classStudentRoster = null,
   sessionHostUid = '',
   isSessionHost,
-  showGameTimeControls = false,
   currentUserId,
   userEmail,
   userDisplayName,
@@ -114,80 +74,6 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
   const [fetchedClassRoster, setFetchedClassRoster] = useState<
     { userId: string; displayName: string }[] | null
   >(null);
-  const [rosterLoading, setRosterLoading] = useState(false);
-  const [roomSnap, setRoomSnap] = useState<InSessionRoom | null>(null);
-  const [workProgressByUid, setWorkProgressByUid] = useState<Record<string, WorkPeriodProgress>>({});
-  const [gameTimeBusy, setGameTimeBusy] = useState(false);
-  const [showGameTimeRoster, setShowGameTimeRoster] = useState(true);
-  const [workStatusRows, setWorkStatusRows] = useState<CfRosterStatusRow[] | null>(null);
-  const workStatusByUid = useMemo(
-    () => new Map((workStatusRows || []).map((r) => [r.uid, r])),
-    [workStatusRows]
-  );
-
-  useEffect(() => {
-    if (!showGameTimeControls || !sessionId) return;
-    const unsub = onSnapshot(doc(db, 'inSessionRooms', sessionId), (snap) => {
-      if (snap.exists()) setRoomSnap({ id: snap.id, ...(snap.data() as Omit<InSessionRoom, 'id'>) });
-      else setRoomSnap(null);
-    });
-    return () => unsub();
-  }, [sessionId, showGameTimeControls]);
-
-  const gameTimeRoster = useMemo(
-    () => (roomSnap ? buildGameTimeRoster(roomSnap) : []),
-    [roomSnap]
-  );
-
-  useEffect(() => {
-    if (!showGameTimeControls || !roomSnap?.classId || !roomSnap.players?.length) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const periods = await listWorkPeriodsForClass(roomSnap.classId!);
-        const open = periods.find((p) => p.status === 'open') || periods[0];
-        if (!open) return;
-        const entries = await Promise.all(
-          roomSnap.players.map(async (p) => {
-            try {
-              const prog = await getStudentPeriodProgress({
-                periodId: open.id,
-                studentId: p.userId,
-                classId: roomSnap.classId!,
-              });
-              return [p.userId, prog] as const;
-            } catch {
-              return null;
-            }
-          })
-        );
-        if (cancelled) return;
-        const map: Record<string, WorkPeriodProgress> = {};
-        for (const e of entries) {
-          if (e) map[e[0]] = e[1];
-        }
-        setWorkProgressByUid(map);
-      } catch (e) {
-        console.warn('[LiveEventSprintPanel] work progress load failed', e);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [showGameTimeControls, roomSnap]);
-
-  const onSetGameTimeStatus = async (status: GameTimeStatus) => {
-    if (!showGameTimeControls) return;
-    setGameTimeBusy(true);
-    try {
-      await setGameTimeStatus(sessionId, status);
-    } catch (e) {
-      console.error(e);
-      alert(e instanceof Error ? e.message : 'Failed to update Game Time');
-    } finally {
-      setGameTimeBusy(false);
-    }
-  };
 
   // Harden full-class tracking: if parent didn't pass roster, load classroom.students by classId
   // so paper / offline formative students still appear for host checkmarks.
@@ -199,16 +85,12 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
     const cid = typeof classId === 'string' ? classId.trim() : '';
     if (!cid || !isSessionHost) return;
     let cancelled = false;
-    setRosterLoading(true);
     fetchClassroomStudentRoster(cid)
       .then((rows) => {
         if (!cancelled) setFetchedClassRoster(rows.length > 0 ? rows : null);
       })
       .catch(() => {
         if (!cancelled) setFetchedClassRoster(null);
-      })
-      .finally(() => {
-        if (!cancelled) setRosterLoading(false);
       });
     return () => {
       cancelled = true;
@@ -240,9 +122,6 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
     () => mergeSprintRosterForClassFlow(effectiveClassRoster, sessionPlayers),
     [effectiveClassRoster, sessionPlayers]
   );
-  const showPresenceBadges = Boolean(effectiveClassRoster && effectiveClassRoster.length > 0);
-  const offlineCount = sprintRosterRows.filter((r) => !r.isInSession).length;
-
   const playerNames = useMemo(() => {
     const m = new Map<string, string>();
     sprintRosterRows.forEach((p) => m.set(p.userId, p.displayName || 'Player'));
@@ -283,10 +162,10 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
             startedAtMs,
             startedBy: currentUserId,
           });
-          if (!classFlowWorkEnabled) {
-            const cfg = await updateCfConfig(sessionId, { workAssignmentsEnabled: true, expandedTimerEnabled: true });
-            if (!cfg.ok) setMessage('Sprint started, but Work Assignments could not be switched on for this room.');
-          }
+        }
+        if (!classFlowWorkEnabled) {
+          const cfg = await updateCfConfig(sessionId, { workAssignmentsEnabled: true, expandedTimerEnabled: true });
+          if (!cfg.ok) setMessage('Sprint started, but work submission could not be switched on for this room.');
         }
         setTitle('');
         setDescription('');
@@ -311,21 +190,12 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
     classFlowWorkEnabled,
   ]);
 
-  const onToggle = useCallback(
-    async (uid: string) => {
-      setMessage(null);
-      const res = await toggleClassFlowSprintMark(
-        sessionId,
-        currentUserId,
-        userEmail ?? undefined,
-        userDisplayName ?? undefined,
-        uid,
-        playerNames.get(uid) || 'Player'
-      );
-      if (!res.ok) setMessage(res.error || 'Could not update mark or grant rewards');
-    },
-    [sessionId, currentUserId, userEmail, userDisplayName, playerNames]
-  );
+  const onEnableSubmissions = useCallback(async () => {
+    setBusy(true);
+    const cfg = await updateCfConfig(sessionId, { workAssignmentsEnabled: true, expandedTimerEnabled: true });
+    setBusy(false);
+    if (!cfg.ok) setMessage(cfg.error || 'Could not switch on work submission');
+  }, [sessionId]);
 
   const onClose = useCallback(async () => {
     setBusy(true);
@@ -355,8 +225,8 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
         playerNames
       );
       if (!res.ok) setMessage(res.error || 'Could not grant rewards');
-      else if (res.granted === 0) setMessage('No new completions to award (everyone marked may already be paid).');
-      else setMessage(`Awarded ${res.granted} player(s).`);
+      else if (res.granted === 0) setMessage('No unpaid rewards left — everyone approved has been paid.');
+      else setMessage(`Paid sprint rewards to ${res.granted} player(s).`);
     } finally {
       setBusy(false);
     }
@@ -373,8 +243,8 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
         userDisplayName ?? undefined
       );
       if (!res.ok) setMessage(res.error || 'Could not apply penalties');
-      else if (res.penalized === 0) setMessage('No unchecked players left to penalize (or penalty already applied).');
-      else setMessage(`Deducted vault PP from ${res.penalized} player(s) who were not marked complete.`);
+      else if (res.penalized === 0) setMessage('No unapproved players left to penalize (or penalty already applied).');
+      else setMessage(`Deducted vault PP from ${res.penalized} player(s) whose work was not approved.`);
     } finally {
       setBusy(false);
     }
@@ -415,8 +285,6 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
             !penaltiesGranted.has(p.userId)
         ).length
       : 0;
-  const selfMarked = marked.has(currentUserId);
-  const canSelfCheckIn = !!sprint && !isSessionHost && sprint.status === 'live' && !timerExpired && !selfMarked;
 
   const fmt = (s: number) => {
     const m = Math.floor(s / 60);
@@ -442,147 +310,16 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
               ? timerExpired
                 ? 'Time window ended'
                 : `${sprintPaused ? 'Paused — ' : ''}Time left: ${fmt(remainingSec)}`
-              : 'Window closed — award when ready'}
+              : 'Window closed — review in Sprint Manager'}
           </span>
         )}
       </div>
 
-      {showGameTimeControls && (
-        <div
-          style={{
-            marginTop: '0.75rem',
-            marginBottom: '0.35rem',
-            background: 'rgba(15, 23, 42, 0.45)',
-            border: '1px solid rgba(125, 211, 252, 0.35)',
-            borderRadius: 10,
-            padding: '0.65rem 0.75rem',
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-            <div style={{ fontSize: '0.85rem' }}>
-              <strong>Game Time</strong>{' '}
-              <span style={{ opacity: 0.9 }}>({roomSnap?.gameTime?.status || 'closed'})</span>
-              {' · '}
-              <span style={{ color: '#7dd3fc', fontWeight: 600 }}>
-                {(roomSnap?.liveEventMode || 'class_flow').replace(/_/g, ' ')}
-              </span>
-            </div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-              <button
-                type="button"
-                disabled={gameTimeBusy}
-                onClick={() => void onSetGameTimeStatus('open')}
-                style={{
-                  padding: '0.3rem 0.55rem',
-                  borderRadius: 6,
-                  border: '1px solid rgba(255,255,255,0.35)',
-                  background: 'rgba(16,185,129,0.85)',
-                  color: '#022c22',
-                  fontWeight: 700,
-                  fontSize: '0.75rem',
-                  cursor: gameTimeBusy ? 'wait' : 'pointer',
-                }}
-              >
-                Open
-              </button>
-              <button
-                type="button"
-                disabled={gameTimeBusy}
-                onClick={() => void onSetGameTimeStatus('paused')}
-                style={{
-                  padding: '0.3rem 0.55rem',
-                  borderRadius: 6,
-                  border: '1px solid rgba(255,255,255,0.35)',
-                  background: 'rgba(251,191,36,0.9)',
-                  color: '#422006',
-                  fontWeight: 700,
-                  fontSize: '0.75rem',
-                  cursor: gameTimeBusy ? 'wait' : 'pointer',
-                }}
-              >
-                Pause
-              </button>
-              <button
-                type="button"
-                disabled={gameTimeBusy}
-                onClick={() => void onSetGameTimeStatus('ended')}
-                style={{
-                  padding: '0.3rem 0.55rem',
-                  borderRadius: 6,
-                  border: '1px solid rgba(255,255,255,0.35)',
-                  background: 'rgba(239,68,68,0.9)',
-                  color: '#fff',
-                  fontWeight: 700,
-                  fontSize: '0.75rem',
-                  cursor: gameTimeBusy ? 'wait' : 'pointer',
-                }}
-              >
-                End
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowGameTimeRoster((v) => !v)}
-                style={{
-                  padding: '0.3rem 0.55rem',
-                  borderRadius: 6,
-                  border: '1px solid rgba(255,255,255,0.35)',
-                  background: 'transparent',
-                  color: '#e2e8f0',
-                  fontSize: '0.75rem',
-                  cursor: 'pointer',
-                }}
-              >
-                {showGameTimeRoster ? 'Hide roster' : 'Show roster'}
-              </button>
-            </div>
-          </div>
-          {showGameTimeRoster && gameTimeRoster.length > 0 && (
-            <div style={{ overflowX: 'auto', marginTop: 8, maxHeight: 220, overflowY: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
-                <thead>
-                  <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(148,163,184,0.45)' }}>
-                    <th style={{ padding: '4px 6px' }}>Player</th>
-                    <th>Mode</th>
-                    <th>Declared W</th>
-                    <th>Done W</th>
-                    <th>Req %</th>
-                    <th>PP</th>
-                    <th>Floor</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {gameTimeRoster.map((row) => {
-                    const prog = workProgressByUid[row.userId];
-                    const reqPct =
-                      prog?.requiredCompletionRate == null
-                        ? '—'
-                        : `${Math.round(prog.requiredCompletionRate * 100)}%`;
-                    return (
-                      <tr key={row.userId} style={{ borderBottom: '1px solid rgba(30,41,59,0.8)' }}>
-                        <td style={{ padding: '4px 6px' }}>{row.displayName}</td>
-                        <td>{row.participationMode}</td>
-                        <td>{prog?.declaredW ?? '—'}</td>
-                        <td>{prog?.completedW ?? '—'}</td>
-                        <td>{reqPct}</td>
-                        <td>{row.powerPoints}</td>
-                        <td>{row.protectionFloor}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
       <p style={{ margin: '0.5rem 0 0.75rem', fontSize: '0.85rem', opacity: 0.92, lineHeight: 1.45 }}>
-        Host sets a timed goal and checks off students who finish. The checklist includes the{' '}
-        <strong>full class roster</strong> — students do <strong>not</strong> need to be logged into the Live Event
-        (paper formative / offline OK). “Not in session” means they never joined the room; you can still mark them and
-        they receive vault PP / XP / participation credit. Rewards apply as soon as you check someone off. Use “Award
-        pending” only if a grant failed. Optional incomplete penalty deducts vault PP from unchecked class students
-        (host excluded).
+        Host sets a timed goal. Players flag their work as done with <strong>Submit Work</strong> or tap{' '}
+        <strong>Request support</strong>. Both show up in the <strong>Sprint Manager</strong> below, where approving work
+        pays the sprint rewards (vault PP / XP / participation credit) right away. Optional incomplete penalty deducts
+        vault PP from class students whose work was not approved (host excluded).
         {classId && goalSettingAssessmentId?.trim() ? (
           <>
             {' '}
@@ -730,12 +467,12 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
             <p style={{ margin: '0 0 0.75rem', fontSize: '0.875rem', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{sprint.description}</p>
           ) : null}
           <div style={{ fontSize: '0.8rem', opacity: 0.9, marginBottom: '0.75rem' }}>
-            Rewards per awarded player: {sprint.rewardParticipationPoints} participation pt(s) (~
+            Rewards when work is approved: {sprint.rewardParticipationPoints} participation pt(s) (~
             {sprint.rewardParticipationPoints * LIVE_EVENT_PP_PER_PARTICIPATION_POINT} session PP)
             {sprint.rewardVaultPP > 0 ? ` · +${sprint.rewardVaultPP} vault PP` : ''}
             {sprint.rewardXP > 0 ? ` · +${sprint.rewardXP} XP` : ''}
             {(sprint.incompletePenaltyVaultPP || 0) > 0
-              ? ` · Incomplete (unchecked): −${sprint.incompletePenaltyVaultPP} vault PP each (host applies manually)`
+              ? ` · Not approved: −${sprint.incompletePenaltyVaultPP} vault PP each (host applies manually)`
               : ''}
           </div>
 
@@ -758,22 +495,43 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
                   Close sprint window
                 </button>
               )}
-              <button
-                type="button"
-                disabled={busy || pendingGrant === 0}
-                onClick={() => void onGrant()}
-                style={{
-                  padding: '0.45rem 0.85rem',
-                  borderRadius: 8,
-                  border: 'none',
-                  background: '#34d399',
-                  color: '#064e3b',
-                  fontWeight: 700,
-                  cursor: busy || pendingGrant === 0 ? 'not-allowed' : 'pointer',
-                }}
-              >
-                Award pending ({pendingGrant})
-              </button>
+              {!classFlowWorkEnabled && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void onEnableSubmissions()}
+                  style={{
+                    padding: '0.45rem 0.85rem',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: '#fbbf24',
+                    color: '#422006',
+                    fontWeight: 700,
+                    cursor: busy ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Turn on work submission
+                </button>
+              )}
+              {pendingGrant > 0 && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void onGrant()}
+                  title="Approved players whose reward payment did not finish"
+                  style={{
+                    padding: '0.45rem 0.85rem',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: '#34d399',
+                    color: '#064e3b',
+                    fontWeight: 700,
+                    cursor: busy ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Retry unpaid rewards ({pendingGrant})
+                </button>
+              )}
               {(sprint.incompletePenaltyVaultPP || 0) > 0 && (
                 <button
                   type="button"
@@ -781,7 +539,7 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
                   onClick={() => {
                     if (
                       !window.confirm(
-                        `Deduct ${sprint.incompletePenaltyVaultPP} vault PP from ${pendingPenaltyCount} player(s) who are not checked? (Cannot undo. Each player is only charged once per sprint.)`
+                        `Deduct ${sprint.incompletePenaltyVaultPP} vault PP from ${pendingPenaltyCount} player(s) whose work is not approved? (Cannot undo. Each player is only charged once per sprint.)`
                       )
                     ) {
                       return;
@@ -819,136 +577,17 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
             </div>
           )}
 
-          <div style={{ maxHeight: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {isSessionHost && (
-              <div style={{ fontSize: '0.75rem', opacity: 0.9, marginBottom: 2 }}>
-                {rosterLoading
-                  ? 'Loading class roster…'
-                  : `${sprintRosterRows.length} students on checklist${
-                      showPresenceBadges ? ` · ${offlineCount} not in Live Event` : ''
-                    }`}
-              </div>
-            )}
-            {sprintRosterRows.map((p) => {
-              const isMarked = marked.has(p.userId);
-              const isPaid = granted.has(p.userId);
-              const work = workStatusByUid.get(p.userId);
-              const reviewState = work ? rosterReviewState(work) : 'none';
-              const highlight = reviewState === 'none' ? null : REVIEW_HIGHLIGHT[reviewState];
-              const workBadge = highlight ? (
-                <span
-                  title={work ? `${work.submitted} of ${work.total} task(s) submitted · ${work.approved} approved` : undefined}
-                  style={{
-                    fontSize: '0.68rem',
-                    fontWeight: 800,
-                    padding: '2px 7px',
-                    borderRadius: 999,
-                    flexShrink: 0,
-                    ...highlight.badge,
-                  }}
-                >
-                  {highlight.label}
-                </span>
-              ) : null;
-              const nameStyle: React.CSSProperties | undefined =
-                reviewState === 'pending' ? { fontWeight: 800, color: '#fef3c7' } : undefined;
-              const canToggle = isSessionHost && (sprint.status === 'live' || sprint.status === 'closed');
-              const sessionBadge = showPresenceBadges ? (
-                <span
-                  style={{
-                    fontSize: '0.65rem',
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.04em',
-                    padding: '2px 6px',
-                    borderRadius: 4,
-                    flexShrink: 0,
-                    background: p.isInSession ? 'rgba(52,211,153,0.25)' : 'rgba(148,163,184,0.35)',
-                    color: p.isInSession ? '#d1fae5' : '#e2e8f0',
-                    border: `1px solid ${p.isInSession ? 'rgba(52,211,153,0.45)' : 'rgba(148,163,184,0.5)'}`,
-                  }}
-                >
-                  {p.isInSession ? 'In session' : 'Not in session'}
-                </span>
-              ) : null;
-              return (
-                <div
-                  key={p.userId}
-                  data-review-state={reviewState}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    padding: '0.35rem 0.5rem',
-                    background: 'rgba(0,0,0,0.12)',
-                    borderRadius: 6,
-                    fontSize: '0.875rem',
-                    transition: 'background 0.3s, box-shadow 0.3s',
-                    ...(highlight?.row || {}),
-                  }}
-                >
-                  {canToggle ? (
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flex: 1 }}>
-                      <input type="checkbox" checked={isMarked} onChange={() => void onToggle(p.userId)} />
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
-                        <span style={nameStyle}>{p.displayName}</span>
-                        {workBadge}
-                        {sessionBadge}
-                      </span>
-                    </label>
-                  ) : (
-                    <span style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
-                      <span style={nameStyle}>{p.displayName}</span>
-                      {workBadge}
-                      {sessionBadge}
-                      {isMarked && (
-                        <span style={{ marginLeft: 8, opacity: 0.9, color: '#a7f3d0' }}>
-                          {p.userId === currentUserId ? '✓ You are marked complete' : '✓ Complete'}
-                        </span>
-                      )}
-                    </span>
-                  )}
-                  {isPaid && <span style={{ fontSize: '0.75rem', color: '#a7f3d0' }}>Rewarded</span>}
-                </div>
-              );
-            })}
-          </div>
-
           {!isSessionHost && (
-            <p style={{ margin: '0.75rem 0 0', fontSize: '0.8rem', opacity: 0.88 }}>
-              Your host will check you off if you finish the goal in time. When you’re checked, your participation PP and moves update right away so you can fight and shop in MST MKT.
+            <p style={{ margin: 0, fontSize: '0.8rem', opacity: 0.88 }}>
+              When you finish, use <strong>Submit Work</strong> in the sprint bar to flag it as done, or{' '}
+              <strong>Request support</strong> if you need help. Once your host approves your work, your participation PP and
+              moves update right away.
             </p>
-          )}
-          {!isSessionHost && sprint.status === 'live' && (
-            <div style={{ marginTop: '0.65rem' }}>
-              {selfMarked ? (
-                <div style={{ fontSize: '0.85rem', color: '#a7f3d0', fontWeight: 600 }}>
-                  ✓ You are checked in for this sprint.
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  disabled={!canSelfCheckIn}
-                  onClick={() => void onToggle(currentUserId)}
-                  style={{
-                    padding: '0.45rem 0.85rem',
-                    borderRadius: 8,
-                    border: '1px solid rgba(255,255,255,0.55)',
-                    background: canSelfCheckIn ? 'rgba(16,185,129,0.95)' : 'rgba(255,255,255,0.2)',
-                    color: canSelfCheckIn ? '#022c22' : '#e2e8f0',
-                    fontWeight: 700,
-                    cursor: canSelfCheckIn ? 'pointer' : 'not-allowed',
-                  }}
-                >
-                  ✅ Check in complete
-                </button>
-              )}
-            </div>
           )}
         </div>
       )}
 
-      <ClassFlowRosterStatusContext.Provider value={setWorkStatusRows}>{children}</ClassFlowRosterStatusContext.Provider>
+      {children}
 
       {isSessionHost && classId && goalSettingAssessmentId?.trim() && (
         <LiveEventWeeklyDeliverableMarkPanel

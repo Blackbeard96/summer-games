@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ClassFlowSprintState } from '../../types/season1';
 import type { CfSprintAssignment } from '../../types/classFlowWork';
-import { formatClock, sprintPhase, sprintRemainingMs, submissionsOpen } from '../../utils/classFlowConfig';
+import { formatClock, sprintPhase, sprintRemainingMs, sprintTasks, submissionsOpen } from '../../utils/classFlowConfig';
 import { sprintTimerInput } from '../../utils/liveEventSprintService';
 import { rosterReviewState, type CfRosterStatusRow } from '../../utils/classFlowAnalytics';
 
@@ -114,7 +114,7 @@ const ClassFlowSprintTimer: React.FC<Props> = ({
   const open = submissionsOpen(t, nowMs, acceptLate);
   const low = phase === 'running' && remaining <= 60_000;
   const statusText = open ? (phase === 'expired' || phase === 'closed' ? 'Late submissions accepted' : PHASE_LABEL[phase]) : PHASE_LABEL[phase];
-  const rows: CfTimerItem[] = items ?? (sprint.assignments || []).map((assignment) => ({ assignment }));
+  const rows: CfTimerItem[] = items ?? sprintTasks(sprint).map((assignment) => ({ assignment }));
   const isDone = (r: CfRosterStatusRow) => (r.total > 0 ? r.submitted >= r.total : r.submitted > 0);
   const doneRows = (roster || []).filter(isDone);
   const todoRows = (roster || []).filter((r) => !isDone(r));
@@ -135,7 +135,7 @@ const ClassFlowSprintTimer: React.FC<Props> = ({
 
   const overlay = isOpen
     ? createPortal(
-        <div className={`cf-root cf-fullscreen ${timerClass}`} role="dialog" aria-modal="true" aria-label={`${sprint.title} timer`}>
+        <div className={`cf-root cf-fullscreen${roster && roster.length ? ' cf-fullscreen--roster' : ''} ${timerClass}`} role="dialog" aria-modal="true" aria-label={`${sprint.title} timer`}>
           <div className="cf-between">
             <div>
               <div className="cf-title cf-fullscreen-title">{sprint.title}</div>

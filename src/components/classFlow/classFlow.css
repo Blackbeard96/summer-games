@@ -164,8 +164,21 @@
 }
 .cf-fullscreen-objective { text-align: center; font-size: clamp(16px, 1.8vw, 24px); margin-bottom: 18px; }
 .cf-fullscreen-body { width: 100%; max-width: 980px; margin: 0 auto; display: grid; gap: 18px; align-items: start; }
-.cf-fullscreen-body--roster { max-width: 1400px; grid-template-columns: minmax(0, 3fr) minmax(300px, 2fr); }
-@media (max-width: 900px) { .cf-fullscreen-body--roster { grid-template-columns: 1fr; } }
+/* With a roster: work description on top, roster below at full width. */
+.cf-fullscreen-body--roster { max-width: 1600px; grid-template-columns: minmax(0, 1fr); flex: 1; align-content: start; }
+.cf-root.cf-fullscreen--roster .cf-fullscreen-clock { font-size: clamp(64px, 11vw, 170px); margin: 4px 0 4px; }
+.cf-root.cf-fullscreen--roster .cf-fullscreen-objective { margin-bottom: 10px; }
+.cf-fullscreen-body--roster .cf-roster { padding: clamp(12px, 1.6vw, 22px); }
+.cf-fullscreen-body--roster .cf-roster-cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+.cf-fullscreen-body--roster .cf-roster-col--done .cf-roster-list { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.cf-fullscreen-body--roster .cf-roster-list {
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  max-height: none;
+  overflow: visible;
+  gap: 6px;
+}
+.cf-fullscreen-body--roster .cf-roster-list li { font-size: clamp(14px, 1.15vw, 18px); padding: 8px 10px; }
+@media (max-width: 720px) { .cf-fullscreen-body--roster .cf-roster-cols { grid-template-columns: 1fr; } }
 .cf-fullscreen-items { width: 100%; display: grid; gap: 10px; align-content: start; }
 .cf-roster-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 @media (max-width: 520px) { .cf-roster-cols { grid-template-columns: 1fr; } }

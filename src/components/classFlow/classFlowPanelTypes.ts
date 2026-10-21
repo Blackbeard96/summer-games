@@ -7,7 +7,7 @@ import type {
   CfSubmission,
   CfTeam,
 } from '../../types/classFlowWork';
-import type { CfSprintArchive, CfStoredTeam, CfActor } from '../../utils/classFlowWorkService';
+import type { CfSprintArchive, CfStoredTeam, CfActor, CfSupportRequest } from '../../utils/classFlowWorkService';
 import type { CfRosterStatusRow } from '../../utils/classFlowAnalytics';
 
 export interface CfPlayerRef {
@@ -58,6 +58,8 @@ export interface CfFacilitatorData {
   sharing: CfSharingDecision[];
   allocations: CfAllocation[];
   archive: CfSprintArchive[];
+  /** Open "Request support" entries for the current sprint, oldest first. */
+  support: CfSupportRequest[];
 }
 
 export interface CfPlayerData {

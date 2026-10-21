@@ -106,6 +106,32 @@ export function parseSprintAssignments(raw: unknown): CfSprintAssignment[] {
   return raw.map(parseSprintAssignment).filter((a): a is CfSprintAssignment => !!a);
 }
 
+/** Task players flag as done when a sprint has no attached work. */
+export const SPRINT_GOAL_ASSIGNMENT_ID = 'sprint-goal';
+
+export function sprintGoalAssignment(title: string, description = ''): CfSprintAssignment {
+  return {
+    assignmentId: SPRINT_GOAL_ASSIGNMENT_ID,
+    title: title.trim() || 'Sprint goal',
+    description,
+    instructions: '',
+    submissionRequirements: '',
+    workType: 'individual',
+    points: 0,
+    submissionMethods: ['confirm', 'written', 'link', 'upload'],
+    evidenceRequired: false,
+    isExtraCredit: false,
+    bonus: { type: 'none', value: 0, targetAssignmentId: null },
+  };
+}
+
+/** The work players submit for a sprint: attached work, or the sprint goal itself. */
+export function sprintTasks(sprint: { title: string; description?: string; assignments?: CfSprintAssignment[] } | null | undefined): CfSprintAssignment[] {
+  if (!sprint) return [];
+  if (sprint.assignments && sprint.assignments.length > 0) return sprint.assignments;
+  return [sprintGoalAssignment(sprint.title, sprint.description || '')];
+}
+
 function parsePlan(raw: unknown): CfSprintPlanItem[] {
   if (!Array.isArray(raw)) return [];
   const out: CfSprintPlanItem[] = [];

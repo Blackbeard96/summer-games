@@ -7,6 +7,8 @@ import {
   resumedEndsAtMs,
   sprintPhase,
   sprintRemainingMs,
+  sprintTasks,
+  SPRINT_GOAL_ASSIGNMENT_ID,
   submissionsOpen,
 } from '../classFlowConfig';
 import { computeSprintRewards, majorityShareVote, splitEvenly, UNASSIGNED_TEAM_ID } from '../classFlowRewards';
@@ -433,6 +435,37 @@ describe('buildSprintRosterStatus', () => {
     expect(rows[0]).toMatchObject({ submitted: 2, approved: 1, total: 2 });
     expect(rows[1]).toMatchObject({ submitted: 1, approved: 0, total: 2 });
     expect(rows[2]).toMatchObject({ submitted: 0, approved: 0, inSession: false });
+  });
+
+  it('records first submission time and flags resubmissions waiting on review', () => {
+    const rows = buildSprintRosterStatus(roster, [asg('w1', 100)], [
+      sub('ava', 'w1', 0, {
+        status: 'submitted',
+        approvedPoints: 0,
+        submittedAt: 900,
+        revisionCount: 1,
+        history: [
+          { action: 'submitted', by: 'ava', at: 300 },
+          { action: 'revision_requested', by: 'host', at: 500 },
+          { action: 'resubmitted', by: 'ava', at: 900 },
+        ],
+      }),
+      sub('ben', 'w1', 0, { status: 'revision_requested', approvedPoints: 0, submittedAt: 400, history: [] }),
+    ], 'sp1');
+    expect(rows[0]).toMatchObject({ firstSubmittedAt: 300, lastSubmittedAt: 900, resubmitted: true });
+    expect(rows[1]).toMatchObject({ firstSubmittedAt: 400, resubmitted: false, revisions: 1 });
+    expect(rows[2]).toMatchObject({ firstSubmittedAt: null, lastSubmittedAt: null, resubmitted: false });
+  });
+});
+
+describe('sprintTasks', () => {
+  it('uses attached work, or a single sprint-goal task when none is attached', () => {
+    expect(sprintTasks({ title: 'Read', assignments: [asg('w1', 10)] }).map((a) => a.assignmentId)).toEqual(['w1']);
+    const [goal, ...rest] = sprintTasks({ title: 'Finish 10 problems', assignments: [] });
+    expect(rest).toHaveLength(0);
+    expect(goal).toMatchObject({ assignmentId: SPRINT_GOAL_ASSIGNMENT_ID, title: 'Finish 10 problems', points: 0, isExtraCredit: false });
+    expect(goal.submissionMethods[0]).toBe('confirm');
+    expect(sprintTasks(null)).toEqual([]);
   });
 });
 

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { CfPlayerTaskStatus, CfSprintAssignment, CfSubmission } from '../../types/classFlowWork';
-import { formatClock, sprintPhase, sprintRemainingMs } from '../../utils/classFlowConfig';
+import { formatClock, sprintPhase, sprintRemainingMs, sprintTasks } from '../../utils/classFlowConfig';
 import { UNASSIGNED_TEAM_ID } from '../../utils/classFlowRewards';
 import { sanitizeTeamName } from '../../utils/classFlowTeams';
 import {
@@ -14,6 +14,7 @@ import {
 import { sprintTimerInput } from '../../utils/liveEventSprintService';
 import ClassFlowSprintTimer, { type CfTimerItem } from './ClassFlowSprintTimer';
 import ClassFlowSubmitModal, { type CfSubmitDraft } from './ClassFlowSubmitModal';
+import ClassFlowSupportButton from './ClassFlowSupportButton';
 import type { CfPlayerData, CfSharedProps } from './classFlowPanelTypes';
 
 export const CF_STATUS_LABEL: Record<CfPlayerTaskStatus, string> = {
@@ -80,7 +81,7 @@ const ClassFlowPlayerView: React.FC<Props> = ({
   };
 
   const assignments: CfSprintAssignment[] = useMemo(
-    () => (sprint?.assignments || []).filter((a) => !a.isExtraCredit || config.extraCreditEnabled),
+    () => sprintTasks(sprint).filter((a) => !a.isExtraCredit || config.extraCreditEnabled),
     [sprint, config.extraCreditEnabled]
   );
 
@@ -204,7 +205,8 @@ const ClassFlowPlayerView: React.FC<Props> = ({
   };
   const submittable = assignments.filter(canSubmit);
   const acceptingWork = phase === 'running' || phase === 'paused' || (phase === 'expired' && config.acceptLateSubmissions);
-  const showBar = !!sprint && acceptingWork && submittable.length > 0 && modalFor === undefined && !fullScreen;
+  const showBar =
+    !!sprint && acceptingWork && (submittable.length > 0 || !barOnly) && modalFor === undefined && !fullScreen;
   const timerItems: CfTimerItem[] = assignments.map((a) => {
     const st = statusOf(a);
     return {
@@ -224,11 +226,22 @@ const ClassFlowPlayerView: React.FC<Props> = ({
             <span className="cf-timer-clock">{formatClock(t ? sprintRemainingMs(t, nowMs) : 0)}</span>
             <span style={{ fontSize: 13 }}>
               <strong>{sprint.title}</strong>
-              <span className="cf-sub"> · {submittable.length} to submit</span>
+              <span className="cf-sub"> · {submittable.length > 0 ? `${submittable.length} to submit` : 'submitted'}</span>
             </span>
-            <button type="button" className="cf-btn cf-btn--primary" onClick={() => setModalFor(null)}>
-              Submit Work
-            </button>
+            {submittable.length > 0 && (
+              <button type="button" className="cf-btn cf-btn--primary" onClick={() => setModalFor(null)}>
+                Submit Work
+              </button>
+            )}
+            {!barOnly && (
+              <ClassFlowSupportButton
+                sessionId={sessionId}
+                sprintId={sprint.id}
+                uid={uid}
+                playerName={actor.displayName || nameOf(uid)}
+                onError={(msg) => notify({ title: 'Could not send request', body: msg, tone: 'bad' })}
+              />
+            )}
             <button
               type="button"
               className="cf-btn cf-btn--ghost"

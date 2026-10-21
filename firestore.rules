@@ -886,6 +886,23 @@ service cloud.firestore {
         allow delete: if isCfFacilitator();
       }
 
+      // "Request support" queue. Players open or cancel only their own request; facilitators resolve.
+      match /cfSupport/{requestId} {
+        allow read: if isCfFacilitator() || (
+          request.auth != null && (resource == null || resource.data.playerId == request.auth.uid)
+        );
+        allow create, update: if isCfFacilitator() || (
+          canReadInSessionRoomSession(sessionId) &&
+          request.resource.data.playerId == request.auth.uid &&
+          requestId == request.resource.data.sprintId + '__' + request.auth.uid &&
+          (resource == null || resource.data.playerId == request.auth.uid) &&
+          request.resource.data.keys().hasOnly(['sprintId', 'playerId', 'playerName', 'requestedAt', 'status', 'resolvedAt', 'resolvedBy']) &&
+          request.resource.data.status in ['open', 'cancelled'] &&
+          request.resource.data.resolvedBy == null
+        );
+        allow delete: if isCfFacilitator();
+      }
+
       // Event-scoped team names / manual teams. Players may only suggest a name.
       match /cfTeams/{teamId} {
         allow read: if canReadInSessionRoomSession(sessionId);

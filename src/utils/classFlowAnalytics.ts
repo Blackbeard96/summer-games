@@ -147,6 +147,11 @@ export interface CfRosterStatusRow {
   revisions: number;
   total: number;
   inSession: boolean;
+  /** First time this student submitted required work this sprint (ms); sets submission order. */
+  firstSubmittedAt: number | null;
+  lastSubmittedAt: number | null;
+  /** Fixed work after a revision request and is waiting on review again. */
+  resubmitted: boolean;
 }
 
 export type CfRosterReviewState = 'pending' | 'revision' | 'approved' | 'none';
@@ -167,19 +172,29 @@ export function buildSprintRosterStatus(
 ): CfRosterStatusRow[] {
   const required = new Set(assignments.filter((a) => !a.isExtraCredit).map((a) => a.assignmentId));
   const byUid = new Map<string, Map<string, CfSubmission['status']>>();
+  const timing = new Map<string, { first: number; last: number; resubmitted: boolean }>();
   for (const s of submissions) {
     if (s.sprintId !== sprintId || !required.has(s.assignmentId) || s.status === 'rejected') continue;
+    const firstAt = s.history.find((h) => h.action === 'submitted')?.at || s.submittedAt;
+    const resubmitted = s.revisionCount > 0 && (s.status === 'submitted' || s.status === 'awaiting_approval');
     const people = new Set([s.playerId, ...s.contributorIds]);
     people.forEach((uid) => {
       const m = byUid.get(uid) ?? new Map<string, CfSubmission['status']>();
       const prev = m.get(s.assignmentId);
       if (prev !== 'approved') m.set(s.assignmentId, s.status);
       byUid.set(uid, m);
+      const t = timing.get(uid);
+      timing.set(uid, {
+        first: t && t.first > 0 && (!firstAt || t.first <= firstAt) ? t.first : firstAt,
+        last: Math.max(t?.last || 0, s.submittedAt),
+        resubmitted: (t?.resubmitted ?? false) || resubmitted,
+      });
     });
   }
   return roster
     .map((p) => {
       const statuses = Array.from(byUid.get(p.uid)?.values() ?? []);
+      const t = timing.get(p.uid);
       return {
         uid: p.uid,
         name: p.name,
@@ -188,6 +203,9 @@ export function buildSprintRosterStatus(
         approved: statuses.filter((s) => s === 'approved').length,
         revisions: statuses.filter((s) => s === 'revision_requested').length,
         total: required.size,
+        firstSubmittedAt: t?.first || null,
+        lastSubmittedAt: t?.last || null,
+        resubmitted: t?.resubmitted ?? false,
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));

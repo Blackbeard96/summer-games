@@ -56,6 +56,8 @@ import {
   parseSprintAssignments,
   parseWorkAssignment,
   sharingDocId,
+  SPRINT_GOAL_ASSIGNMENT_ID,
+  sprintGoalAssignment,
   submissionDocId,
 } from './classFlowConfig';
 import type { CfRewardResult } from './classFlowRewards';
@@ -397,6 +399,112 @@ export function subscribeMySubmissions(sessionId: string, uid: string, cb: (rows
   };
 }
 
+/* ---------------------------- Support requests ---------------------------- */
+
+export type CfSupportStatus = 'open' | 'resolved' | 'cancelled';
+
+export interface CfSupportRequest {
+  id: string;
+  sprintId: string;
+  playerId: string;
+  playerName: string;
+  requestedAt: number;
+  status: CfSupportStatus;
+  resolvedAt: number | null;
+  resolvedBy: string | null;
+}
+
+export const supportDocId = (sprintId: string, uid: string) => `${sprintId}__${uid}`;
+
+function parseSupport(id: string, raw: Record<string, unknown>): CfSupportRequest {
+  const status = raw.status === 'resolved' || raw.status === 'cancelled' ? raw.status : 'open';
+  return {
+    id,
+    sprintId: String(raw.sprintId || ''),
+    playerId: String(raw.playerId || ''),
+    playerName: String(raw.playerName || 'Player'),
+    requestedAt: Number(raw.requestedAt) || 0,
+    status,
+    resolvedAt: typeof raw.resolvedAt === 'number' ? raw.resolvedAt : null,
+    resolvedBy: typeof raw.resolvedBy === 'string' ? raw.resolvedBy : null,
+  };
+}
+
+/** Facilitator queue: open requests for one sprint, oldest first. */
+export function subscribeSupportQueue(sessionId: string, sprintId: string, cb: (rows: CfSupportRequest[]) => void) {
+  return sharedSnapshot<QuerySnapshot>(
+    `${sessionId}/cfSupport?sprintId=${sprintId}`,
+    query(sub(sessionId, 'cfSupport'), where('sprintId', '==', sprintId)),
+    (snap) => {
+      const rows = snap.docs.map((d) => parseSupport(d.id, d.data())).filter((r) => r.status === 'open');
+      rows.sort((a, b) => a.requestedAt - b.requestedAt);
+      cb(rows);
+    },
+    () => cb([])
+  );
+}
+
+/** Player: their own request for one sprint (null when none). */
+export function subscribeMySupportRequest(
+  sessionId: string,
+  sprintId: string,
+  uid: string,
+  cb: (row: CfSupportRequest | null) => void
+) {
+  const id = supportDocId(sprintId, uid);
+  return sharedSnapshot<DocumentSnapshot>(
+    `${sessionId}/cfSupport/${id}`,
+    subDoc(sessionId, 'cfSupport', id),
+    (snap) => cb(snap.exists() ? parseSupport(snap.id, snap.data() as Record<string, unknown>) : null),
+    () => cb(null)
+  );
+}
+
+/** Opens (or reopens) the player's request; keeps the original time if one is already open. */
+export async function requestSupport(sessionId: string, sprintId: string, uid: string, playerName: string): Promise<Result> {
+  const ref = subDoc(sessionId, 'cfSupport', supportDocId(sprintId, uid));
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (snap.exists() && snap.data()?.status === 'open') return;
+      tx.set(ref, {
+        sprintId,
+        playerId: uid,
+        playerName: playerName.slice(0, 80) || 'Player',
+        requestedAt: Date.now(),
+        status: 'open',
+        resolvedAt: null,
+        resolvedBy: null,
+      });
+    });
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+export async function cancelSupportRequest(sessionId: string, sprintId: string, uid: string): Promise<Result> {
+  try {
+    await updateDoc(subDoc(sessionId, 'cfSupport', supportDocId(sprintId, uid)), { status: 'cancelled' });
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+export async function resolveSupportRequest(sessionId: string, requestId: string, facilitatorUid: string): Promise<Result> {
+  try {
+    await updateDoc(subDoc(sessionId, 'cfSupport', requestId), {
+      status: 'resolved',
+      resolvedAt: Date.now(),
+      resolvedBy: facilitatorUid,
+    });
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 export async function uploadEvidenceFile(
   sessionId: string,
   uid: string,
@@ -505,7 +613,9 @@ export async function reviewSubmission(
         const live = roomSnap.data()?.classFlowSprint;
         if (live?.id === s.sprintId) sprintAssignments = parseSprintAssignments(live.assignments);
       }
-      const assignment = sprintAssignments.find((a) => a.assignmentId === s.assignmentId);
+      const assignment =
+        sprintAssignments.find((a) => a.assignmentId === s.assignmentId) ??
+        (s.assignmentId === SPRINT_GOAL_ASSIGNMENT_ID ? sprintGoalAssignment(s.assignmentTitle || 'Sprint goal') : undefined);
       if (!assignment) throw new Error('This work is not part of that sprint.');
       const now = Date.now();
       let patch: Record<string, unknown>;

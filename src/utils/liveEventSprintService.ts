@@ -436,6 +436,52 @@ export async function toggleClassFlowSprintMark(
   }
 }
 
+/**
+ * Facilitator approved all of a player's sprint work: mark them complete and pay the sprint rewards.
+ * Add-only, and only the caller whose transaction adds the mark pays, so several open facilitator
+ * screens never pay the same player twice.
+ */
+export async function markClassFlowSprintCompleteAndGrant(
+  sessionId: string,
+  sprintId: string,
+  actingUid: string,
+  actingEmail: string | undefined,
+  actingDisplayName: string | undefined,
+  playerUid: string,
+  playerDisplayName?: string
+): Promise<{ ok: boolean; granted?: boolean; error?: string }> {
+  let addedMark = false;
+  try {
+    const ref = roomRef(sessionId);
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error('Session not found');
+      if (!canActAsRoomHost(snap.data()?.hostUid, actingUid, actingEmail, actingDisplayName)) {
+        throw new Error('Only the session host can mark sprint work complete');
+      }
+      const sprint = parseClassFlowSprint(snap.data()?.classFlowSprint);
+      if (!sprint || sprint.id !== sprintId) return;
+      if ((sprint.markedCompleteUids || []).includes(playerUid)) return;
+      addedMark = true;
+      tx.update(ref, {
+        'classFlowSprint.markedCompleteUids': [...(sprint.markedCompleteUids || []), playerUid],
+        updatedAt: serverTimestamp(),
+      });
+    });
+    if (!addedMark) return { ok: true, granted: false };
+    return await grantSprintRewardForSinglePlayer(
+      sessionId,
+      actingUid,
+      actingEmail,
+      actingDisplayName,
+      playerUid,
+      playerDisplayName || 'Player'
+    );
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
 async function bumpSessionPlayerVaultPP(sessionId: string, uid: string, delta: number): Promise<void> {
   if (delta <= 0) return;
   const ref = roomRef(sessionId);

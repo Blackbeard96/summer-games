@@ -7,9 +7,9 @@ import type {
   CfSharingDecision,
   CfSubmission,
 } from '../../types/classFlowWork';
-import { parseCfConfig, sprintPhase } from '../../utils/classFlowConfig';
+import { parseCfConfig, sprintPhase, sprintTasks } from '../../utils/classFlowConfig';
 import { computeSprintRewards } from '../../utils/classFlowRewards';
-import { buildSprintRosterStatus, type CfRosterStatusRow } from '../../utils/classFlowAnalytics';
+import { buildSprintRosterStatus, rosterReviewState, type CfRosterStatusRow } from '../../utils/classFlowAnalytics';
 import { buildTeams, formatTeamTag, teamTableNumber } from '../../utils/classFlowTeams';
 import {
   claimMyPayouts,
@@ -24,17 +24,22 @@ import {
   subscribeSharing,
   subscribeSprintArchive,
   subscribeStoredTeams,
+  subscribeSupportQueue,
   subscribeTables,
   type CfSprintArchive,
   type CfStoredTeam,
+  type CfSupportRequest,
 } from '../../utils/classFlowWorkService';
-import { sprintTimerInput, updateClassFlowSprintTimer } from '../../utils/liveEventSprintService';
+import {
+  markClassFlowSprintCompleteAndGrant,
+  sprintTimerInput,
+  updateClassFlowSprintTimer,
+} from '../../utils/liveEventSprintService';
 import { getUserSquadInfo, type UserSquadInfo } from '../../utils/squadUtils';
 import { useServerClockOffset } from '../../hooks/useServerClock';
 import ClassFlowPlayerView from './ClassFlowPlayerView';
 import ClassFlowFacilitatorView from './ClassFlowFacilitatorView';
 import { ClassFlowToastStack, useClassFlowToasts } from './ClassFlowToasts';
-import { useReportClassFlowRosterStatus } from './ClassFlowRosterStatusContext';
 import type { CfPlayerRef, CfPublicState, CfPublicTeam, CfSharedProps } from './classFlowPanelTypes';
 
 export interface ClassFlowWorkPanelProps {
@@ -185,7 +190,7 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
       .forEach((d) => (sharePct[d.teamId] = d.approvedPercent || 0));
     return computeSprintRewards({
       config,
-      assignments: sprint.assignments || [],
+      assignments: sprintTasks(sprint),
       submissions: currentSprintSubs,
       participantIds: players.map((p) => p.uid),
       teams,
@@ -205,7 +210,7 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
     players.forEach((p) => {
       if (!merged.has(p.uid)) merged.set(p.uid, { uid: p.uid, name: p.name, inSession: true });
     });
-    return buildSprintRosterStatus(Array.from(merged.values()), sprint.assignments || [], currentSprintSubs, sprint.id);
+    return buildSprintRosterStatus(Array.from(merged.values()), sprintTasks(sprint), currentSprintSubs, sprint.id);
   }, [isFacilitator, enabled, sprint, sessionPlayers, classRosterKey, hostUid, players, currentSprintSubs]);
 
   // Publish team progress for players (debounced; facilitator only).
@@ -381,13 +386,81 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
       ? publicState.roster ?? null
       : null;
 
-  const reportRosterStatus = useReportClassFlowRosterStatus();
-  const rosterReportKey = active && roster ? JSON.stringify(roster) : '';
+  // Facilitator: fully approved sprint work marks the player complete and pays the sprint rewards.
+  const sprintId = sprint?.id;
+  const markedKey = (sprint?.markedCompleteUids || []).join(',');
+  const autoGranted = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!reportRosterStatus) return;
-    reportRosterStatus(rosterReportKey ? (JSON.parse(rosterReportKey) as CfRosterStatusRow[]) : null);
-  }, [reportRosterStatus, rosterReportKey]);
-  useEffect(() => () => reportRosterStatus?.(null), [reportRosterStatus]);
+    if (!isFacilitator || !enabled || !sprintId || !rosterRows) return;
+    const marked = new Set(markedKey ? markedKey.split(',') : []);
+    rosterRows
+      .filter((r) => rosterReviewState(r) === 'approved' && !marked.has(r.uid))
+      .forEach((r) => {
+        const key = `${sprintId}:${r.uid}`;
+        if (autoGranted.current.has(key)) return;
+        autoGranted.current.add(key);
+        void markClassFlowSprintCompleteAndGrant(sessionId, sprintId, actor.uid, actor.email, actor.displayName, r.uid, r.name).then(
+          (res) => {
+            if (!res.ok) {
+              autoGranted.current.delete(key);
+              notify({ title: 'Sprint reward failed', body: `${r.name}\n${res.error || ''}`, tone: 'bad' });
+            }
+          }
+        );
+      });
+  }, [isFacilitator, enabled, sprintId, rosterRows, markedKey, sessionId, actor, notify]);
+
+  const pendingFor = useCallback(
+    (uid: string) =>
+      currentSprintSubs.filter((s) => s.playerId === uid && (s.status === 'submitted' || s.status === 'awaiting_approval')),
+    [currentSprintSubs]
+  );
+  const approvePlayer = useCallback(
+    async (uid: string) => {
+      const subs = pendingFor(uid);
+      if (!subs.length) return { ok: false, error: 'Nothing waiting for review.' };
+      for (const s of subs) {
+        const r = await reviewSubmission(sessionId, s.id, { kind: 'approve', points: s.requestedPoints }, currentUserId);
+        if (!r.ok) return r;
+      }
+      return { ok: true };
+    },
+    [pendingFor, sessionId, currentUserId]
+  );
+  const requestRevision = useCallback(
+    async (uid: string, feedback: string) => {
+      const subs = pendingFor(uid);
+      if (!subs.length) return { ok: false, error: 'Nothing waiting for review.' };
+      for (const s of subs) {
+        const r = await reviewSubmission(sessionId, s.id, { kind: 'revision', feedback }, currentUserId);
+        if (!r.ok) return r;
+      }
+      return { ok: true };
+    },
+    [pendingFor, sessionId, currentUserId]
+  );
+
+  const reviewActions = useMemo(() => ({ approvePlayer, requestRevision }), [approvePlayer, requestRevision]);
+
+  // Facilitator: the "Request support" queue for the current sprint, with a toast for each new request.
+  const [support, setSupport] = useState<CfSupportRequest[]>([]);
+  useEffect(() => {
+    setSupport([]);
+    if (!isFacilitator || !enabled || !sessionId || !sprintId) return;
+    return subscribeSupportQueue(sessionId, sprintId, setSupport);
+  }, [isFacilitator, enabled, sessionId, sprintId]);
+  const seenSupport = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!isFacilitator) return;
+    const keys = new Set(support.map((r) => `${r.id}:${r.requestedAt}`));
+    if (seenSupport.current) {
+      support
+        .filter((r) => !seenSupport.current!.has(`${r.id}:${r.requestedAt}`))
+        .slice(0, 3)
+        .forEach((r) => notify({ title: '🙋 Support requested', body: r.playerName, tone: 'warn' }));
+    }
+    seenSupport.current = keys;
+  }, [support, isFacilitator, notify]);
 
   if (!active) return null;
   const shared: CfSharedProps = { sessionId, actor, sprint, config, nowMs, players, nameOf, notify, embedded, classId, roster };
@@ -398,8 +471,9 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
       {isFacilitator ? (
         <ClassFlowFacilitatorView
           {...shared}
-          data={{ submissions: allSubs, teams, storedTeams, tableByUid, sharing, allocations, archive }}
+          data={{ submissions: allSubs, teams, storedTeams, tableByUid, sharing, allocations, archive, support }}
           preview={livePreview}
+          review={enabled ? reviewActions : null}
           playerData={isPlayerView ? playerData : undefined}
         />
       ) : (
