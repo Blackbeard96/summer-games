@@ -14,6 +14,7 @@ export interface AnnounceSkillActivationParams {
   id?: string;
   /** CPU/NPC move names are shown as-is (admin renames apply to player skills only). */
   rawName?: boolean;
+  details?: string[];
 }
 
 let seq = 0;
@@ -40,6 +41,7 @@ export const announceSkillActivation = (params: AnnounceSkillActivationParams): 
       actorUid: params.actorUid ?? null,
       side: params.side,
       targetName: params.targetName ?? null,
+      ...(params.details?.length ? { details: params.details.slice(0, 3) } : {}),
     });
   } catch (error) {
     console.warn('[skillActivation] announce failed', error);

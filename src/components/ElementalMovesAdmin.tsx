@@ -6,6 +6,7 @@ import { collection, doc, getDoc, setDoc, serverTimestamp } from 'firebase/fires
 import { invalidateMoveOverridesCache } from '../utils/moveOverrides';
 import { SkillEffectsConfigEditor } from './admin/SkillEffectsConfigEditor';
 import SkillArtworkEditor from './admin/SkillArtworkEditor';
+import ClassSkillsAdmin from './admin/ClassSkillsAdmin';
 
 interface ElementalMovesAdminProps {
   isOpen: boolean;
@@ -52,6 +53,7 @@ const ELEMENTAL_TYPES: Array<{ id: string; name: string; color: string }> = [
 
 const ElementalMovesAdmin: React.FC<ElementalMovesAdminProps> = ({ isOpen, onClose }) => {
   const [selectedElement, setSelectedElement] = useState<string | null>(null);
+  const [skillsTab, setSkillsTab] = useState<'in_game' | 'irl'>('in_game');
   const [editingMoves, setEditingMoves] = useState<boolean>(false);
   const [moveEdits, setMoveEdits] = useState<{ [key: string]: MoveEditData }>({});
   const [existingOverrides, setExistingOverrides] = useState<{ [key: string]: MoveEditData }>({});
@@ -387,6 +389,34 @@ const ElementalMovesAdmin: React.FC<ElementalMovesAdminProps> = ({ isOpen, onClo
           </button>
         </div>
 
+        <div role="tablist" aria-label="Skill type" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+          {([
+            { id: 'in_game', label: 'IN-GAME SKILLS' },
+            { id: 'irl', label: 'CLASS SKILLS (IRL)' },
+          ] as const).map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={skillsTab === tab.id}
+              onClick={() => setSkillsTab(tab.id)}
+              style={{
+                padding: '0.55rem 1.1rem',
+                borderRadius: '0.5rem',
+                border: `1px solid ${skillsTab === tab.id ? '#fbbf24' : 'rgba(255,255,255,0.15)'}`,
+                background: skillsTab === tab.id ? 'rgba(251,191,36,0.15)' : 'rgba(255,255,255,0.04)',
+                color: skillsTab === tab.id ? '#fbbf24' : '#cbd5e1',
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                fontSize: '0.8rem',
+                cursor: 'pointer',
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
         <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '1.5rem' }}>
           {/* Element Selection */}
           <div style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: '0.5rem', padding: '1rem' }}>
@@ -411,7 +441,14 @@ const ElementalMovesAdmin: React.FC<ElementalMovesAdminProps> = ({ isOpen, onClo
             ))}
           </div>
 
-          {/* Move Editing */}
+          {skillsTab === 'irl' ? (
+            <ClassSkillsAdmin
+              element={selectedElement}
+              elementName={ELEMENTAL_TYPES.find(e => e.id === selectedElement)?.name || ''}
+              elementColor={ELEMENTAL_TYPES.find(e => e.id === selectedElement)?.color || '#fbbf24'}
+            />
+          ) : (
+          /* Move Editing */
           <div style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: '0.5rem', padding: '1rem' }}>
             {selectedElement ? (
               <>
@@ -1031,6 +1068,7 @@ const ElementalMovesAdmin: React.FC<ElementalMovesAdminProps> = ({ isOpen, onClo
               </div>
             )}
           </div>
+          )}
         </div>
       </div>
     </div>

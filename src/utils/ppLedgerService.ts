@@ -37,6 +37,7 @@ const SOURCE_LABELS: Record<PPLedgerSourceType, string> = {
   generator: 'PP Generator',
   skillUpgrade: 'Skill Upgrade',
   battlePass: 'Battle Pass',
+  classSkill: 'Class Skill',
   other: 'Other',
 };
 

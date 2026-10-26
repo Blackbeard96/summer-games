@@ -4,6 +4,7 @@ import { getSkillCategoryLabel } from '../../utils/skillArtworkDefaults';
 import {
   enqueuePending,
   getCardDuration,
+  SKILL_CARD_DETAILS_EXTRA_MS,
   subscribeSkillActivations,
   type SkillActivationEvent,
 } from '../../utils/skillActivationQueue';
@@ -47,7 +48,8 @@ const SkillActivationOverlay: React.FC = () => {
         return;
       }
       const reduced = prefersReducedMotion();
-      const card: ActiveCard = { event: next, durationMs: getCardDuration(pendingRef.current.length, reduced), reduced };
+      const base = getCardDuration(pendingRef.current.length, reduced);
+      const card: ActiveCard = { event: next, durationMs: next.details?.length ? base + SKILL_CARD_DETAILS_EXTRA_MS : base, reduced };
       activeRef.current = card;
       setActive(card);
       timerRef.current = window.setTimeout(showNext, card.durationMs);
@@ -100,6 +102,13 @@ const SkillActivationOverlay: React.FC = () => {
               {event.actorName}
               {event.targetName ? <span className="mst-skill-card__target"> → {event.targetName}</span> : null}
             </div>
+            {event.details?.length ? (
+              <div className="mst-skill-card__details">
+                {event.details.map((line, i) => (
+                  <div key={i}>{line}</div>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
       </div>

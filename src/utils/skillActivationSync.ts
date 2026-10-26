@@ -19,6 +19,8 @@ export interface SkillActivationRecord {
   /** Client that wrote the record (differs from actorUid for CPU enemies / constructs). */
   sourceUid?: string | null;
   actorKind?: 'player' | 'enemy' | null;
+  /** Short extra lines for the card (Class Skills: effect + duration). */
+  details?: string[];
 }
 
 interface RecordSource {

@@ -388,13 +388,13 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
 
   // Facilitator: fully approved sprint work marks the player complete and pays the sprint rewards.
   const sprintId = sprint?.id;
-  const markedKey = (sprint?.markedCompleteUids || []).join(',');
+  const grantedKey = (sprint?.rewardsGrantedUids || []).join(',');
   const autoGranted = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!isFacilitator || !enabled || !sprintId || !rosterRows) return;
-    const marked = new Set(markedKey ? markedKey.split(',') : []);
+    const granted = new Set(grantedKey ? grantedKey.split(',') : []);
     rosterRows
-      .filter((r) => rosterReviewState(r) === 'approved' && !marked.has(r.uid))
+      .filter((r) => rosterReviewState(r) === 'approved' && !granted.has(r.uid))
       .forEach((r) => {
         const key = `${sprintId}:${r.uid}`;
         if (autoGranted.current.has(key)) return;
@@ -408,7 +408,7 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
           }
         );
       });
-  }, [isFacilitator, enabled, sprintId, rosterRows, markedKey, sessionId, actor, notify]);
+  }, [isFacilitator, enabled, sprintId, rosterRows, grantedKey, sessionId, actor, notify]);
 
   const pendingFor = useCallback(
     (uid: string) =>

@@ -60,6 +60,7 @@ import { shouldEnforceTurnSkillCooldownsInLiveSession } from '../utils/battleMod
 import { isOwnSkillActivation, takeUnseenSkillActivations } from '../utils/skillActivationSync';
 import { markSkillActivationsSeen } from '../utils/skillActivationQueue';
 import { announceSkillActivation } from '../utils/skillActivationAnnounce';
+import ClassSkillsLivePanel from './classSkills/ClassSkillsLivePanel';
 import { 
   submitAction,
   subscribeToActions,
@@ -434,6 +435,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   }>({});
   const [roomClassFlowSprint, setRoomClassFlowSprint] = useState<ClassFlowSprintState | null>(null);
   const [roomClassFlowConfig, setRoomClassFlowConfig] = useState<unknown>(null);
+  /** `undefined` until the first room snapshot, so Class Skills never act on a half-loaded room. */
+  const [roomIrlSkillsConfig, setRoomIrlSkillsConfig] = useState<unknown>(undefined);
   const [sessionRoomHostUid, setSessionRoomHostUid] = useState<string>('');
   const [reflectionPickAssessmentId, setReflectionPickAssessmentId] = useState('');
   const [reflectionPickPrompt, setReflectionPickPrompt] = useState('');
@@ -917,6 +920,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         const next = rawRoom.classFlowConfig ?? null;
         return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
       });
+      setRoomIrlSkillsConfig((prev: unknown) => {
+        const next = rawRoom.irlSkillsConfig ?? null;
+        return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+      });
       
       const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
                                  process.env.REACT_APP_DEBUG === 'true';
@@ -1033,8 +1040,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               },
               actorName: updatedPlayers.find((p) => p.userId === r.actorUid)?.displayName || r.actorName,
               actorUid: r.actorUid,
-              side: 'enemy',
+              side: r.actorUid === currentUser?.uid ? 'self' : 'enemy',
               targetName: r.targetName,
+              ...(Array.isArray(r.details) && r.details.length
+                ? { details: r.details.filter((d): d is string => typeof d === 'string'), rawName: true }
+                : {}),
             })
           );
       }
@@ -4263,6 +4273,23 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             userDisplayName={currentUser.displayName}
           />
         </LiveEventSprintPanel>
+      )}
+
+      {currentUser &&
+        roomIrlSkillsConfig !== undefined &&
+        !quizSession &&
+        !isExamLiveEventMode(roomReflectionMeta.liveEventMode) && (
+        <ClassSkillsLivePanel
+          sessionId={sessionId}
+          liveEventMode={roomReflectionMeta.liveEventMode ?? null}
+          rawConfig={roomIrlSkillsConfig}
+          sprint={roomClassFlowSprint}
+          sessionStatus={roomSessionStatus}
+          players={sessionPlayers.map((p) => ({ userId: p.userId, displayName: p.displayName, movesEarned: p.movesEarned }))}
+          isFacilitator={isSessionHost || isAdminUser}
+          currentUserId={currentUser.uid}
+          currentUserName={currentPlayer?.displayName || currentUser.displayName || 'Player'}
+        />
       )}
 
       {/* Quiz setup modal (host only) */}

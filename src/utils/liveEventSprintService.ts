@@ -12,6 +12,7 @@ import {
   serverTimestamp,
   Timestamp,
   arrayUnion,
+  arrayRemove,
   increment,
   deleteField,
 } from 'firebase/firestore';
@@ -450,25 +451,26 @@ export async function markClassFlowSprintCompleteAndGrant(
   playerUid: string,
   playerDisplayName?: string
 ): Promise<{ ok: boolean; granted?: boolean; error?: string }> {
-  let addedMark = false;
   try {
     const ref = roomRef(sessionId);
-    await runTransaction(db, async (tx) => {
+    const sameSprint = await runTransaction(db, async (tx) => {
       const snap = await tx.get(ref);
       if (!snap.exists()) throw new Error('Session not found');
       if (!canActAsRoomHost(snap.data()?.hostUid, actingUid, actingEmail, actingDisplayName)) {
         throw new Error('Only the session host can mark sprint work complete');
       }
       const sprint = parseClassFlowSprint(snap.data()?.classFlowSprint);
-      if (!sprint || sprint.id !== sprintId) return;
-      if ((sprint.markedCompleteUids || []).includes(playerUid)) return;
-      addedMark = true;
-      tx.update(ref, {
-        'classFlowSprint.markedCompleteUids': [...(sprint.markedCompleteUids || []), playerUid],
-        updatedAt: serverTimestamp(),
-      });
+      if (!sprint || sprint.id !== sprintId) return false;
+      if (!(sprint.markedCompleteUids || []).includes(playerUid)) {
+        tx.update(ref, {
+          'classFlowSprint.markedCompleteUids': [...(sprint.markedCompleteUids || []), playerUid],
+          updatedAt: serverTimestamp(),
+        });
+      }
+      return true;
     });
-    if (!addedMark) return { ok: true, granted: false };
+    if (!sameSprint) return { ok: true, granted: false };
+    // Also covers players marked earlier whose payout never went through; the grant claims atomically.
     return await grantSprintRewardForSinglePlayer(
       sessionId,
       actingUid,
@@ -602,24 +604,29 @@ export async function grantSprintRewardForSinglePlayer(
   playerDisplayName: string,
   options?: { skipBattleLog?: boolean }
 ): Promise<{ ok: boolean; granted?: boolean; error?: string }> {
+  const ref = roomRef(sessionId);
   try {
-    const ref = roomRef(sessionId);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) return { ok: false, error: 'Session not found' };
-    const sprint = parseClassFlowSprint(snap.data()?.classFlowSprint);
-    if (!sprint) return { ok: false, error: 'No sprint data' };
-    const actingIsHost = canActAsRoomHost(snap.data()?.hostUid, actingUid, actingEmail, actingDisplayName);
-    const actingSelf = actingUid === playerUid;
-    const canSelfGrant = actingSelf && sprint.status === 'live';
-    if (!actingIsHost && !canSelfGrant) {
-      return { ok: false, error: 'Only the session host can grant sprint rewards' };
-    }
-
-    const marked = new Set(sprint.markedCompleteUids || []);
-    if (!marked.has(playerUid)) return { ok: false, error: 'Player is not marked complete for this sprint' };
-
-    const grantedSet = new Set(sprint.rewardsGrantedUids || []);
-    if (grantedSet.has(playerUid)) return { ok: true, granted: false };
+    // Claim inside a transaction: it reads the server copy (getDoc can return a stale listener cache
+    // right after the mark transaction) and adds the player to rewardsGrantedUids atomically, so
+    // several facilitator screens never pay the same player twice.
+    const claim = await runTransaction(db, async (tx) => {
+      const s = await tx.get(ref);
+      if (!s.exists()) return { error: 'Session not found' } as const;
+      const sp = parseClassFlowSprint(s.data()?.classFlowSprint);
+      if (!sp) return { error: 'No sprint data' } as const;
+      const actingIsHost = canActAsRoomHost(s.data()?.hostUid, actingUid, actingEmail, actingDisplayName);
+      const canSelfGrant = actingUid === playerUid && sp.status === 'live';
+      if (!actingIsHost && !canSelfGrant) return { error: 'Only the session host can grant sprint rewards' } as const;
+      if (!(sp.markedCompleteUids || []).includes(playerUid)) return { error: 'Player is not marked complete for this sprint' } as const;
+      if ((sp.rewardsGrantedUids || []).includes(playerUid)) return { already: true } as const;
+      tx.update(ref, { 'classFlowSprint.rewardsGrantedUids': arrayUnion(playerUid), updatedAt: serverTimestamp() });
+      return { data: s.data(), sprint: sp } as const;
+    });
+    if ('error' in claim) return { ok: false, error: claim.error };
+    if ('already' in claim) return { ok: true, granted: false };
+    const roomData = claim.data;
+    const sprint = claim.sprint;
+    const snap = { data: () => roomData };
 
     const ppAmt = sprint.rewardParticipationPoints;
     const vaultPP = sprint.rewardVaultPP;
@@ -629,7 +636,11 @@ export async function grantSprintRewardForSinglePlayer(
     await ensureSessionPlayerRowForOfflineGrant(sessionId, playerUid, playerDisplayName);
 
     const statsOk = await trackParticipation(sessionId, playerUid, ppAmt, { playerDisplayName });
-    if (!statsOk) return { ok: false, error: 'Could not update participation stats for this player' };
+    if (!statsOk) {
+      // Nothing was paid yet: release the claim so the reward can be retried.
+      await updateDoc(ref, { 'classFlowSprint.rewardsGrantedUids': arrayRemove(playerUid) }).catch(() => undefined);
+      return { ok: false, error: 'Could not update participation stats for this player' };
+    }
 
     // Do NOT call bumpSessionPlayerParticipationMoves here — trackParticipation already
     // updates session players[].participationCount / movesEarned / powerPoints.
@@ -707,11 +718,6 @@ export async function grantSprintRewardForSinglePlayer(
         }
       }
     }
-
-    await updateDoc(ref, {
-      'classFlowSprint.rewardsGrantedUids': arrayUnion(playerUid),
-      updatedAt: serverTimestamp(),
-    });
 
     if (!options?.skipBattleLog) {
       await updateDoc(ref, {

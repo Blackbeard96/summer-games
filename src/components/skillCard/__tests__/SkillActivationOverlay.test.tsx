@@ -1,7 +1,12 @@
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import SkillActivationOverlay from '../SkillActivationOverlay';
-import { clearSkillActivations, emitSkillActivation, SKILL_CARD_DURATION_MS } from '../../../utils/skillActivationQueue';
+import {
+  clearSkillActivations,
+  emitSkillActivation,
+  SKILL_CARD_DETAILS_EXTRA_MS,
+  SKILL_CARD_DURATION_MS,
+} from '../../../utils/skillActivationQueue';
 
 jest.mock('../../../firebase', () => ({ db: {}, storage: {} }));
 
@@ -65,6 +70,32 @@ describe('SkillActivationOverlay', () => {
       jest.advanceTimersByTime(SKILL_CARD_DURATION_MS + 10);
     });
     show('ov-5', 'd1');
+    expect(screen.queryByTestId('skill-activation-card')).toBeNull();
+  });
+
+  it('shows Class Skill caster, target, effect and duration, and stays up longer', () => {
+    render(<SkillActivationOverlay />);
+    act(() => {
+      emitSkillActivation({
+        id: 'irl:1',
+        skill: { id: 'irl_abc', name: 'Silent Ember', category: 'elemental', elementalAffinity: 'fire' },
+        actorName: 'Ava',
+        targetName: 'Ben',
+        side: 'ally',
+        details: ['Target must remain silent for 2 minutes.', 'Duration: 2 min'],
+      });
+    });
+    expect(screen.getByText('Silent Ember')).toBeInTheDocument();
+    expect(screen.getByText('Ava')).toBeInTheDocument();
+    expect(screen.getByText(/Ben/)).toBeInTheDocument();
+    expect(screen.getByText('Duration: 2 min')).toBeInTheDocument();
+    act(() => {
+      jest.advanceTimersByTime(SKILL_CARD_DURATION_MS + 10);
+    });
+    expect(screen.getByTestId('skill-activation-card')).toBeInTheDocument();
+    act(() => {
+      jest.advanceTimersByTime(SKILL_CARD_DETAILS_EXTRA_MS);
+    });
     expect(screen.queryByTestId('skill-activation-card')).toBeNull();
   });
 });

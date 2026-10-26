@@ -18,6 +18,7 @@ import {
   getElementalAffinityRingMasteryBonusFromArtifactLevel,
 } from '../utils/artifactUtils';
 import { formatBattleMoveTargetLabel } from '../utils/battleMoveTargetUi';
+import ClassSkillsLoadout from './classSkills/ClassSkillsLoadout';
 import { doc, getDoc, getDocFromCache, updateDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getRRCandyMoves, getRRCandyDisplayName, shieldOffMaxShieldRemovePercent } from '../utils/rrCandyMoves';
@@ -2865,6 +2866,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           getElementalColor(iconKey)
         );
       })()}
+
+      <ClassSkillsLoadout moves={moves} />
 
       {/* Artifact Skills Section — from equipped legendary artifacts; blank if none */}
       <div style={{ marginBottom: '2rem' }}>

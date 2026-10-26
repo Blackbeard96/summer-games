@@ -273,6 +273,7 @@ export type PPLedgerSourceType =
   | 'generator'
   | 'skillUpgrade'
   | 'battlePass'
+  | 'classSkill'
   | 'other';
 
 export interface PPLedgerEntry {

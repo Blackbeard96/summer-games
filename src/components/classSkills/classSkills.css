@@ -1,0 +1,69 @@
+/* Class Skills (IRL) — builds on the Class Flow (.cf-*) look */
+.cs-root { --cs-el: var(--cf-gold); }
+.cs-el-fire { --cs-el: #ef5a2a; }
+.cs-el-water { --cs-el: #3b8df2; }
+.cs-el-air { --cs-el: #9b7cf6; }
+.cs-el-earth { --cs-el: #3fa36b; }
+.cs-el-lightning { --cs-el: #f5b52a; }
+.cs-el-light { --cs-el: #f3d36b; }
+.cs-el-shadow { --cs-el: #8a7fb0; }
+.cs-el-metal { --cs-el: #b8c2cc; }
+
+.cs-skill-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.cs-skill {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid color-mix(in srgb, var(--cs-el) 45%, transparent);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--cf-panel);
+}
+.cs-skill--locked { opacity: 0.72; }
+.cs-skill-art { display: block; width: 100%; aspect-ratio: 300 / 228; object-fit: cover; }
+.cs-skill-art--lg { width: 160px; border-radius: 10px; flex-shrink: 0; }
+.cs-skill-body { padding: 10px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.cs-skill-body .cf-btn { margin-top: auto; align-self: flex-start; }
+.cs-skill-name { font-family: 'Cinzel', serif; letter-spacing: 0.06em; color: var(--cs-el); font-size: 15px; }
+.cs-skill-effect { font-size: 13px; line-height: 1.4; }
+.cs-skill-reason { font-size: 12px; color: var(--cf-amber); }
+
+.cs-pending { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 13px; }
+
+.cs-modal-head { display: flex; gap: 12px; align-items: flex-start; margin: 10px 0; }
+@media (max-width: 520px) {
+  .cs-modal-head { flex-direction: column; }
+  .cs-skill-art--lg { width: 100%; }
+}
+
+.cs-effects { display: flex; flex-direction: column; gap: 8px; }
+.cs-effect { padding: 0; border-left: 3px solid var(--cs-el); }
+.cs-effect--mine { box-shadow: 0 0 0 1px color-mix(in srgb, var(--cs-el) 60%, transparent), 0 0 18px color-mix(in srgb, var(--cs-el) 25%, transparent); }
+.cs-effect-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.cs-effect-art { width: 56px; height: 43px; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
+.cs-effect-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.cs-effect-rule { font-size: 12px; color: var(--cf-text); opacity: 0.85; }
+.cs-effect-clock {
+  font-family: 'Cinzel', serif;
+  font-size: 18px;
+  color: var(--cs-el);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.cs-effect-details { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.cs-rule-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.cs-rule-target { font-weight: 600; margin-right: auto; }
+
+.cs-settings .cf-row { align-items: flex-end; }
+.cs-history .cf-table { margin-bottom: 4px; }

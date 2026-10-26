@@ -647,6 +647,14 @@ service cloud.firestore {
       allow read, write: if request.auth != null && 
         (request.auth.uid == userId || 
          request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']);
+      // App admins verify elemental level when approving Class Skills (read only).
+      allow read: if isAppAdminUser();
+    }
+
+    // Class Skills (IRL) library. Designated admin accounts only. Never widen this to an email domain: students share school domains.
+    match /classSkills/{skillId} {
+      allow read: if request.auth != null;
+      allow write: if isLiveEventStaff() || isAppAdminUser();
     }
     
     // Legacy moves/{userId} doc (same shape as battleMoves; used by older clients + power level recalc)
@@ -805,14 +813,14 @@ service cloud.firestore {
       
       // Host/admin OR students in the session class (live event battle state, moves, revive potion, etc.)
       // teacherId matches hostUid on new sessions; allow both so older docs or edge cases still authorize the teacher.
-      // Class Flow reward settings (classFlowConfig) are facilitator-only.
+      // Class Flow reward settings (classFlowConfig) and Class Skills settings (irlSkillsConfig) are facilitator-only.
       allow update: if request.auth != null && (
         resource.data.hostUid == request.auth.uid ||
         resource.data.teacherId == request.auth.uid ||
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
         (
           (canAccessInSessionRoomByData(resource.data) || isSessionPresenceParticipant(sessionId)) &&
-          (isAppAdminUser() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['classFlowConfig']))
+          (isAppAdminUser() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['classFlowConfig', 'irlSkillsConfig']))
         )
       );
       
@@ -901,6 +909,54 @@ service cloud.firestore {
           request.resource.data.resolvedBy == null
         );
         allow delete: if isCfFacilitator();
+      }
+
+      // ---------------- Class Skills (IRL) ----------------
+      // Players only request activations and file non-binding reports. Approvals, active rules,
+      // cooldowns, consequences and rewards are written by facilitators only.
+      match /irlActivations/{activationId} {
+        allow read: if canReadInSessionRoomSession(sessionId);
+        allow create: if canReadInSessionRoomSession(sessionId) &&
+          request.resource.data.casterUid == request.auth.uid &&
+          request.resource.data.status == 'pending' &&
+          request.resource.data.keys().hasOnly(['skillId', 'skillName', 'element', 'casterUid', 'casterName', 'targetType', 'targetUids', 'targetLabel', 'requestedAtMs', 'status']) &&
+          request.resource.data.skillId is string &&
+          request.resource.data.targetUids is list &&
+          request.resource.data.targetUids.size() <= 60;
+        allow update: if isCfFacilitator() || (
+          request.auth != null &&
+          resource.data.casterUid == request.auth.uid &&
+          resource.data.status == 'pending' &&
+          request.resource.data.status == 'cancelled' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedAtMs'])
+        );
+        allow delete: if isCfFacilitator();
+      }
+
+      match /irlRules/{ruleId} {
+        allow read: if canReadInSessionRoomSession(sessionId);
+        allow write: if isCfFacilitator();
+      }
+
+      match /irlPlayerState/{uid} {
+        allow read: if canReadInSessionRoomSession(sessionId);
+        allow write: if isCfFacilitator();
+      }
+
+      // Player reports are flags for the facilitator; they never apply a consequence.
+      match /irlViolations/{violationId} {
+        allow read: if isCfFacilitator() || (request.auth != null && resource.data.reporterUid == request.auth.uid);
+        allow create: if isCfFacilitator() || (
+          canReadInSessionRoomSession(sessionId) &&
+          request.resource.data.reporterUid == request.auth.uid &&
+          request.resource.data.status == 'player_report' &&
+          request.resource.data.decidedBy == null &&
+          request.resource.data.consequenceApplied == null &&
+          request.resource.data.keys().hasOnly(['ruleId', 'targetUid', 'reporterUid', 'reporterName', 'note', 'status', 'createdAtMs', 'decidedBy', 'decidedAtMs', 'consequenceApplied']) &&
+          request.resource.data.note is string &&
+          request.resource.data.note.size() <= 500
+        );
+        allow update, delete: if isCfFacilitator();
       }
 
       // Event-scoped team names / manual teams. Players may only suggest a name.

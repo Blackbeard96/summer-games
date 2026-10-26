@@ -104,6 +104,23 @@
   color: rgba(255, 255, 255, 0.6);
 }
 
+.mst-skill-card__details {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(212, 168, 79, 0.35);
+  font-family: var(--mst-font-body, 'Outfit', sans-serif);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.mst-skill-card__details > div {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .mst-skill-card__sr {
   position: absolute;
   width: 1px;

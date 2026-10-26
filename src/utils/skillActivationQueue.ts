@@ -16,7 +16,11 @@ export interface SkillActivationEvent {
   actorUid?: string | null;
   side?: SkillActivationSide;
   targetName?: string | null;
+  /** Short extra lines (Class Skills: effect + duration). Cards with details stay up longer. */
+  details?: string[];
 }
+
+export const SKILL_CARD_DETAILS_EXTRA_MS = 2000;
 
 /** Spec timing: 0.3s entrance + 0.4s reveal + 1.4s display + 0.4s exit. */
 export const SKILL_CARD_DURATION_MS = 2500;
