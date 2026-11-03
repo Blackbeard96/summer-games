@@ -59,6 +59,23 @@ const num = (v: unknown, d: number, min: number, max: number) => {
   return Math.max(min, Math.min(max, n));
 };
 const str = (v: unknown, d = '') => (typeof v === 'string' ? v : d);
+
+/** Only https URLs are rendered; anything else is dropped. */
+export function parseImageUrl(v: unknown): string | undefined {
+  return typeof v === 'string' && /^https:\/\/\S+$/.test(v.trim()) ? v.trim() : undefined;
+}
+
+/** Spread-friendly: Firestore rejects `undefined`, so omit the key when there's no image. */
+export function imageField(url: string | undefined | null): { imageUrl?: string } {
+  const safe = parseImageUrl(url);
+  return safe ? { imageUrl: safe } : {};
+}
+
+/** Copy of `o` with the picture set, or with the key removed when cleared. */
+export function withImage<T extends { imageUrl?: string }>(o: T, url: string | undefined | null): T {
+  const { imageUrl: _drop, ...rest } = o;
+  return { ...(rest as T), ...imageField(url) };
+}
 function oneOf<T extends string>(v: unknown, allowed: readonly T[], d: T): T {
   return typeof v === 'string' && (allowed as readonly string[]).includes(v) ? (v as T) : d;
 }
@@ -98,6 +115,7 @@ export function parseSprintAssignment(raw: unknown): CfSprintAssignment | null {
     evidenceRequired: bool(o.evidenceRequired, false),
     isExtraCredit: bool(o.isExtraCredit, false),
     bonus: parseBonus(o.bonus),
+    ...imageField(o.imageUrl as string | undefined),
   };
 }
 
@@ -146,6 +164,7 @@ function parsePlan(raw: unknown): CfSprintPlanItem[] {
       objective: str(o.objective),
       durationMinutes: Math.floor(num(o.durationMinutes, 10, 1, 120)),
       assignments: parseSprintAssignments(o.assignments),
+      ...imageField(o.imageUrl as string | undefined),
     });
   }
   return out;
@@ -225,6 +244,7 @@ export function parseWorkAssignment(id: string, raw: unknown): CfWorkAssignment 
     bonus: parseBonus(o.bonus),
     classId: typeof o.classId === 'string' && o.classId ? o.classId : null,
     status: oneOf(o.status, ['draft', 'active', 'archived'] as const, 'draft'),
+    ...imageField(o.imageUrl as string | undefined),
     createdBy: str(o.createdBy),
     createdAt: (o.createdAt as CfWorkAssignment['createdAt']) ?? null,
     updatedAt: (o.updatedAt as CfWorkAssignment['updatedAt']) ?? null,
@@ -245,6 +265,7 @@ export function toSprintAssignment(w: CfWorkAssignment, points?: number): CfSpri
     evidenceRequired: w.evidenceRequired,
     isExtraCredit: w.isExtraCredit,
     bonus: { ...w.bonus },
+    ...imageField(w.imageUrl),
   };
 }
 

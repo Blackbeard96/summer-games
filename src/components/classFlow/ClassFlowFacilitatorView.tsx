@@ -4,11 +4,13 @@ import type { CfSprintAssignment } from '../../types/classFlowWork';
 import { sprintPhase, sprintTasks } from '../../utils/classFlowConfig';
 import {
   endPlannedSprint,
+  setLiveSprintImage,
   startPlannedSprint,
   updateCfConfig,
   updateLiveSprintAssignments,
 } from '../../utils/classFlowWorkService';
 import SprintWorkPicker from './SprintWorkPicker';
+import CfImageField from './CfImageField';
 import { sprintTimerInput, updateClassFlowSprintTimer } from '../../utils/liveEventSprintService';
 import ClassFlowSprintTimer from './ClassFlowSprintTimer';
 import PlanEditor from './facilitator/PlanEditor';
@@ -306,6 +308,15 @@ const ClassFlowFacilitatorView: React.FC<Props> = (props) => {
                     </button>
                   </div>
                 )}
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                <CfImageField
+                  value={sprint.imageUrl}
+                  actorUid={actor.uid}
+                  label="Sprint image"
+                  onMessage={(text, error) => setMessage({ text, error })}
+                  onChange={(url) => run(() => setLiveSprintImage(sessionId, sprint.id, url ?? null), url ? 'Sprint image updated.' : 'Sprint image removed.')}
+                />
               </div>
               <SprintWorkPicker
                 assignments={workDraft ?? liveWork}

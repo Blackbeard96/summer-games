@@ -111,6 +111,32 @@ describe('ClassFlowSubmitModal', () => {
     ]);
   });
 
+  it('shows sprint and work images beside the objective and instructions in full screen', () => {
+    render(
+      <ClassFlowSprintTimer
+        sprint={sprint({
+          imageUrl: 'https://img.test/sprint.png',
+          assignments: [{ ...assignment, imageUrl: 'https://img.test/work.png' }],
+        })}
+        nowMs={60_000}
+        expandable
+        acceptLate={false}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Full screen/ }));
+    const dialog = screen.getByRole('dialog');
+    const sprintImg = within(dialog).getByRole('button', { name: 'Enlarge sprint image' });
+    expect(sprintImg.closest('.cf-fullscreen-objective-wrap--image')).toHaveTextContent('Ship the MVP');
+    const workImg = within(dialog).getByRole('button', { name: 'Enlarge image for Build the prototype' });
+    expect(workImg.closest('.cf-fullscreen-item-content')).toHaveTextContent('Step 1');
+    fireEvent.click(workImg);
+    const zoom = within(dialog).getByRole('button', { name: 'Close image' });
+    expect(zoom.querySelector('img')).toHaveAttribute('src', 'https://img.test/work.png');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(within(dialog).queryByRole('button', { name: 'Close image' })).toBeNull();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
   it('does not offer work that was already submitted unless a revision was requested', () => {
     render(
       <ClassFlowSubmitModal

@@ -14,6 +14,7 @@ import { buildTeams, formatTeamTag, teamTableNumber } from '../../utils/classFlo
 import {
   claimMyPayouts,
   publishPublicState,
+  recordWorkForPlayer,
   reviewSubmission,
   subscribeAllocations,
   subscribeAllSubmissions,
@@ -440,7 +441,44 @@ const ClassFlowWorkPanel: React.FC<ClassFlowWorkPanelProps> = ({
     [pendingFor, sessionId, currentUserId]
   );
 
-  const reviewActions = useMemo(() => ({ approvePlayer, requestRevision }), [approvePlayer, requestRevision]);
+  const acceptForPlayer = useCallback(
+    async (uid: string, playerName: string, note: string) => {
+      if (!sprint) return { ok: false, error: 'No sprint running.' };
+      const required = sprintTasks(sprint).filter((a) => !a.isExtraCredit);
+      const covered = (assignmentId: string) =>
+        currentSprintSubs.some(
+          (s) =>
+            s.assignmentId === assignmentId &&
+            s.status === 'approved' &&
+            (s.playerId === uid || s.contributorIds.includes(uid))
+        );
+      const todo = required.filter((a) => !covered(a.assignmentId));
+      if (!todo.length) return { ok: false, error: 'This player’s work is already approved.' };
+      const team = teams.find((t) => t.memberIds.includes(uid)) ?? null;
+      for (const a of todo) {
+        const r = await recordWorkForPlayer({
+          sessionId,
+          sprintId: sprint.id,
+          assignmentId: a.assignmentId,
+          uid,
+          playerName,
+          teamId: team?.id ?? null,
+          teamName: team?.displayName ?? null,
+          points: a.points,
+          note,
+          reviewerUid: currentUserId,
+        });
+        if (!r.ok) return r;
+      }
+      return { ok: true };
+    },
+    [sprint, currentSprintSubs, teams, sessionId, currentUserId]
+  );
+
+  const reviewActions = useMemo(
+    () => ({ approvePlayer, requestRevision, acceptForPlayer }),
+    [approvePlayer, requestRevision, acceptForPlayer]
+  );
 
   // Facilitator: the "Request support" queue for the current sprint, with a toast for each new request.
   const [support, setSupport] = useState<CfSupportRequest[]>([]);

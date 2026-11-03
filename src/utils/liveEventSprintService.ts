@@ -37,6 +37,7 @@ import { fetchClassroomStudentUids } from './classFlowSprintRosterService';
 import type { CfSprintAssignment } from '../types/classFlowWork';
 import {
   extendedEndsAtMs,
+  imageField,
   parseSprintAssignments,
   resumedEndsAtMs,
   type CfTimerInput,
@@ -117,6 +118,7 @@ export function parseClassFlowSprint(raw: unknown): ClassFlowSprintState | null 
     objective: typeof o.objective === 'string' ? o.objective : undefined,
     planId: typeof o.planId === 'string' ? o.planId : null,
     assignments: parseSprintAssignments(o.assignments),
+    ...imageField(o.imageUrl as string | undefined),
   };
 }
 
@@ -143,6 +145,7 @@ export type StartClassFlowSprintPayload = {
   objective?: string;
   planId?: string | null;
   assignments?: CfSprintAssignment[];
+  imageUrl?: string;
   /** Server-corrected clock so every client sees the same countdown. */
   nowMs?: number;
 };
@@ -225,6 +228,7 @@ export async function startClassFlowSprint(
         rewardsGrantedUids: [],
         incompletePenaltiesGrantedUids: [],
         ...workFields,
+        ...imageField(payload.imageUrl),
       },
       updatedAt: serverTimestamp(),
       battleLog: arrayUnion(

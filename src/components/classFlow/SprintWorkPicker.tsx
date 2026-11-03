@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { CfSprintAssignment, CfSubmissionMethod, CfWorkAssignment, CfWorkType } from '../../types/classFlowWork';
-import { CF_METHOD_LABELS, CF_SUBMISSION_METHODS, toSprintAssignment } from '../../utils/classFlowConfig';
+import { CF_METHOD_LABELS, CF_SUBMISSION_METHODS, imageField, toSprintAssignment, withImage } from '../../utils/classFlowConfig';
 import { saveWorkAssignment, subscribeWorkLibrary } from '../../utils/classFlowWorkService';
+import CfImageField from './CfImageField';
 import './classFlow.css';
 
 interface Props {
@@ -34,6 +35,7 @@ interface NewWork {
   methods: CfSubmissionMethod[];
   isExtraCredit: boolean;
   saveToLibrary: boolean;
+  imageUrl?: string;
 }
 
 const EMPTY_NEW: NewWork = {
@@ -106,6 +108,7 @@ const SprintWorkPicker: React.FC<Props> = ({ assignments, onChange, actorUid, cl
       bonus: { type: 'none', value: 0, targetAssignmentId: null },
       classId: classId || null,
       status: 'active',
+      ...imageField(draft.imageUrl),
     };
     let id = `adhoc_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
     if (draft.saveToLibrary) {
@@ -144,6 +147,13 @@ const SprintWorkPicker: React.FC<Props> = ({ assignments, onChange, actorUid, cl
               onChange={(e) => patchAt(i, { points: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
             />
             <span className="cf-sub">pts</span>
+            <CfImageField
+              compact
+              value={a.imageUrl}
+              actorUid={actorUid}
+              onMessage={onMessage}
+              onChange={(url) => onChange(assignments.map((x, j) => (j === i ? withImage(x, url) : x)))}
+            />
             <button type="button" className="cf-btn cf-btn--ghost" onClick={() => onChange(move(assignments, i, i - 1))} aria-label="Move up">↑</button>
             <button type="button" className="cf-btn cf-btn--ghost" onClick={() => onChange(move(assignments, i, i + 1))} aria-label="Move down">↓</button>
             <button
@@ -222,6 +232,13 @@ const SprintWorkPicker: React.FC<Props> = ({ assignments, onChange, actorUid, cl
           <input className="cf-input" placeholder="Description (optional)" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
           <textarea className="cf-textarea" style={{ minHeight: 50 }} placeholder="Instructions (optional)" value={draft.instructions} onChange={(e) => setDraft({ ...draft, instructions: e.target.value })} />
           <input className="cf-input" placeholder="Evidence required (optional)" value={draft.submissionRequirements} onChange={(e) => setDraft({ ...draft, submissionRequirements: e.target.value })} />
+          <CfImageField
+            value={draft.imageUrl}
+            actorUid={actorUid}
+            onMessage={onMessage}
+            label="Image"
+            onChange={(url) => setDraft((d) => withImage(d, url))}
+          />
           <div className="cf-row">
             {CF_SUBMISSION_METHODS.map((m) => (
               <label key={m} className="cf-check" style={{ fontSize: 12 }}>

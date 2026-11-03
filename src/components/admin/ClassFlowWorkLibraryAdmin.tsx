@@ -9,7 +9,8 @@ import type {
   CfSubmissionMethod,
   CfWorkAssignment,
 } from '../../types/classFlowWork';
-import { CF_METHOD_LABELS, CF_SUBMISSION_METHODS } from '../../utils/classFlowConfig';
+import { CF_METHOD_LABELS, CF_SUBMISSION_METHODS, withImage } from '../../utils/classFlowConfig';
+import CfImageField from '../classFlow/CfImageField';
 import {
   deleteWorkAssignment,
   saveWorkAssignment,
@@ -139,6 +140,17 @@ const ClassFlowWorkLibraryAdmin: React.FC = () => {
             Instructions
             <textarea className="cf-textarea" value={draft.instructions} onChange={(e) => set({ instructions: e.target.value })} />
           </label>
+          {currentUser && (
+            <div className="cf-label">
+              Image (shown beside the instructions in full screen)
+              <CfImageField
+                value={draft.imageUrl}
+                actorUid={currentUser.uid}
+                onMessage={(text, isError) => (isError ? setError(text) : setMessage(text))}
+                onChange={(url) => setDraft((d) => (d ? withImage(d, url) : d))}
+              />
+            </div>
+          )}
           <label className="cf-label">
             Submission requirements (evidence)
             <textarea className="cf-textarea" style={{ minHeight: 50 }} value={draft.submissionRequirements} onChange={(e) => set({ submissionRequirements: e.target.value })} />

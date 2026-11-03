@@ -37,6 +37,8 @@ export interface CfWorkAssignment {
   bonus: CfBonusConfig;
   classId: string | null;
   status: CfAssignmentStatus;
+  /** Optional picture shown next to the instructions (full-screen sprint view). */
+  imageUrl?: string;
   createdBy: string;
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
@@ -55,6 +57,7 @@ export interface CfSprintAssignment {
   evidenceRequired: boolean;
   isExtraCredit: boolean;
   bonus: CfBonusConfig;
+  imageUrl?: string;
 }
 
 export interface CfSprintPlanItem {
@@ -63,6 +66,8 @@ export interface CfSprintPlanItem {
   objective: string;
   durationMinutes: number;
   assignments: CfSprintAssignment[];
+  /** Optional picture shown next to the sprint objective. */
+  imageUrl?: string;
 }
 
 export type CfGrouping = 'squad' | 'table' | 'manual';

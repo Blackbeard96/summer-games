@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ClassFlowSprintState } from '../../types/season1';
 import type { CfSprintAssignment } from '../../types/classFlowWork';
@@ -105,6 +105,9 @@ const ClassFlowSprintTimer: React.FC<Props> = ({
   onFullScreenChange,
 }) => {
   const [localOpen, setLocalOpen] = useState(false);
+  const [zoomUrl, setZoomUrl] = useState<string | null>(null);
+  const zoomRef = useRef<string | null>(null);
+  zoomRef.current = zoomUrl;
   const isOpen = expandable && (fullScreen ?? localOpen);
   const setOpen = (v: boolean) => (onFullScreenChange ? onFullScreenChange(v) : setLocalOpen(v));
 
@@ -122,7 +125,11 @@ const ClassFlowSprintTimer: React.FC<Props> = ({
 
   useEffect(() => {
     if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (zoomRef.current) setZoomUrl(null);
+      else setOpen(false);
+    };
     window.addEventListener('keydown', onKey);
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -151,8 +158,17 @@ const ClassFlowSprintTimer: React.FC<Props> = ({
             {formatClock(remaining)}
           </div>
 
-          {(sprint.objective || sprint.description) && (
-            <div className="cf-fullscreen-objective">{sprint.objective || sprint.description}</div>
+          {(sprint.objective || sprint.description || sprint.imageUrl) && (
+            <div className={`cf-fullscreen-objective-wrap${sprint.imageUrl ? ' cf-fullscreen-objective-wrap--image' : ''}`}>
+              {sprint.imageUrl && (
+                <button type="button" className="cf-fullscreen-image" onClick={() => setZoomUrl(sprint.imageUrl!)} aria-label="Enlarge sprint image">
+                  <img src={sprint.imageUrl} alt="" />
+                </button>
+              )}
+              {(sprint.objective || sprint.description) && (
+                <div className="cf-fullscreen-objective">{sprint.objective || sprint.description}</div>
+              )}
+            </div>
           )}
 
           {(availablePoints != null || submissionSummary) && (
@@ -186,10 +202,24 @@ const ClassFlowSprintTimer: React.FC<Props> = ({
                       {r.assignment.isExtraCredit ? ' · Extra credit' : ''}
                       {r.detail ? ` · ${r.detail}` : ''}
                     </div>
-                    {r.assignment.description && <div style={{ marginTop: 4, fontSize: 14 }}>{r.assignment.description}</div>}
-                    {r.assignment.instructions && (
-                      <div className="cf-sub" style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{r.assignment.instructions}</div>
-                    )}
+                    <div className={r.assignment.imageUrl ? 'cf-fullscreen-item-content' : undefined}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {r.assignment.description && <div style={{ marginTop: 4, fontSize: 14 }}>{r.assignment.description}</div>}
+                        {r.assignment.instructions && (
+                          <div className="cf-sub" style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{r.assignment.instructions}</div>
+                        )}
+                      </div>
+                      {r.assignment.imageUrl && (
+                        <button
+                          type="button"
+                          className="cf-fullscreen-image cf-fullscreen-image--item"
+                          onClick={() => setZoomUrl(r.assignment.imageUrl!)}
+                          aria-label={`Enlarge image for ${r.assignment.title}`}
+                        >
+                          <img src={r.assignment.imageUrl} alt="" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div className="cf-row" style={{ flexShrink: 0 }}>
                     {r.statusLabel && <span className={`cf-badge ${r.statusClass || ''}`}>{r.statusLabel}</span>}
@@ -231,6 +261,12 @@ const ClassFlowSprintTimer: React.FC<Props> = ({
                 {open ? 'Submit Work' : 'Submissions closed'}
               </button>
             </div>
+          )}
+
+          {zoomUrl && (
+            <button type="button" className="cf-image-zoom" onClick={() => setZoomUrl(null)} aria-label="Close image">
+              <img src={zoomUrl} alt="" />
+            </button>
           )}
         </div>,
         document.body

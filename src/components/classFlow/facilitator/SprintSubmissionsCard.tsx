@@ -8,6 +8,8 @@ type SortMode = 'order' | 'resubmit' | 'name';
 export interface SprintReviewActions {
   approvePlayer: (uid: string) => Promise<{ ok: boolean; error?: string }>;
   requestRevision: (uid: string, feedback: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Approve the sprint's required work on the player's behalf (they may be offline). */
+  acceptForPlayer: (uid: string, playerName: string, note: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 const STATE_BADGE: Record<Exclude<CfRosterReviewState, 'none'>, { label: string; cls: string }> = {
@@ -101,6 +103,20 @@ const SprintSubmissionsCard: React.FC<{
     const res = await actions.requestRevision(r.uid, feedback);
     setBusyUid(null);
     if (!res.ok) notify({ title: 'Could not request revision', body: res.error, tone: 'bad' });
+  };
+
+  const accept = async (r: CfRosterStatusRow) => {
+    if (!actions) return;
+    const note = window.prompt(
+      `Accept ${r.name}'s work for this sprint? They get full credit and the sprint rewards, even if they're offline.\n\nOptional note (e.g. "Turned in on paper"):`,
+      ''
+    );
+    if (note === null) return;
+    setBusyUid(r.uid);
+    const res = await actions.acceptForPlayer(r.uid, r.name, note);
+    setBusyUid(null);
+    if (res.ok) notify({ title: 'Work accepted', body: r.name, tone: 'good' });
+    else notify({ title: 'Could not accept work', body: res.error, tone: 'bad' });
   };
 
   const resolve = async (req: CfSupportRequest) => {
@@ -219,6 +235,17 @@ const SprintSubmissionsCard: React.FC<{
                         ↺ Request revision
                       </button>
                     </>
+                  )}
+                  {(state === 'none' || state === 'revision') && actions && (
+                    <button
+                      type="button"
+                      className="cf-btn cf-btn--ghost"
+                      disabled={busyUid === r.uid}
+                      title="Record this player's work as done and approve it (works when they're offline)"
+                      onClick={() => void accept(r)}
+                    >
+                      ✓ Accept work
+                    </button>
                   )}
                 </div>
               );

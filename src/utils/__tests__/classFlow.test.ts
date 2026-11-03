@@ -3,7 +3,12 @@ import {
   effectiveDistributionMode,
   extendedEndsAtMs,
   formatClock,
+  imageField,
   parseCfConfig,
+  parseSprintAssignment,
+  parseWorkAssignment,
+  toSprintAssignment,
+  withImage,
   resumedEndsAtMs,
   sprintPhase,
   sprintRemainingMs,
@@ -477,5 +482,28 @@ describe('rosterReviewState', () => {
     expect(rosterReviewState({ submitted: 1, approved: 0, revisions: 1, total: 2 })).toBe('revision');
     expect(rosterReviewState({ submitted: 2, approved: 2, revisions: 0, total: 2 })).toBe('approved');
     expect(rosterReviewState({ submitted: 1, approved: 1, revisions: 0, total: 2 })).toBe('none');
+  });
+});
+
+describe('Class Flow images', () => {
+  it('keeps only https image URLs and omits the key otherwise', () => {
+    expect(imageField('https://img.test/a.png')).toEqual({ imageUrl: 'https://img.test/a.png' });
+    expect(imageField('http://img.test/a.png')).toEqual({});
+    expect(imageField('javascript:alert(1)')).toEqual({});
+    expect(imageField(undefined)).toEqual({});
+    expect('imageUrl' in withImage({ title: 'x', imageUrl: 'https://img.test/a.png' }, undefined)).toBe(false);
+  });
+
+  it('carries the image from library work into the sprint copy', () => {
+    const w = parseWorkAssignment('w1', { title: 'Draw', imageUrl: 'https://img.test/w.png', basePoints: 50 });
+    const s = toSprintAssignment(w);
+    expect(s.imageUrl).toBe('https://img.test/w.png');
+    expect(parseSprintAssignment(s)?.imageUrl).toBe('https://img.test/w.png');
+    expect('imageUrl' in toSprintAssignment(parseWorkAssignment('w2', { title: 'No image' }))).toBe(false);
+  });
+
+  it('parses a plan item image', () => {
+    const c = parseCfConfig({ plan: [{ planId: 'p1', title: 'S1', imageUrl: 'https://img.test/p.png' }] });
+    expect(c.plan[0].imageUrl).toBe('https://img.test/p.png');
   });
 });

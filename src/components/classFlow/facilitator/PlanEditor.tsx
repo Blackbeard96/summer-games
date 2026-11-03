@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import type { CfSprintPlanItem } from '../../../types/classFlowWork';
 import { newPlanItem, updateCfConfig } from '../../../utils/classFlowWorkService';
+import { withImage } from '../../../utils/classFlowConfig';
+import CfImageField from '../CfImageField';
 import SprintWorkPicker from '../SprintWorkPicker';
 
 interface Props {
@@ -109,6 +111,15 @@ const PlanEditor: React.FC<Props> = ({ sessionId, plan, activePlanId, classId, a
               value={item.objective}
               onChange={(e) => patchItem(i, { objective: e.target.value })}
             />
+            <div style={{ marginTop: 8 }}>
+              <CfImageField
+                value={item.imageUrl}
+                actorUid={actorUid}
+                onMessage={onMessage}
+                label="Sprint image"
+                onChange={(url) => update((d) => d.map((x, j) => (j === i ? withImage(x, url) : x)))}
+              />
+            </div>
             <div style={{ marginTop: 8 }}>
               <SprintWorkPicker
                 assignments={item.assignments}

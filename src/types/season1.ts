@@ -48,6 +48,8 @@ export interface ClassFlowSprintState {
   objective?: string;
   planId?: string | null;
   assignments?: CfSprintAssignment[];
+  /** Optional picture shown next to the objective in full screen. */
+  imageUrl?: string;
 }
 
 export type EnergyType = 'kinetic' | 'mental' | 'emotional' | 'spiritual';

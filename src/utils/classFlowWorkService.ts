@@ -31,7 +31,7 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import type { DocumentData, DocumentSnapshot, QuerySnapshot } from 'firebase/firestore';
+import type { DocumentData, DocumentSnapshot, QuerySnapshot, Transaction } from 'firebase/firestore';
 import { sharedSnapshot } from './sharedSnapshot';
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 import { storage } from '../firebase';
@@ -53,6 +53,7 @@ import type {
 } from '../types/classFlowWork';
 import {
   allocationDocId,
+  imageField,
   parseSprintAssignments,
   parseWorkAssignment,
   sharingDocId,
@@ -113,7 +114,10 @@ export async function saveWorkAssignment(
     });
     if (!data.title) return { ok: false, error: 'Title is required' };
     if (id) {
-      await updateDoc(doc(db, 'classFlowWorkLibrary', id), data);
+      await updateDoc(doc(db, 'classFlowWorkLibrary', id), {
+        ...data,
+        imageUrl: imageField(rest.imageUrl).imageUrl ?? deleteField(),
+      });
       return { ok: true, value: id };
     }
     const created = await addDoc(collection(db, 'classFlowWorkLibrary'), {
@@ -196,6 +200,7 @@ export async function startPlannedSprint(
     objective: plan.objective,
     planId: plan.planId,
     assignments: plan.assignments,
+    imageUrl: plan.imageUrl,
     nowMs,
   });
   if (!res.ok || !res.sprintId) return { ok: false, error: res.error || 'Could not start sprint' };
@@ -518,6 +523,37 @@ export async function uploadEvidenceFile(
   return { url: await getDownloadURL(r), path, name: file.name };
 }
 
+/** Picture for a Live Event sprint or a piece of work (shown beside the instructions in full screen). */
+export async function uploadClassFlowImage(uid: string, file: File): Promise<string> {
+  if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) throw new Error('Use a PNG, JPG, WebP, or GIF image');
+  if (file.size > 5 * 1024 * 1024) throw new Error('Image must be 5 MB or smaller');
+  const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-80);
+  const r = storageRef(storage, `classFlowImages/${uid}/${Date.now()}_${safe}`);
+  await uploadBytes(r, file, { contentType: file.type });
+  return getDownloadURL(r);
+}
+
+/** Set or clear the picture on the current sprint (and its archive). */
+export async function setLiveSprintImage(sessionId: string, sprintId: string, imageUrl: string | null): Promise<Result> {
+  try {
+    const safe = imageField(imageUrl).imageUrl;
+    await runTransaction(db, async (tx) => {
+      const roomSnap = await tx.get(room(sessionId));
+      if (roomSnap.data()?.classFlowSprint?.id !== sprintId) throw new Error('That sprint is no longer current.');
+      const archiveRef = subDoc(sessionId, 'cfSprints', sprintId);
+      const archiveSnap = await tx.get(archiveRef);
+      tx.update(room(sessionId), {
+        'classFlowSprint.imageUrl': safe ?? deleteField(),
+        updatedAt: serverTimestamp(),
+      });
+      if (archiveSnap.exists()) tx.update(archiveRef, { imageUrl: safe ?? deleteField() });
+    });
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 export interface SubmitWorkInput {
   sessionId: string;
   sprintId: string;
@@ -580,6 +616,111 @@ export async function submitWork(input: SubmitWorkInput): Promise<Result> {
   }
 }
 
+/** Credit is capped by the sprint's assignment value, never by the client-written requestedPoints. */
+async function sprintAssignmentInTx(
+  tx: Transaction,
+  sessionId: string,
+  sprintId: string,
+  assignmentId: string,
+  fallbackTitle?: string
+): Promise<CfSprintAssignment> {
+  const archiveSnap = await tx.get(subDoc(sessionId, 'cfSprints', sprintId));
+  let sprintAssignments = parseSprintAssignments(archiveSnap.exists() ? archiveSnap.data()?.assignments : null);
+  let liveTitle: string | undefined;
+  if (!sprintAssignments.length) {
+    const roomSnap = await tx.get(room(sessionId));
+    const live = roomSnap.data()?.classFlowSprint;
+    if (live?.id === sprintId) {
+      sprintAssignments = parseSprintAssignments(live.assignments);
+      liveTitle = typeof live.title === 'string' ? live.title : undefined;
+    }
+  }
+  const assignment =
+    sprintAssignments.find((a) => a.assignmentId === assignmentId) ??
+    (assignmentId === SPRINT_GOAL_ASSIGNMENT_ID
+      ? sprintGoalAssignment(fallbackTitle || liveTitle || 'Sprint goal')
+      : undefined);
+  if (!assignment) throw new Error('This work is not part of that sprint.');
+  return assignment;
+}
+
+export interface RecordWorkForPlayerInput {
+  sessionId: string;
+  sprintId: string;
+  assignmentId: string;
+  uid: string;
+  playerName: string;
+  teamId: string | null;
+  teamName: string | null;
+  points: number;
+  note: string;
+  reviewerUid: string;
+}
+
+/**
+ * Facilitator accepts work on a player's behalf (e.g. handed in on paper, or the player is offline).
+ * Approves an existing submission in place, otherwise creates an approved one under the same
+ * deterministic id, so it can never duplicate a player's own submission.
+ */
+export async function recordWorkForPlayer(input: RecordWorkForPlayerInput): Promise<Result> {
+  const { sessionId, sprintId, assignmentId, uid, reviewerUid } = input;
+  const ref = subDoc(sessionId, 'cfSubmissions', submissionDocId(sprintId, assignmentId, uid));
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      const allocSnap = await tx.get(subDoc(sessionId, 'cfAllocations', allocationDocId(sprintId, uid)));
+      if (allocSnap.exists() && allocSnap.data()?.status === 'paid_out') {
+        throw new Error('Rewards for this sprint were already paid to this player.');
+      }
+      const assignment = await sprintAssignmentInTx(tx, sessionId, sprintId, assignmentId);
+      const points = Math.max(0, Math.min(assignment.points, Math.floor(input.points)));
+      const now = Date.now();
+      const note = input.note.trim().slice(0, 600);
+      const entry: CfAuditEntry = { action: 'recorded_by_facilitator', by: reviewerUid, at: now, points };
+      if (snap.exists()) {
+        const s = parseSubmission(snap.id, snap.data());
+        if (s.status === 'approved') throw new Error('This work is already approved for that player.');
+        tx.update(ref, {
+          status: 'approved',
+          approvedPoints: points,
+          requestedPoints: assignment.points,
+          feedback: null,
+          reviewedBy: reviewerUid,
+          reviewedAt: now,
+          history: [...s.history, entry].slice(-30),
+        });
+        return;
+      }
+      tx.set(ref, {
+        sprintId,
+        assignmentId,
+        assignmentTitle: assignment.title,
+        playerId: uid,
+        playerName: input.playerName,
+        teamId: input.teamId,
+        teamName: input.teamName,
+        workType: assignment.workType,
+        isExtraCredit: assignment.isExtraCredit,
+        method: 'facilitator',
+        evidence: { text: note || 'Recorded by facilitator' },
+        contributorIds: [uid],
+        requestedPoints: assignment.points,
+        status: 'approved',
+        approvedPoints: points,
+        reviewedBy: reviewerUid,
+        reviewedAt: now,
+        feedback: null,
+        submittedAt: now,
+        revisionCount: 0,
+        history: [entry],
+      });
+    });
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 export type ReviewAction =
   | { kind: 'approve'; points: number }
   | { kind: 'revision'; feedback: string }
@@ -605,18 +746,7 @@ export async function reviewSubmission(
       if (allocSnap.exists() && allocSnap.data()?.status === 'paid_out') {
         throw new Error('Rewards for this sprint were already paid to this player.');
       }
-      // Credit is capped by the sprint's assignment value, never by the client-written requestedPoints.
-      const archiveSnap = await tx.get(subDoc(sessionId, 'cfSprints', s.sprintId));
-      let sprintAssignments = parseSprintAssignments(archiveSnap.exists() ? archiveSnap.data()?.assignments : null);
-      if (!sprintAssignments.length) {
-        const roomSnap = await tx.get(room(sessionId));
-        const live = roomSnap.data()?.classFlowSprint;
-        if (live?.id === s.sprintId) sprintAssignments = parseSprintAssignments(live.assignments);
-      }
-      const assignment =
-        sprintAssignments.find((a) => a.assignmentId === s.assignmentId) ??
-        (s.assignmentId === SPRINT_GOAL_ASSIGNMENT_ID ? sprintGoalAssignment(s.assignmentTitle || 'Sprint goal') : undefined);
-      if (!assignment) throw new Error('This work is not part of that sprint.');
+      const assignment = await sprintAssignmentInTx(tx, sessionId, s.sprintId, s.assignmentId, s.assignmentTitle);
       const now = Date.now();
       let patch: Record<string, unknown>;
       if (action.kind === 'approve') {
@@ -998,7 +1128,12 @@ export async function createPayouts(
         live.forEach((s) => tx.update(s.ref, { status: 'paid_out', payoutId }));
         return true;
       });
-      if (didCreate) created += 1;
+      if (didCreate) {
+        created += 1;
+        void import('./liveEventPendingClaimsService')
+          .then((m) => m.registerLiveEventPendingClaim(sessionId, playerId))
+          .catch(() => undefined);
+      }
     }
     return { ok: true, value: created };
   } catch (e) {
@@ -1047,6 +1182,21 @@ export async function claimMyPayouts(sessionId: string, uid: string, payouts: Cf
     }
   }
   return totals;
+}
+
+/**
+ * Home/login reclaim for players who weren't in the room when their payout was created.
+ * Returns true when a payout is still pending afterwards (so the reclaim index stays open).
+ */
+export async function claimPendingClassFlowPayouts(sessionId: string, uid: string): Promise<boolean> {
+  const snap = await getDocs(query(sub(sessionId, 'cfPayouts'), where('playerId', '==', uid)));
+  const pending = snap.docs
+    .map((d) => ({ ...(d.data() as CfPayout), id: d.id }))
+    .filter((p) => p.status === 'pending');
+  if (!pending.length) return false;
+  await claimMyPayouts(sessionId, uid, pending);
+  const after = await Promise.all(pending.map((p) => getDoc(subDoc(sessionId, 'cfPayouts', p.id))));
+  return after.some((s) => s.exists() && s.data()?.status === 'pending');
 }
 
 /* ------------------------------ Public team state ------------------------------ */

@@ -1792,8 +1792,15 @@ export async function claimAllLiveEventSessionEndRewards(
   await claimLiveEventSessionEndPowerAndBattlePass(sessionId, playerId);
   await claimLiveEventSessionEndWinChallenge(sessionId, playerId);
   await claimLiveEventSessionEndParticipateChallenge(sessionId, playerId);
+  let classFlowPayoutsOwed = false;
   try {
-    const stillOwed = await sessionEndRewardsStillPending(sessionId, playerId);
+    const { claimPendingClassFlowPayouts } = await import('./classFlowWorkService');
+    classFlowPayoutsOwed = await claimPendingClassFlowPayouts(sessionId, playerId);
+  } catch {
+    classFlowPayoutsOwed = true;
+  }
+  try {
+    const stillOwed = classFlowPayoutsOwed || (await sessionEndRewardsStillPending(sessionId, playerId));
     if (stillOwed) {
       debug(
         'inSessionStats',
