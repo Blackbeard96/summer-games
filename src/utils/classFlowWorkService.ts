@@ -201,6 +201,7 @@ export async function startPlannedSprint(
     planId: plan.planId,
     assignments: plan.assignments,
     imageUrl: plan.imageUrl,
+    classSkillsEnabled: plan.classSkillsEnabled,
     nowMs,
   });
   if (!res.ok || !res.sprintId) return { ok: false, error: res.error || 'Could not start sprint' };

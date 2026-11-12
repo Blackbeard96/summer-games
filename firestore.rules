@@ -814,15 +814,31 @@ service cloud.firestore {
       // Host/admin OR students in the session class (live event battle state, moves, revive potion, etc.)
       // teacherId matches hostUid on new sessions; allow both so older docs or edge cases still authorize the teacher.
       // Class Flow reward settings (classFlowConfig) and Class Skills settings (irlSkillsConfig) are facilitator-only.
+      // The Class Skill Phase is facilitator-only too, except a player recording their own "Pass" while it is open.
       allow update: if request.auth != null && (
         resource.data.hostUid == request.auth.uid ||
         resource.data.teacherId == request.auth.uid ||
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
         (
           (canAccessInSessionRoomByData(resource.data) || isSessionPresenceParticipant(sessionId)) &&
-          (isAppAdminUser() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['classFlowConfig', 'irlSkillsConfig']))
+          (isAppAdminUser() || (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['classFlowConfig', 'irlSkillsConfig', 'classSkillPhaseCycles']) &&
+            (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['classSkillPhase']) || isOwnClassSkillPass())
+          ))
         )
       );
+
+      function isOwnClassSkillPass() {
+        let before = resource.data.classSkillPhase;
+        let after = request.resource.data.classSkillPhase;
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['classSkillPhase']) &&
+          before.status == 'open' &&
+          after.diff(before).affectedKeys().hasOnly(['decisions']) &&
+          after.decisions.diff(before.decisions).affectedKeys().hasOnly([request.auth.uid]) &&
+          !(request.auth.uid in before.decisions) &&
+          after.decisions[request.auth.uid].keys().hasOnly(['choice', 'atMs']) &&
+          after.decisions[request.auth.uid].choice == 'passed';
+      }
       
       allow delete: if request.auth != null && (
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com']
@@ -916,10 +932,15 @@ service cloud.firestore {
       // cooldowns, consequences and rewards are written by facilitators only.
       match /irlActivations/{activationId} {
         allow read: if canReadInSessionRoomSession(sessionId);
+        // Requests carry the server time and the open Class Skill Phase id; the approval transaction re-checks the window.
         allow create: if canReadInSessionRoomSession(sessionId) &&
           request.resource.data.casterUid == request.auth.uid &&
           request.resource.data.status == 'pending' &&
-          request.resource.data.keys().hasOnly(['skillId', 'skillName', 'element', 'casterUid', 'casterName', 'targetType', 'targetUids', 'targetLabel', 'requestedAtMs', 'status']) &&
+          request.resource.data.keys().hasOnly(['skillId', 'skillName', 'element', 'casterUid', 'casterName', 'targetType', 'targetUids', 'targetLabel', 'requestedAtMs', 'requestedAt', 'phaseId', 'status']) &&
+          request.resource.data.requestedAt == request.time &&
+          request.resource.data.phaseId is string &&
+          get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.classSkillPhase.id == request.resource.data.phaseId &&
+          get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.classSkillPhase.status == 'open' &&
           request.resource.data.skillId is string &&
           request.resource.data.targetUids is list &&
           request.resource.data.targetUids.size() <= 60;
@@ -1297,7 +1318,9 @@ service cloud.firestore {
         // Login / Home popup kill-switches — all clients read so toggles apply immediately
         settingId == 'popupControls' ||
         // Skill Card artwork URLs (display only) — every battle client resolves card images
-        settingId == 'skillArtwork'
+        settingId == 'skillArtwork' ||
+        // Class Skill loadout capacity — players equip Class Skills against it
+        settingId == 'classSkills'
       );
       allow write: if request.auth != null && (isAdmin() || isAppAdminUser());
     }

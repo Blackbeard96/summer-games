@@ -42,6 +42,7 @@ import {
   resumedEndsAtMs,
   type CfTimerInput,
 } from './classFlowConfig';
+import { closeOpenPhasePatch } from './classSkillPhase';
 
 const roomRef = (sessionId: string) => doc(db, 'inSessionRooms', sessionId);
 
@@ -119,6 +120,7 @@ export function parseClassFlowSprint(raw: unknown): ClassFlowSprintState | null 
     planId: typeof o.planId === 'string' ? o.planId : null,
     assignments: parseSprintAssignments(o.assignments),
     ...imageField(o.imageUrl as string | undefined),
+    ...(typeof o.classSkillsEnabled === 'boolean' ? { classSkillsEnabled: o.classSkillsEnabled } : {}),
   };
 }
 
@@ -146,6 +148,8 @@ export type StartClassFlowSprintPayload = {
   planId?: string | null;
   assignments?: CfSprintAssignment[];
   imageUrl?: string;
+  /** Post-sprint Class Skill Phase override; omit to use the Live Event default. */
+  classSkillsEnabled?: boolean;
   /** Server-corrected clock so every client sees the same countdown. */
   nowMs?: number;
 };
@@ -229,7 +233,9 @@ export async function startClassFlowSprint(
         incompletePenaltiesGrantedUids: [],
         ...workFields,
         ...imageField(payload.imageUrl),
+        ...(typeof payload.classSkillsEnabled === 'boolean' ? { classSkillsEnabled: payload.classSkillsEnabled } : {}),
       },
+      ...closeOpenPhasePatch(snap.data()?.classSkillPhase, now.toMillis(), 'next_sprint'),
       updatedAt: serverTimestamp(),
       battleLog: arrayUnion(
         `🏃 Sprint started: "${title}" — ${formatSprintDurationForLog(durationSeconds)} to complete the goal.`
@@ -330,6 +336,7 @@ export async function updateClassFlowSprintTimer(
         patch['classFlowSprint.endsAt'] = Timestamp.fromMillis(r.endsAtMs);
         patch['classFlowSprint.pausedAt'] = deleteField();
         patch['classFlowSprint.pausedAccumMs'] = (sprint.pausedAccumMs || 0) + r.pausedMs;
+        Object.assign(patch, closeOpenPhasePatch(snap.data()?.classSkillPhase, nowMs, 'sprint_resumed'));
         logLine = `▶️ Sprint resumed: "${sprint.title}"`;
       } else if (action.kind === 'extend') {
         const seconds = Math.max(15, Math.min(3600, Math.floor(action.seconds)));
@@ -337,6 +344,7 @@ export async function updateClassFlowSprintTimer(
         patch['classFlowSprint.endsAt'] = Timestamp.fromMillis(extendedEndsAtMs(live, nowMs, seconds));
         patch['classFlowSprint.extendedSeconds'] = (sprint.extendedSeconds || 0) + seconds;
         if (sprint.status !== 'live') patch['classFlowSprint.status'] = 'live';
+        Object.assign(patch, closeOpenPhasePatch(snap.data()?.classSkillPhase, nowMs, 'sprint_resumed'));
         logLine = `⏱️ Sprint extended by ${formatSprintDurationForLog(seconds)}: "${sprint.title}"`;
       } else {
         if (sprint.status !== 'live' || t.pausedAtMs != null || t.endsAtMs > nowMs) return;

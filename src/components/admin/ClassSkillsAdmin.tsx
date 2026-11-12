@@ -24,8 +24,10 @@ import {
   describeDuration,
   describeReward,
   isClassSkillElement,
+  isDirectEffectType,
   newClassSkill,
   parseClassSkill,
+  parseRuleEffect,
   validateClassSkill,
 } from '../../utils/classSkillsConfig';
 import {
@@ -341,7 +343,7 @@ const ClassSkillsAdmin: React.FC<ClassSkillsAdminProps> = ({ element, elementNam
               </select>
             </Field>
             <div style={{ fontSize: '0.72rem', color: '#94a3b8', alignSelf: 'end' }}>
-              Whole-class and restriction skills always need facilitator approval.
+              Whole-class, restriction and penalty skills always need facilitator approval. In Battle Sprints the Live Event usually sets one cost for every Class Skill (default 3).
             </div>
             <Field title="Activation conditions" span={2}>
               <textarea style={{ ...input, minHeight: 48 }} value={draft.activationConditions} onChange={(e) => patch({ activationConditions: e.target.value })} />
@@ -371,7 +373,19 @@ const ClassSkillsAdmin: React.FC<ClassSkillsAdminProps> = ({ element, elementNam
                   value={eff.type}
                   onChange={(e) => {
                     const type = e.target.value as IrlEffectType;
-                    patchEffect(i, { type, blocksIrlSkills: type === 'restriction' ? eff.blocksIrlSkills : undefined, blocksRestrictions: type === 'protection' ? eff.blocksRestrictions || 1 : undefined });
+                    // Re-parse so the new type gets its own defaults and loses fields that belong to the old type.
+                    const next = parseRuleEffect({ ...eff, type, amount: eff.amount || 10 }, i);
+                    if (!next) return;
+                    patchEffect(i, {
+                      type,
+                      blocksIrlSkills: next.blocksIrlSkills,
+                      blocksRestrictions: next.blocksRestrictions,
+                      amount: next.amount,
+                      bypassShields: next.bypassShields,
+                      recipient: next.recipient,
+                      blocksVaultEffects: next.blocksVaultEffects,
+                      multiplier: next.multiplier,
+                    });
                   }}
                 >
                   {IRL_EFFECT_TYPES.map((t) => (
@@ -384,11 +398,76 @@ const ClassSkillsAdmin: React.FC<ClassSkillsAdminProps> = ({ element, elementNam
                   <input
                     style={input}
                     aria-label={`Rule ${i + 1} required behavior`}
-                    placeholder="Required behavior, e.g. Remain silent except for approved communication"
+                    placeholder={
+                      isDirectEffectType(eff.type)
+                        ? 'Optional note shown with the effect (resolved automatically on approval)'
+                        : 'Required behavior, e.g. Remain silent except for approved communication'
+                    }
                     value={eff.behavior}
                     maxLength={300}
                     onChange={(e) => patchEffect(i, { behavior: e.target.value })}
                   />
+                  {(eff.type === 'vault_damage' || eff.type === 'vault_transfer' || eff.type === 'player_reward' || eff.type === 'player_penalty') && (
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.75rem', color: '#cbd5e1', marginTop: 4 }}>
+                      <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        Amount
+                        <input
+                          type="number"
+                          min={1}
+                          max={CLASS_SKILL_LIMITS.maxDirectPP}
+                          style={{ ...input, width: 80 }}
+                          aria-label={`Rule ${i + 1} PP amount`}
+                          value={eff.amount ?? 0}
+                          onChange={(e) => patchEffect(i, { amount: Math.max(0, Math.min(CLASS_SKILL_LIMITS.maxDirectPP, Math.floor(Number(e.target.value) || 0))) })}
+                        />
+                        PP (max {CLASS_SKILL_LIMITS.maxDirectPP})
+                      </label>
+                      {(eff.type === 'vault_damage' || eff.type === 'vault_transfer') && (
+                        <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          <input type="checkbox" checked={!!eff.bypassShields} onChange={(e) => patchEffect(i, { bypassShields: e.target.checked || undefined })} />
+                          Bypass shields (this Class Skill only)
+                        </label>
+                      )}
+                      {(eff.type === 'player_reward' || eff.type === 'player_penalty') && (
+                        <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          Applies to
+                          <select style={{ ...input, width: 'auto' }} value={eff.recipient || (eff.type === 'player_reward' ? 'caster' : 'target')} onChange={(e) => patchEffect(i, { recipient: e.target.value as 'caster' | 'target' })}>
+                            <option value="caster">Caster</option>
+                            <option value="target">Target(s)</option>
+                          </select>
+                        </label>
+                      )}
+                    </div>
+                  )}
+                  {eff.type === 'vault_protection' && (
+                    <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.75rem', color: '#cbd5e1', marginTop: 4 }}>
+                      Blocks
+                      <input
+                        type="number"
+                        min={1}
+                        max={CLASS_SKILL_LIMITS.maxVaultBlocks}
+                        style={{ ...input, width: 60 }}
+                        value={eff.blocksVaultEffects || 1}
+                        onChange={(e) => patchEffect(i, { blocksVaultEffects: Math.max(1, Math.min(CLASS_SKILL_LIMITS.maxVaultBlocks, Number(e.target.value) || 1)) })}
+                      />
+                      incoming Vault damage / transfer / penalty effect(s)
+                    </label>
+                  )}
+                  {eff.type === 'vault_modifier' && (
+                    <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.75rem', color: '#cbd5e1', marginTop: 4 }}>
+                      Incoming Vault effects ×
+                      <input
+                        type="number"
+                        step={0.05}
+                        min={CLASS_SKILL_LIMITS.minVaultMultiplier}
+                        max={CLASS_SKILL_LIMITS.maxVaultMultiplier}
+                        style={{ ...input, width: 70 }}
+                        value={eff.multiplier ?? 1}
+                        onChange={(e) => patchEffect(i, { multiplier: Number(e.target.value) || 1 })}
+                      />
+                      (below 1 resists, above 1 makes the target vulnerable)
+                    </label>
+                  )}
                   {eff.type === 'restriction' && (
                     <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.75rem', color: '#cbd5e1', marginTop: 4 }}>
                       <input type="checkbox" checked={!!eff.blocksIrlSkills} onChange={(e) => patchEffect(i, { blocksIrlSkills: e.target.checked })} />

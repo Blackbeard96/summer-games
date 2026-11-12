@@ -437,6 +437,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [roomClassFlowConfig, setRoomClassFlowConfig] = useState<unknown>(null);
   /** `undefined` until the first room snapshot, so Class Skills never act on a half-loaded room. */
   const [roomIrlSkillsConfig, setRoomIrlSkillsConfig] = useState<unknown>(undefined);
+  const [roomClassSkillPhase, setRoomClassSkillPhase] = useState<unknown>(null);
   const [sessionRoomHostUid, setSessionRoomHostUid] = useState<string>('');
   const [reflectionPickAssessmentId, setReflectionPickAssessmentId] = useState('');
   const [reflectionPickPrompt, setReflectionPickPrompt] = useState('');
@@ -922,6 +923,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       });
       setRoomIrlSkillsConfig((prev: unknown) => {
         const next = rawRoom.irlSkillsConfig ?? null;
+        return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+      });
+      setRoomClassSkillPhase((prev: unknown) => {
+        const next = rawRoom.classSkillPhase ?? null;
         return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
       });
       
@@ -4283,6 +4288,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           sessionId={sessionId}
           liveEventMode={roomReflectionMeta.liveEventMode ?? null}
           rawConfig={roomIrlSkillsConfig}
+          rawPhase={roomClassSkillPhase}
           sprint={roomClassFlowSprint}
           sessionStatus={roomSessionStatus}
           players={sessionPlayers.map((p) => ({ userId: p.userId, displayName: p.displayName, movesEarned: p.movesEarned }))}

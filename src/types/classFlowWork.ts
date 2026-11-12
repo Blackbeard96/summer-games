@@ -68,6 +68,8 @@ export interface CfSprintPlanItem {
   assignments: CfSprintAssignment[];
   /** Optional picture shown next to the sprint objective. */
   imageUrl?: string;
+  /** Post-sprint Class Skill Phase override; unset = the Live Event default. */
+  classSkillsEnabled?: boolean;
 }
 
 export type CfGrouping = 'squad' | 'table' | 'manual';

@@ -5,7 +5,9 @@ import {
   CLASS_SKILL_ELEMENTS,
   type ClassSkill,
   type ClassSkillElement,
+  type DirectEffectType,
   type IrlActivation,
+  type IrlResolvedEffect,
   type IrlActiveRule,
   type IrlConsequence,
   type IrlConsequenceType,
@@ -32,6 +34,20 @@ export const CLASS_SKILL_LIMITS = {
   maxEffects: 6,
   maxTargets: 60,
   maxProtectionBlocks: 3,
+  /** Direct Vault effects (damage, transfer, reward, penalty) per effect per target. */
+  maxDirectPP: 250,
+  maxVaultBlocks: 3,
+  minVaultMultiplier: 0.5,
+  maxVaultMultiplier: 2,
+  /** Equipped Class Skill slots (separate from the 6 In-Game Skill slots). */
+  defaultCapacity: 3,
+  maxCapacity: 6,
+  defaultPhaseSeconds: 30,
+  minPhaseSeconds: 10,
+  maxPhaseSeconds: 300,
+  maxActivationLimit: 5,
+  defaultClassSkillCost: 3,
+  maxVaultFloorPP: 1000,
 } as const;
 
 /** Shown with every rule: Class Skills never override essential classroom permissions. */
@@ -47,7 +63,25 @@ export const IRL_EFFECT_TYPES: IrlEffectType[] = [
   'reward_modifier',
   'consequence_modifier',
   'special_rule',
+  'vault_damage',
+  'vault_transfer',
+  'player_reward',
+  'player_penalty',
+  'vault_protection',
+  'vault_modifier',
 ];
+
+export const DIRECT_EFFECT_TYPES: DirectEffectType[] = [
+  'vault_damage',
+  'vault_transfer',
+  'player_reward',
+  'player_penalty',
+  'vault_protection',
+  'vault_modifier',
+];
+export const isDirectEffectType = (t: IrlEffectType): t is DirectEffectType => (DIRECT_EFFECT_TYPES as IrlEffectType[]).includes(t);
+/** Direct effects that take PP from a target (never aimed at the caster). */
+export const HARMFUL_DIRECT_TYPES: DirectEffectType[] = ['vault_damage', 'vault_transfer', 'player_penalty'];
 
 export const IRL_EFFECT_LABELS: Record<IrlEffectType, string> = {
   restriction: 'Restriction',
@@ -58,14 +92,22 @@ export const IRL_EFFECT_LABELS: Record<IrlEffectType, string> = {
   reward_modifier: 'Reward Modifier',
   consequence_modifier: 'Consequence Modifier',
   special_rule: 'Special Rule',
+  vault_damage: 'Vault Damage',
+  vault_transfer: 'Vault Transfer',
+  player_reward: 'Player Reward',
+  player_penalty: 'Player Penalty',
+  vault_protection: 'Vault Protection',
+  vault_modifier: 'Vault Modifier',
 };
 
 export const IRL_TARGET_LABELS: Record<IrlTargetType, string> = {
   self: 'Self',
   player: 'One player',
+  players: 'Several players',
   team: 'Team',
   class: 'Whole class',
 };
+const TARGET_TYPES = Object.keys(IRL_TARGET_LABELS) as IrlTargetType[];
 
 export const IRL_DURATION_LABELS: Record<IrlDurationKind, string> = {
   instant: 'Instant',
@@ -94,7 +136,21 @@ export const IRL_VERIFICATION_LABELS = {
 
 /** Event-specific defaults: Class Flow first; other modes allow nothing until a facilitator opts in. */
 export const DEFAULT_ALLOWED_EFFECTS_BY_MODE: Record<string, IrlEffectType[]> = {
-  class_flow: ['restriction', 'requirement', 'challenge', 'privilege', 'reward_modifier', 'protection', 'special_rule'],
+  class_flow: [
+    'restriction',
+    'requirement',
+    'challenge',
+    'privilege',
+    'reward_modifier',
+    'protection',
+    'special_rule',
+    'vault_damage',
+    'vault_transfer',
+    'player_reward',
+    'player_penalty',
+    'vault_protection',
+    'vault_modifier',
+  ],
   reflection: ['challenge', 'reward_modifier', 'protection'],
 };
 
@@ -146,7 +202,39 @@ export function parseRuleEffect(raw: unknown, index = 0): IrlRuleEffect | null {
   };
   if (type === 'restriction' && o.blocksIrlSkills === true) effect.blocksIrlSkills = true;
   if (type === 'protection') effect.blocksRestrictions = int(o.blocksRestrictions, 1, 1, CLASS_SKILL_LIMITS.maxProtectionBlocks);
+  if (type === 'vault_damage' || type === 'vault_transfer' || type === 'player_reward' || type === 'player_penalty') {
+    effect.amount = int(o.amount, 0, 0, CLASS_SKILL_LIMITS.maxDirectPP);
+  }
+  if ((type === 'vault_damage' || type === 'vault_transfer') && o.bypassShields === true) effect.bypassShields = true;
+  if (type === 'player_reward' || type === 'player_penalty') {
+    effect.recipient = oneOf(o.recipient, ['caster', 'target'] as const, type === 'player_reward' ? 'caster' : 'target');
+  }
+  if (type === 'vault_protection') effect.blocksVaultEffects = int(o.blocksVaultEffects, 1, 1, CLASS_SKILL_LIMITS.maxVaultBlocks);
+  if (type === 'vault_modifier') {
+    effect.multiplier = Math.round(num(o.multiplier, 0.5, CLASS_SKILL_LIMITS.minVaultMultiplier, CLASS_SKILL_LIMITS.maxVaultMultiplier) * 100) / 100;
+  }
   return effect;
+}
+
+/** Plain-language summary of one rule effect (direct effects include their amounts). */
+export function describeEffect(e: IrlRuleEffect): string {
+  const pp = `${e.amount || 0} PP`;
+  switch (e.type) {
+    case 'vault_damage':
+      return `Deals ${pp} Vault damage${e.bypassShields ? ' (bypasses shields)' : ' (shields absorb first)'}`;
+    case 'vault_transfer':
+      return `Transfers up to ${pp} from the target's Vault to the caster${e.bypassShields ? ' (bypasses shields)' : ''}`;
+    case 'player_reward':
+      return `Awards ${pp} to the ${e.recipient === 'target' ? 'target' : 'caster'}`;
+    case 'player_penalty':
+      return `Removes ${pp} from the ${e.recipient === 'caster' ? 'caster' : 'target'}`;
+    case 'vault_protection':
+      return `Blocks the next ${e.blocksVaultEffects || 1} direct Vault effect${(e.blocksVaultEffects || 1) === 1 ? '' : 's'}`;
+    case 'vault_modifier':
+      return `Incoming Vault effects ×${e.multiplier ?? 1}`;
+    default:
+      return e.behavior;
+  }
 }
 
 export function parseClassSkill(id: string, raw: unknown): ClassSkill {
@@ -164,7 +252,7 @@ export function parseClassSkill(id: string, raw: unknown): ClassSkill {
     level: int(o.level, 1, 1, CLASS_SKILL_LIMITS.maxLevel),
     description: str(o.description),
     irlEffect: str(o.irlEffect),
-    targetType: oneOf(o.targetType, ['self', 'player', 'team', 'class'] as const, 'self'),
+    targetType: oneOf(o.targetType, TARGET_TYPES, 'self'),
     durationKind,
     durationSeconds: durationKind === 'timed' ? int(o.durationSeconds, 120, 10, CLASS_SKILL_LIMITS.maxDurationSeconds) : 0,
     activationCost: int(o.activationCost, 1, 0, CLASS_SKILL_LIMITS.maxCost),
@@ -196,8 +284,15 @@ export function validateClassSkill(skill: ClassSkill): string[] {
   if (!skill.name.trim()) errors.push('Name is required.');
   if (!skill.effects.length) errors.push('Add at least one rule effect.');
   skill.effects.forEach((e, i) => {
-    if (!e.behavior.trim()) errors.push(`Rule ${i + 1}: describe the required behavior.`);
+    if (!isDirectEffectType(e.type) && !e.behavior.trim()) errors.push(`Rule ${i + 1}: describe the required behavior.`);
+    if ((e.type === 'vault_damage' || e.type === 'vault_transfer' || e.type === 'player_reward' || e.type === 'player_penalty') && !(e.amount && e.amount > 0)) {
+      errors.push(`Rule ${i + 1}: ${IRL_EFFECT_LABELS[e.type]} needs an amount of at least 1 PP.`);
+    }
   });
+  const harmful = skill.effects.filter((e) => (HARMFUL_DIRECT_TYPES as IrlEffectType[]).includes(e.type) && !(e.type === 'player_penalty' && e.recipient === 'caster'));
+  if (harmful.length && skill.targetType === 'self') {
+    errors.push('Vault damage, transfers and penalties must target another player, several players, a team, or the class.');
+  }
   if (skill.consequence.type === 'deduct_pp' && skill.consequence.amount <= 0) errors.push('PP deduction must be at least 1.');
   if (skill.consequence.type === 'disable_irl_skills' && skill.consequence.amount <= 0) errors.push('Disable duration must be at least 1 minute.');
   if (skill.reward.type !== 'none' && skill.reward.amount <= 0) {
@@ -369,21 +464,44 @@ export function parseIrlEventConfig(raw: unknown, liveEventMode?: string | null)
   const allowed = Array.isArray(o.allowedEffectTypes)
     ? (o.allowedEffectTypes as unknown[]).filter((t): t is IrlEffectType => IRL_EFFECT_TYPES.includes(t as IrlEffectType))
     : modeDefault;
+  // Battle Sprints (Class Flow) get Class Skills by default; an explicit `false` stays off and other modes opt in.
+  const enabled = o.enabled === true || (o.enabled === undefined && liveEventMode === 'class_flow');
   return {
-    enabled: o.enabled === true,
+    enabled,
     approvalMode: o.approvalMode === 'all' ? 'all' : 'skill',
     maxLevel: int(o.maxLevel, CLASS_SKILL_LIMITS.maxLevel, 1, CLASS_SKILL_LIMITS.maxLevel),
     disabledSkillIds: Array.isArray(o.disabledSkillIds) ? (o.disabledSkillIds as unknown[]).filter((s): s is string => typeof s === 'string') : [],
     allowedEffectTypes: Array.from(new Set(allowed)),
+    costSource: o.costSource === 'skill' ? 'skill' : 'event',
+    classSkillCost: int(o.classSkillCost, CLASS_SKILL_LIMITS.defaultClassSkillCost, 0, CLASS_SKILL_LIMITS.maxCost),
+    sprintPhaseDefault: o.sprintPhaseDefault !== false,
+    phaseSeconds: int(o.phaseSeconds, CLASS_SKILL_LIMITS.defaultPhaseSeconds, CLASS_SKILL_LIMITS.minPhaseSeconds, CLASS_SKILL_LIMITS.maxPhaseSeconds),
+    activationLimit: int(o.activationLimit, 1, 1, CLASS_SKILL_LIMITS.maxActivationLimit),
+    vaultFloorPP: int(o.vaultFloorPP, 0, 0, CLASS_SKILL_LIMITS.maxVaultFloorPP),
   };
+}
+
+/** Participation Points charged for one activation (never Vault PP). */
+export function effectiveCost(skill: Pick<ClassSkill, 'activationCost'>, config: Pick<IrlEventConfig, 'costSource' | 'classSkillCost'>): number {
+  return config.costSource === 'skill' ? skill.activationCost : config.classSkillCost;
 }
 
 export const skillHasRestriction = (skill: Pick<ClassSkill, 'effects'>) => skill.effects.some((e) => e.type === 'restriction');
 
-/** Whole-class and restriction skills always need a facilitator, whatever the skill says. */
+/** Effects that must never land on the caster (restrictions, and direct effects that take PP from the target). */
+export const skillHarmsTargets = (skill: Pick<ClassSkill, 'effects'>) =>
+  skill.effects.some(
+    (e) =>
+      e.type === 'restriction' ||
+      e.type === 'vault_damage' ||
+      e.type === 'vault_transfer' ||
+      (e.type === 'player_penalty' && e.recipient !== 'caster')
+  );
+
+/** Whole-class, restriction and penalty skills always need a facilitator, whatever the skill says. */
 export function effectiveApproval(skill: Pick<ClassSkill, 'approval' | 'targetType' | 'effects'>, config: Pick<IrlEventConfig, 'approvalMode'>): 'auto' | 'facilitator' {
   if (config.approvalMode === 'all') return 'facilitator';
-  if (skill.targetType === 'class' || skillHasRestriction(skill)) return 'facilitator';
+  if (skill.targetType === 'class' || skillHasRestriction(skill) || skill.effects.some((e) => e.type === 'player_penalty')) return 'facilitator';
   return skill.approval;
 }
 
@@ -422,12 +540,48 @@ export function skillInLoadout(loadout: readonly string[] | null | undefined, sk
   return !loadout || loadout.length === 0 || loadout.includes(skillId);
 }
 
+/** `adminSettings/classSkills.capacity`: equipped Class Skill slots (separate from In-Game Skills). */
+export function parseClassSkillCapacity(raw: unknown): number {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return int(o.capacity, CLASS_SKILL_LIMITS.defaultCapacity, 1, CLASS_SKILL_LIMITS.maxCapacity);
+}
+
+/** `students/{uid}.classSkillEquipped`, trimmed to capacity (extra slots from a lowered capacity are ignored). */
+export function parseClassSkillEquipped(raw: unknown, capacity: number): string[] {
+  return parseClassSkillLoadout(raw).slice(0, Math.max(0, capacity));
+}
+
+export type ClassSkillUnlock = { unlocked: true } | { unlocked: false; reason: string };
+
+/**
+ * Unlocked = active, the player's elemental level reaches the skill's level (existing progression),
+ * and, if the player chose Class Skills in missions, it is one of those picks.
+ */
+export function classSkillUnlockState(
+  skill: Pick<ClassSkill, 'id' | 'status' | 'element' | 'level'>,
+  levels: Record<string, number> | null,
+  picks: readonly string[]
+): ClassSkillUnlock {
+  if (skill.status !== 'active') return { unlocked: false, reason: 'Not active yet.' };
+  const lv = levels?.[skill.element] || 0;
+  if (lv < skill.level) return { unlocked: false, reason: lv ? `Requires ${skill.element} level ${skill.level}.` : `Unlock a ${skill.element} elemental move first.` };
+  if (!skillInLoadout(picks, skill.id)) return { unlocked: false, reason: 'Choose this skill in a mission to unlock it.' };
+  return { unlocked: true };
+}
+
 /* -------------------------------- Validation --------------------------------- */
+
+/** Timing gate from the Class Skill Phase (see classSkillPhaseGate). */
+export type PhaseGate = { ok: true; phaseId: string } | { ok: false; reason: string };
 
 export interface ActivationCheckInput {
   skill: ClassSkill;
   /** Effective loadout (see effectiveClassSkillLoadout); empty = no restriction. */
   loadout?: readonly string[] | null;
+  /** Equipped Class Skills; when provided, the skill must be equipped. */
+  equipped?: readonly string[] | null;
+  /** Post-sprint phase timing; when provided, it must be open for this player. */
+  phase?: PhaseGate | null;
   config: IrlEventConfig;
   casterUid: string;
   casterLevel: number;
@@ -451,6 +605,8 @@ export function checkActivation(input: ActivationCheckInput): ActivationCheck {
   if (!config.enabled) return { ok: false, reason: 'Class Skills are off for this Live Event.' };
   if (skill.status !== 'active') return { ok: false, reason: 'This skill is not active.' };
   if (!skillInLoadout(input.loadout, skill.id)) return { ok: false, reason: "You haven't chosen this Class Skill." };
+  if (input.phase && !input.phase.ok) return { ok: false, reason: input.phase.reason };
+  if (input.equipped && !input.equipped.includes(skill.id)) return { ok: false, reason: 'Equip this Class Skill in your Loadout first.' };
   if (config.disabledSkillIds.includes(skill.id)) return { ok: false, reason: 'This skill is disabled for this Live Event.' };
   if (skill.level > config.maxLevel) return { ok: false, reason: `Only level ${config.maxLevel} and below are allowed in this Live Event.` };
   const blockedType = skill.effects.find((e) => !config.allowedEffectTypes.includes(e.type));
@@ -462,15 +618,19 @@ export function checkActivation(input: ActivationCheckInput): ActivationCheck {
     const ready = casterState.cooldowns[skill.id] || 0;
     if (ready > nowMs) return { ok: false, reason: `On cooldown for ${fmtWait(ready - nowMs)}.` };
   }
-  if (input.participationPoints < skill.activationCost) {
-    return { ok: false, reason: `Needs ${skill.activationCost} Participation Point${skill.activationCost === 1 ? '' : 's'}.` };
+  const cost = effectiveCost(skill, config);
+  if (input.participationPoints < cost) {
+    return { ok: false, reason: `Needs ${cost} Participation Point${cost === 1 ? '' : 's'} (you have ${input.participationPoints}).` };
   }
-  if (skill.durationKind === 'end_of_sprint' && !input.sprintLive) return { ok: false, reason: 'Needs a running sprint.' };
+  // In the post-sprint phase, "until end of sprint" effects are bound to the next sprint when it starts.
+  if (skill.durationKind === 'end_of_sprint' && !input.sprintLive && !input.phase) return { ok: false, reason: 'Needs a running sprint.' };
   const targets = input.targetUids;
   if (targets.length > CLASS_SKILL_LIMITS.maxTargets) return { ok: false, reason: 'Too many targets.' };
   if (skill.targetType === 'self' && !(targets.length === 1 && targets[0] === input.casterUid)) return { ok: false, reason: 'This skill targets yourself.' };
   if (skill.targetType === 'player' && targets.length !== 1) return { ok: false, reason: 'Choose one player.' };
+  if (skill.targetType === 'players' && targets.length === 0) return { ok: false, reason: 'Choose at least one player.' };
   if ((skill.targetType === 'team' || skill.targetType === 'class') && targets.length === 0) return { ok: false, reason: 'No players to target.' };
+  if (skill.targetType !== 'self' && skillHarmsTargets(skill) && targets.includes(input.casterUid)) return { ok: false, reason: "This skill can't target yourself." };
   return { ok: true };
 }
 
@@ -497,7 +657,8 @@ export interface RuleClock {
 export function isRuleEnforceable(rule: Pick<IrlActiveRule, 'status' | 'expiresAtMs' | 'durationKind' | 'sprintId'>, clock: RuleClock): boolean {
   if (rule.status !== 'active' || clock.eventEnded) return false;
   if (rule.expiresAtMs != null && clock.nowMs >= rule.expiresAtMs) return false;
-  if (rule.durationKind === 'end_of_sprint' && rule.sprintId !== clock.liveSprintId) return false;
+  // sprintId null = activated in a Class Skill Phase and waiting for the next sprint (see bindPhaseRulesToSprint).
+  if (rule.durationKind === 'end_of_sprint' && rule.sprintId !== null && rule.sprintId !== clock.liveSprintId) return false;
   return true;
 }
 
@@ -558,21 +719,23 @@ export interface IrlTeamOption {
   memberIds: string[];
 }
 
-/** Restrictions never land on the caster; other team/class skills include everyone in scope. */
+/** Restrictions and harmful direct effects never land on the caster; other team/class skills include everyone in scope. */
 export function resolveTargetUids(
   skill: Pick<ClassSkill, 'targetType' | 'effects'>,
   casterUid: string,
-  pick: { playerUid?: string | null; teamId?: string | null },
+  pick: { playerUid?: string | null; playerUids?: string[] | null; teamId?: string | null },
   playerUids: string[],
   teams: IrlTeamOption[]
 ): string[] {
-  const restrict = skillHasRestriction(skill);
+  const restrict = skillHarmsTargets(skill);
   const cap = (ids: string[]) => Array.from(new Set(ids)).slice(0, CLASS_SKILL_LIMITS.maxTargets);
   switch (skill.targetType) {
     case 'self':
       return [casterUid];
     case 'player':
       return pick.playerUid && !(restrict && pick.playerUid === casterUid) ? [pick.playerUid] : [];
+    case 'players':
+      return cap((pick.playerUids || []).filter((u) => playerUids.includes(u) && !(restrict && u === casterUid)));
     case 'team': {
       const team = teams.find((t) => t.id === pick.teamId);
       return team ? cap(team.memberIds.filter((u) => !(restrict && u === casterUid))) : [];
@@ -657,7 +820,7 @@ export function parseActivation(id: string, raw: Record<string, unknown>): IrlAc
     element: isClassSkillElement(raw.element) ? raw.element : 'fire',
     casterUid: str(raw.casterUid, '', 128),
     casterName: str(raw.casterName, 'Player', 80),
-    targetType: oneOf(raw.targetType, ['self', 'player', 'team', 'class'] as const, 'self'),
+    targetType: oneOf(raw.targetType, TARGET_TYPES, 'self'),
     targetUids: strArr(raw.targetUids),
     targetLabel: str(raw.targetLabel, '', 120),
     requestedAtMs: Number(raw.requestedAtMs) || 0,
@@ -668,6 +831,36 @@ export function parseActivation(id: string, raw: Record<string, unknown>): IrlAc
     costCharged: Number(raw.costCharged) || 0,
     ruleIds: strArr(raw.ruleIds),
     blockedUids: strArr(raw.blockedUids),
+    phaseId: typeof raw.phaseId === 'string' && raw.phaseId ? raw.phaseId : null,
+    requestedAtServerMs: timestampMs(raw.requestedAt),
+    resolvedEffects: (Array.isArray(raw.resolvedEffects) ? raw.resolvedEffects : []).map(parseResolvedEffect).filter((e): e is IrlResolvedEffect => !!e),
+  };
+}
+
+/** Firestore Timestamp (or millis) → millis; null when missing (e.g. a pending serverTimestamp). */
+export function timestampMs(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (v && typeof v === 'object' && typeof (v as { toMillis?: unknown }).toMillis === 'function') {
+    const ms = (v as { toMillis: () => number }).toMillis();
+    return Number.isFinite(ms) ? ms : null;
+  }
+  return null;
+}
+
+function parseResolvedEffect(raw: unknown): IrlResolvedEffect | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.type !== 'string' || !isDirectEffectType(o.type as IrlEffectType)) return null;
+  return {
+    effectId: str(o.effectId, '', 40),
+    type: o.type as DirectEffectType,
+    targetUid: str(o.targetUid, '', 128),
+    amount: Number(o.amount) || 0,
+    requested: Number(o.requested) || 0,
+    shieldAbsorbed: Number(o.shieldAbsorbed) || 0,
+    toUid: typeof o.toUid === 'string' ? o.toUid : null,
+    kind: oneOf(o.kind, ['transfer', 'removal', 'award', 'protection', 'modifier'] as const, 'removal'),
+    note: str(o.note, '', 200),
   };
 }
 
@@ -727,6 +920,8 @@ export function parsePlayerState(uid: string, raw: Record<string, unknown> | nul
     });
   }
   const p = o.protection as Record<string, unknown> | null | undefined;
+  const vp = o.vaultProtection as Record<string, unknown> | null | undefined;
+  const vm = o.vaultModifier as Record<string, unknown> | null | undefined;
   const statsRaw = (o.stats && typeof o.stats === 'object' ? o.stats : {}) as Record<string, unknown>;
   const stats = { ...EMPTY_IRL_STATS };
   (Object.keys(stats) as (keyof typeof stats)[]).forEach((k) => {
@@ -740,6 +935,24 @@ export function parsePlayerState(uid: string, raw: Record<string, unknown> | nul
     protection:
       p && typeof p === 'object' && typeof p.ruleId === 'string' && Number(p.remaining) > 0
         ? { ruleId: p.ruleId, remaining: Number(p.remaining), expiresAtMs: numOrNull(p.expiresAtMs), sprintId: typeof p.sprintId === 'string' ? p.sprintId : null }
+        : null,
+    vaultProtection:
+      vp && typeof vp === 'object' && Number(vp.remaining) > 0
+        ? {
+            activationId: str(vp.activationId, '', 120),
+            remaining: Number(vp.remaining),
+            expiresAtMs: numOrNull(vp.expiresAtMs),
+            sprintId: typeof vp.sprintId === 'string' ? vp.sprintId : null,
+          }
+        : null,
+    vaultModifier:
+      vm && typeof vm === 'object' && typeof vm.multiplier === 'number'
+        ? {
+            activationId: str(vm.activationId, '', 120),
+            multiplier: num(vm.multiplier, 1, CLASS_SKILL_LIMITS.minVaultMultiplier, CLASS_SKILL_LIMITS.maxVaultMultiplier),
+            expiresAtMs: numOrNull(vm.expiresAtMs),
+            sprintId: typeof vm.sprintId === 'string' ? vm.sprintId : null,
+          }
         : null,
     warnings: Number(o.warnings) || 0,
     stats,

@@ -16,6 +16,7 @@ import {
   onSnapshot,
   query,
   runTransaction,
+  serverTimestamp,
   setDoc,
   updateDoc,
   where,
@@ -29,6 +30,7 @@ import type {
   IrlActiveRule,
   IrlEventConfig,
   IrlPlayerState,
+  IrlResolvedEffect,
   IrlTargetType,
   IrlViolation,
 } from '../types/classSkills';
@@ -40,9 +42,13 @@ import {
   consequencePP,
   describeConsequence,
   describeDuration,
+  describeEffect,
   effectiveClassSkillLoadout,
+  effectiveCost,
   elementalLevelFromMoves,
+  isDirectEffectType,
   isRuleEnforceable,
+  parseClassSkillEquipped,
   parseClassSkillLoadout,
   parseActivation,
   parseActiveRule,
@@ -56,7 +62,12 @@ import {
   type RuleClock,
 } from './classSkillsConfig';
 import { appendSkillActivationRecord, buildSkillActivationRecord } from './skillActivationSync';
-import { applyPlayerPPDelta } from './playerPowerPoints';
+import { DEFAULT_VAULT_CAPACITY, applyPlayerPPDelta } from './playerPowerPoints';
+import { recordPPChange } from './ppLedgerService';
+import { computeSiegeProtectionFloor } from './liveEventGameTimeService';
+import { describeResolvedEffect, resolveDirectEffects, type DirectEffectOutput, type DirectVault } from './classSkillDirectEffects';
+import { parseClassSkillPhase, phaseAcceptsRequest } from './classSkillPhase';
+import { getClassSkillCapacity } from './classSkillPhaseService';
 
 type Result<T = void> = { ok: true; value?: T } | { ok: false; error: string };
 const fail = (e: unknown): { ok: false; error: string } => ({ ok: false, error: e instanceof Error ? e.message : String(e) });
@@ -230,12 +241,19 @@ export interface ActivationRequestInput {
   targetType: IrlTargetType;
   targetUids: string[];
   targetLabel: string;
+  /** Open Class Skill Phase; the approval rejects requests from any other phase. */
+  phaseId: string;
 }
 
-/** Player: request an activation. Nothing is charged until a facilitator transaction approves it. */
+/**
+ * Player: request an activation. Nothing is charged until a facilitator transaction approves it.
+ * `requestedAt` is the server's clock (enforced by the rules), so the phase window can't be faked.
+ */
 export async function requestClassSkillActivation(input: ActivationRequestInput): Promise<Result<string>> {
   try {
     const ref = await addDoc(sub(input.sessionId, 'irlActivations'), {
+      phaseId: input.phaseId,
+      requestedAt: serverTimestamp(),
       skillId: input.skill.id,
       skillName: input.skill.name,
       element: input.skill.element,
@@ -304,22 +322,27 @@ const liveSprintIdOf = (roomData: DocumentData | undefined): string | null => {
   return s && typeof s.id === 'string' && s.status === 'live' ? s.id : null;
 };
 
+export type ApprovalOutcome = { approved: boolean; reason?: string; blockedUids: string[]; resolvedEffects?: IrlResolvedEffect[]; cost?: number };
+
 /**
- * Approves (or auto-rejects with a reason) a pending activation in one transaction:
- * re-validates level, cost, cooldown, locks and event permissions against authoritative data,
- * charges Participation Points, starts the cooldown, applies protections, and writes one rule per target.
+ * Approves (or auto-rejects with a reason) a pending activation in one transaction, in this order:
+ * validate (phase window, per-phase limit, equipped, unlocked, Participation Points, cooldown, targets)
+ * → deduct Participation Points → resolve direct Vault effects and IRL rules → record → publish the skill card.
+ * Any failure aborts the whole transaction, so nothing is charged and no cooldown starts.
  */
 export async function approveClassSkillActivation(
   ctx: FacilitatorCtx,
   activationId: string,
   targetNames: Record<string, string>
-): Promise<Result<{ approved: boolean; reason?: string; blockedUids: string[] }>> {
+): Promise<Result<ApprovalOutcome>> {
   const actRef = subDoc(ctx.sessionId, 'irlActivations', activationId);
   try {
     // Elemental level comes from the player's existing unlocked moves (no separate leveling system).
     // Read outside the transaction: it only changes through progression, never during an approval.
     let casterMoves: unknown = undefined;
     let casterLoadout: string[] = [];
+    let casterEquipped: string[] = [];
+    let ledger: { uid: string; amount: number; next: number }[] = [];
     const pre = await getDoc(actRef);
     if (pre.exists()) {
       const casterUid = String(pre.data().casterUid || '');
@@ -329,13 +352,17 @@ export async function approveClassSkillActivation(
       } catch {
         casterMoves = undefined;
       }
-      casterLoadout = await getClassSkillLoadout(casterUid);
+      const [studentSnap, capacity] = await Promise.all([getDoc(studentRef(casterUid)).catch(() => null), getClassSkillCapacity()]);
+      const student = studentSnap?.exists() ? studentSnap.data() : null;
+      casterLoadout = parseClassSkillLoadout(student?.classSkillLoadout);
+      casterEquipped = parseClassSkillEquipped(student?.classSkillEquipped, capacity);
       if (casterLoadout.length) {
         const all = await getDocs(skillsCol());
         casterLoadout = effectiveClassSkillLoadout(casterLoadout, all.docs.map((d) => ({ id: d.id })));
       }
     }
-    const out = await runTransaction(db, async (tx) => {
+    const out = await runTransaction(db, async (tx): Promise<ApprovalOutcome> => {
+      ledger = [];
       const actSnap = await tx.get(actRef);
       if (!actSnap.exists()) throw new Error('Activation not found');
       const act = parseActivation(actSnap.id, actSnap.data());
@@ -350,6 +377,11 @@ export async function approveClassSkillActivation(
       const targetSnaps = await Promise.all(
         targetUids.filter((u) => u !== act.casterUid).map((u) => tx.get(subDoc(ctx.sessionId, 'irlPlayerState', u)))
       );
+      // Authoritative Vault balances for direct effects (all reads happen before any write).
+      const skillEffects = skillSnap.exists() ? parseClassSkill(skillSnap.id, skillSnap.data()).effects : [];
+      const hasDirect = skillEffects.some((e) => isDirectEffectType(e.type));
+      const vaultUids = hasDirect ? Array.from(new Set([act.casterUid, ...targetUids])) : [];
+      const vaultSnaps = await Promise.all(vaultUids.map((u) => tx.get(doc(db, 'vaults', u))));
 
       const reject = (reason: string) => {
         tx.update(actRef, { status: 'rejected', reason, decidedBy: ctx.facilitatorUid, decidedAtMs: ctx.nowMs });
@@ -371,12 +403,19 @@ export async function approveClassSkillActivation(
       const participation = casterIdx >= 0 ? Number(players[casterIdx].movesEarned) || 0 : 0;
       const liveSprintId = liveSprintIdOf(roomData);
       const casterState = casterSnap.exists() ? parsePlayerState(act.casterUid, casterSnap.data()) : null;
+      const phase = parseClassSkillPhase(roomData.classSkillPhase);
 
       if (skill.targetType !== act.targetType) return reject('The skill changed after the request. Try again.');
+      if (casterIdx < 0) return reject('The player is not in this Live Event.');
+      // Timing can't be bypassed: the request must carry this phase's id and a server time inside its window.
+      const window = phaseAcceptsRequest(phase, act);
+      if (!window.ok) return reject(window.reason);
       if (casterMoves === undefined) throw new Error("Couldn't verify the player's elemental level from this account. An admin account can approve this request.");
       const check = checkActivation({
         skill,
         loadout: casterLoadout,
+        equipped: casterEquipped,
+        phase: { ok: true, phaseId: phase!.id },
         config,
         casterUid: act.casterUid,
         casterLevel: elementalLevelFromMoves(casterMoves, skill.element),
@@ -387,20 +426,58 @@ export async function approveClassSkillActivation(
         sprintLive: !!liveSprintId,
       });
       if (!check.ok) return reject(check.reason);
+      const cost = effectiveCost(skill, config);
 
       const clock: RuleClock = { nowMs: ctx.nowMs, liveSprintId, eventEnded: false };
-      const expiry = resolveRuleExpiry(skill, ctx.nowMs, liveSprintId);
-      const isRestriction = skill.effects.some((e) => e.type === 'restriction');
-      const locksSkills = skill.effects.some((e) => e.type === 'restriction' && e.blocksIrlSkills);
-      const protectionBlocks = skill.effects.find((e) => e.type === 'protection')?.blocksRestrictions || 0;
+      // "Until end of sprint" effects from a phase wait for the next sprint (bound when it starts).
+      const expiry = resolveRuleExpiry(skill, ctx.nowMs, null);
+      const ruleEffects = skill.effects.filter((e) => !isDirectEffectType(e.type));
+      const isRestriction = ruleEffects.some((e) => e.type === 'restriction');
+      const locksSkills = ruleEffects.some((e) => e.type === 'restriction' && e.blocksIrlSkills);
+      const protectionBlocks = ruleEffects.find((e) => e.type === 'protection')?.blocksRestrictions || 0;
       const stateByUid = new Map<string, IrlPlayerState | null>();
       targetSnaps.forEach((s) => stateByUid.set(s.id, s.exists() ? parsePlayerState(s.id, s.data()) : null));
       stateByUid.set(act.casterUid, casterState);
 
+      const targetStateWrites = new Map<string, Record<string, unknown>>();
+      const mergeStateWrite = (uid: string, w: Record<string, unknown>) => targetStateWrites.set(uid, { ...(targetStateWrites.get(uid) || {}), ...w });
+
+      // Direct effects resolve against Vault balances read in this transaction.
+      let direct: DirectEffectOutput | null = null;
+      if (hasDirect) {
+        const vaults: Record<string, DirectVault> = {};
+        const floors: Record<string, number> = {};
+        const shields: Record<string, number> = {};
+        const states: Record<string, IrlPlayerState | null> = {};
+        vaultSnaps.forEach((s, i) => {
+          const uid = vaultUids[i];
+          const d = s.exists() ? s.data() : null;
+          vaults[uid] = { exists: !!d, currentPP: Number(d?.currentPP) || 0, capacity: Number(d?.capacity) || DEFAULT_VAULT_CAPACITY };
+          const row = players.find((p) => p?.userId === uid);
+          const siege = row && (row.participationMode === 'offline' || row.joinedViaSiege === true);
+          const siegeFloor = siege ? computeSiegeProtectionFloor(Number(row?.liveEventStartingPP ?? row?.powerPoints) || 0) : 0;
+          floors[uid] = Math.max(config.vaultFloorPP, siegeFloor);
+          shields[uid] = Math.max(0, Number(row?.shield) || 0);
+          states[uid] = stateByUid.get(uid) ?? null;
+        });
+        direct = resolveDirectEffects({
+          activationId,
+          effects: skill.effects,
+          casterUid: act.casterUid,
+          targetUids,
+          vaults,
+          shields,
+          floors,
+          states,
+          clock,
+          expiry: resolveRuleExpiry({ durationKind: skill.durationKind === 'instant' ? 'end_of_event' : skill.durationKind, durationSeconds: skill.durationSeconds }, ctx.nowMs, null),
+        });
+        Object.entries(direct.stateWrites).forEach(([uid, w]) => mergeStateWrite(uid, w as Record<string, unknown>));
+      }
+
       const ruleIds: string[] = [];
       const blockedUids: string[] = [];
-      const targetStateWrites = new Map<string, Record<string, unknown>>();
-      for (const uid of targetUids) {
+      for (const uid of ruleEffects.length ? targetUids : []) {
         const ruleId = `${activationId}__${uid}`;
         ruleIds.push(ruleId);
         const state = stateByUid.get(uid) ?? null;
@@ -408,12 +485,12 @@ export async function approveClassSkillActivation(
         if (blocked && state?.protection) {
           blockedUids.push(uid);
           const remaining = state.protection.remaining - 1;
-          targetStateWrites.set(uid, { protection: remaining > 0 ? { ...state.protection, remaining } : null });
+          mergeStateWrite(uid, { protection: remaining > 0 ? { ...state.protection, remaining } : null });
         } else {
           const w: Record<string, unknown> = {};
           if (locksSkills) w.skillLockUntilMs = Math.max(state?.skillLockUntilMs || 0, expiry.expiresAtMs ?? ctx.nowMs + CLASS_SKILL_LIMITS.maxDurationSeconds * 1000);
           if (protectionBlocks) w.protection = { ruleId, remaining: protectionBlocks, expiresAtMs: expiry.expiresAtMs, sprintId: expiry.sprintId };
-          if (Object.keys(w).length) targetStateWrites.set(uid, w);
+          if (Object.keys(w).length) mergeStateWrite(uid, w);
         }
         tx.set(subDoc(ctx.sessionId, 'irlRules', ruleId), {
           activationId,
@@ -424,7 +501,7 @@ export async function approveClassSkillActivation(
           casterName: act.casterName,
           targetUid: uid,
           targetName: targetNames[uid] || (uid === act.casterUid ? act.casterName : 'Player'),
-          effects: skill.effects,
+          effects: ruleEffects,
           irlEffect: skill.irlEffect,
           violationConditions: skill.violationConditions,
           consequence: skill.consequence,
@@ -455,6 +532,9 @@ export async function approveClassSkillActivation(
         { merge: true }
       );
 
+      const nameOf = (uid: string) => targetNames[uid] || (uid === act.casterUid ? act.casterName : 'Player');
+      const resolvedEffects = direct?.resolved ?? [];
+      const resultLines = resolvedEffects.filter((r) => r.kind !== 'protection' && r.kind !== 'modifier').map((r) => describeResolvedEffect(r, nameOf));
       const roomUpdate: Record<string, unknown> = {
         recentSkillActivations: appendSkillActivationRecord(
           roomData.recentSkillActivations,
@@ -467,27 +547,59 @@ export async function approveClassSkillActivation(
               move: { id: classSkillArtKey(skill.id), name: skill.name, category: 'elemental', elementalAffinity: skill.element },
               now: ctx.nowMs,
             }),
-            details: [skill.irlEffect || skill.effects[0]?.behavior || '', `Duration: ${describeDuration(skill)}`, blockedUids.length ? `Blocked by protection: ${blockedUids.length}` : '']
+            details: [
+              skill.irlEffect || (skill.effects[0] ? describeEffect(skill.effects[0]) : ''),
+              ...resultLines.slice(0, 2),
+              resultLines.length > 2 ? `+${resultLines.length - 2} more` : '',
+              ruleEffects.length ? `Duration: ${describeDuration(skill)}` : '',
+              blockedUids.length ? `Blocked by protection: ${blockedUids.length}` : '',
+              `Cost: ${cost} Participation Point${cost === 1 ? '' : 's'}`,
+            ]
               .filter(Boolean)
-              .slice(0, 3),
+              .slice(0, 5),
           }
         ),
+        [`classSkillPhase.activationCounts.${act.casterUid}`]: (phase!.activationCounts[act.casterUid] || 0) + 1,
+        [`classSkillPhase.decisions.${act.casterUid}`]: { choice: 'activated', atMs: ctx.nowMs },
+        'classSkillPhase.ppSpent': increment(cost),
       };
-      if (skill.activationCost > 0 && casterIdx >= 0) {
-        roomUpdate.players = players.map((p, i) => (i === casterIdx ? { ...p, movesEarned: participation - skill.activationCost } : p));
+      const shieldChanges = direct?.shields ?? {};
+      if (cost > 0 || Object.keys(shieldChanges).length) {
+        roomUpdate.players = players.map((p, i) => {
+          const uid = typeof p?.userId === 'string' ? p.userId : '';
+          let row = p;
+          if (i === casterIdx && cost > 0) row = { ...row, movesEarned: participation - cost };
+          if (uid in shieldChanges) row = { ...row, shield: shieldChanges[uid] };
+          return row;
+        });
       }
       tx.update(room(ctx.sessionId), roomUpdate as DocumentData);
+      Object.entries(direct?.vaultPP ?? {}).forEach(([uid, next]) => {
+        tx.update(doc(db, 'vaults', uid), { currentPP: next });
+        ledger.push({ uid, amount: direct!.ppDelta[uid] || 0, next });
+      });
       tx.update(actRef, {
         status: 'approved',
         decidedBy: ctx.facilitatorUid,
         decidedAtMs: ctx.nowMs,
-        costCharged: skill.activationCost,
+        costCharged: cost,
         ruleIds,
         blockedUids,
+        resolvedEffects,
         reason: null,
       });
-      return { approved: true, blockedUids };
+      return { approved: true, blockedUids, resolvedEffects, cost };
     });
+    // Vault is the source of truth; students/users are display mirrors that a facilitator account may not be allowed to write.
+    if (out.approved) {
+      await Promise.all(
+        ledger.map(async ({ uid, amount, next }) => {
+          await updateDoc(studentRef(uid), { powerPoints: next }).catch(() => undefined);
+          await setDoc(doc(db, 'users', uid), { powerPoints: next }, { merge: true }).catch(() => undefined);
+          if (amount) void recordPPChange({ studentId: uid, amount, sourceType: 'classSkill', sourceId: `${ctx.sessionId}:${activationId}`, notes: 'Class Skill Vault effect' }).catch(() => undefined);
+        })
+      );
+    }
     return { ok: true, value: out };
   } catch (e) {
     return fail(e);

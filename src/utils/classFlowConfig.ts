@@ -165,6 +165,7 @@ function parsePlan(raw: unknown): CfSprintPlanItem[] {
       durationMinutes: Math.floor(num(o.durationMinutes, 10, 1, 120)),
       assignments: parseSprintAssignments(o.assignments),
       ...imageField(o.imageUrl as string | undefined),
+      ...(typeof o.classSkillsEnabled === 'boolean' ? { classSkillsEnabled: o.classSkillsEnabled } : {}),
     });
   }
   return out;

@@ -83,11 +83,13 @@ describe('Class Skills — backward compatibility (tests 1, 2, 16, 17)', () => {
     expect(resolveSkillContext(null)).toBe('in_game');
   });
 
-  it('Live Events without Class Skills config are unchanged (disabled by default)', () => {
-    const cfg = parseIrlEventConfig(undefined, 'class_flow');
-    expect(cfg.enabled).toBe(false);
-    expect(checkActivation({ ...{ skill: tpl('fire_silent_ember') }, config: cfg, casterUid: 'u1', casterLevel: 4, casterState: null, participationPoints: 99, targetUids: ['u2'], nowMs: T0, sprintLive: true }).ok).toBe(false);
-    expect(parseIrlEventConfig(undefined, 'battle_royale').allowedEffectTypes).toEqual([]);
+  it('Class Skills default on only for Battle Sprints (Class Flow); other modes stay unchanged', () => {
+    expect(parseIrlEventConfig(undefined, 'class_flow').enabled).toBe(true);
+    expect(parseIrlEventConfig({ enabled: false }, 'class_flow').enabled).toBe(false);
+    ['battle_royale', 'quiz', 'reflection', 'exam', null].forEach((mode) => expect(parseIrlEventConfig(undefined, mode).enabled).toBe(false));
+    const off = parseIrlEventConfig(undefined, 'battle_royale');
+    expect(checkActivation({ ...{ skill: tpl('fire_silent_ember') }, config: off, casterUid: 'u1', casterLevel: 4, casterState: null, participationPoints: 99, targetUids: ['u2'], nowMs: T0, sprintLive: true }).ok).toBe(false);
+    expect(off.allowedEffectTypes).toEqual([]);
   });
 });
 
@@ -155,8 +157,13 @@ describe('Class Skills — activation (tests 6, 7, 8)', () => {
 
   it('enforces Participation Point cost, cooldown, locks and disable windows', () => {
     const s = tpl('air_swift_current');
-    expect(baseCheck(s, { participationPoints: s.activationCost - 1 }).ok).toBe(false);
-    expect(baseCheck(s, { participationPoints: s.activationCost }).ok).toBe(true);
+    // Default: one event-wide cost of 3 Participation Points for every Class Skill.
+    expect(enabled.classSkillCost).toBe(3);
+    expect(baseCheck(s, { participationPoints: 2 }).ok).toBe(false);
+    expect(baseCheck(s, { participationPoints: 3 }).ok).toBe(true);
+    const perSkill = { ...enabled, costSource: 'skill' as const };
+    expect(baseCheck(s, { config: perSkill, participationPoints: s.activationCost - 1 }).ok).toBe(false);
+    expect(baseCheck(s, { config: perSkill, participationPoints: s.activationCost }).ok).toBe(true);
     expect(baseCheck(s, { casterState: state({ cooldowns: { [s.id]: T0 + 5000 } }) }).ok).toBe(false);
     expect(baseCheck(s, { casterState: state({ cooldowns: { [s.id]: T0 - 1 } }) }).ok).toBe(true);
     expect(baseCheck(s, { casterState: state({ skillLockUntilMs: T0 + 1 }) }).ok).toBe(false);

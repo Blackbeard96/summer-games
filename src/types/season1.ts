@@ -50,6 +50,8 @@ export interface ClassFlowSprintState {
   assignments?: CfSprintAssignment[];
   /** Optional picture shown next to the objective in full screen. */
   imageUrl?: string;
+  /** Post-sprint Class Skill Phase override; unset = the Live Event default. */
+  classSkillsEnabled?: boolean;
 }
 
 export type EnergyType = 'kinetic' | 'mental' | 'emotional' | 'spiritual';

@@ -145,6 +145,21 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   const [equippableCatalogRaw, setEquippableCatalogRaw] = useState<Record<string, unknown> | null>(null);
   const [universalLawEffects, setUniversalLawEffects] = useState<UniversalLawBoonEffects | null>(null);
   const [maxLoadoutSlots, setMaxLoadoutSlots] = useState<number>(MAX_EQUIPPED_SKILLS);
+  const [skillsTab, setSkillsTab] = useState<'in_game' | 'irl'>(() => {
+    try {
+      return sessionStorage.getItem('movesDisplay.skillsTab') === 'irl' ? 'irl' : 'in_game';
+    } catch {
+      return 'in_game';
+    }
+  });
+  const selectSkillsTab = (tab: 'in_game' | 'irl') => {
+    setSkillsTab(tab);
+    try {
+      sessionStorage.setItem('movesDisplay.skillsTab', tab);
+    } catch {
+      /* storage unavailable */
+    }
+  };
   /** Level 2 Manifest custom skill — seventh battle slot for Live Events (not in skill_state equip list). */
   const [level2ManifestMove, setLevel2ManifestMove] = useState<Move | null>(null);
 
@@ -2411,6 +2426,38 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         ⚔️ Your Battle Arsenal ({manifestMoves.length + elementalMoves.length + rrCandyMoves.length + artifactMovesForDisplay.length} Skills Unlocked)
       </h3>
 
+      <div role="tablist" aria-label="Skill type" style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginBottom: '1.25rem' }}>
+        {(
+          [
+            ['in_game', '⚔️ In-Game Skills'],
+            ['irl', '🏫 Class Skills (IRL)'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={skillsTab === id}
+            onClick={() => selectSkillsTab(id)}
+            style={{
+              padding: '0.5rem 1.1rem',
+              borderRadius: '999px',
+              border: skillsTab === id ? '2px solid #4f46e5' : '1px solid #d1d5db',
+              background: skillsTab === id ? '#eef2ff' : 'white',
+              color: skillsTab === id ? '#3730a3' : '#374151',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {skillsTab === 'irl' && <ClassSkillsLoadout moves={moves} />}
+
+      <div hidden={skillsTab === 'irl'}>
+
       {/* Loadout slots (base + boon bonuses) */}
       <div style={{
         marginBottom: '1rem',
@@ -2867,8 +2914,6 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         );
       })()}
 
-      <ClassSkillsLoadout moves={moves} />
-
       {/* Artifact Skills Section — from equipped legendary artifacts; blank if none */}
       <div style={{ marginBottom: '2rem' }}>
         <div style={{
@@ -3117,6 +3162,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             )}
         </div>
       )}
+
+      </div>
 
       {/* Ascend Confirmation Modal */}
       {ascendConfirm && (

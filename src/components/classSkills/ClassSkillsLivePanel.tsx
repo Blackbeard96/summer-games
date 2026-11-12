@@ -24,13 +24,18 @@ import {
   IRL_TARGET_LABELS,
   IRL_VERIFICATION_LABELS,
   checkActivation,
+  classSkillUnlockState,
   describeConsequence,
   describeDuration,
+  describeEffect,
   describeReward,
   effectiveApproval,
   effectiveClassSkillLoadout,
+  effectiveCost,
   elementalLevelFromMoves,
-  skillInLoadout,
+  isDirectEffectType,
+  parseClassSkillEquipped,
+  skillHarmsTargets,
   formatRuleClock,
   groupRulesByActivation,
   isRuleEnforceable,
@@ -40,6 +45,7 @@ import {
   summarizeIrlUsage,
   type IrlRuleGroup,
   type IrlTeamOption,
+  type PhaseGate,
   type RuleClock,
 } from '../../utils/classSkillsConfig';
 import {
@@ -62,6 +68,33 @@ import {
   subscribeIrlViolations,
   updateIrlEventConfig,
 } from '../../utils/classSkillsService';
+import {
+  bindPhaseRulesToSprint,
+  closeClassSkillPhase,
+  extendClassSkillPhase,
+  openClassSkillPhase,
+  passClassSkillPhase,
+  setClassSkillCapacity,
+  setClassSkillEquipped,
+  setSprintClassSkillsEnabled,
+  subscribeClassSkillCapacity,
+  subscribeClassSkillEquipped,
+} from '../../utils/classSkillPhaseService';
+import {
+  parseClassSkillPhase,
+  phaseAutoCloseReason,
+  phaseRemainingMs,
+  phaseToOpen,
+  playerPhaseStatus,
+  type PhaseSprint,
+  type PlayerPhaseStatus,
+} from '../../utils/classSkillPhase';
+import { describeResolvedEffect } from '../../utils/classSkillDirectEffects';
+import { sprintTimerInput } from '../../utils/liveEventSprintService';
+import { sprintPhase } from '../../utils/classFlowConfig';
+import ClassSkillCard, { type ClassSkillCardTone } from './ClassSkillCard';
+import ClassSkillPhasePrompt from './ClassSkillPhasePrompt';
+import ClassSkillPhaseFacilitator from './ClassSkillPhaseFacilitator';
 import '../classFlow/classFlow.css';
 import './classSkills.css';
 
@@ -69,6 +102,8 @@ export interface ClassSkillsLivePanelProps {
   sessionId: string;
   liveEventMode: string | null;
   rawConfig: unknown;
+  /** Room field `classSkillPhase` (post-sprint Class Skill Phase). */
+  rawPhase?: unknown;
   sprint: ClassFlowSprintState | null;
   sessionStatus?: string;
   players: { userId: string; displayName?: string; movesEarned?: number }[];
@@ -77,7 +112,7 @@ export interface ClassSkillsLivePanelProps {
   currentUserName: string;
 }
 
-type FacTab = 'approvals' | 'active' | 'reports' | 'history' | 'settings';
+type FacTab = 'phase' | 'approvals' | 'active' | 'reports' | 'history' | 'settings';
 
 const artInput = (skillId: string, name: string, element: string) => ({
   id: classSkillArtKey(skillId),
@@ -100,6 +135,7 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
   sessionId,
   liveEventMode,
   rawConfig,
+  rawPhase,
   sprint,
   sessionStatus,
   players,
@@ -108,6 +144,11 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
   currentUserName,
 }) => {
   const config = useMemo(() => parseIrlEventConfig(rawConfig, liveEventMode), [rawConfig, liveEventMode]);
+  const phase = useMemo(() => parseClassSkillPhase(rawPhase), [rawPhase]);
+  const phaseSprint: PhaseSprint | null = useMemo(
+    () => (sprint ? { id: sprint.id, title: sprint.title, classSkillsEnabled: sprint.classSkillsEnabled, timer: sprintTimerInput(sprint) } : null),
+    [sprint]
+  );
   const offset = useServerClockOffset(sessionId, currentUserId, config.enabled || isFacilitator);
   const [nowMs, setNowMs] = useState(() => Date.now() + offset);
   const [skills, setSkills] = useState<ClassSkill[]>([]);
@@ -118,8 +159,10 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
   const [teams, setTeams] = useState<IrlTeamOption[]>([]);
   const [levels, setLevels] = useState<Record<string, number> | null>(null);
   const [loadout, setLoadout] = useState<string[]>([]);
+  const [rawEquipped, setRawEquipped] = useState<string[]>([]);
+  const [capacity, setCapacity] = useState<number>(CLASS_SKILL_LIMITS.defaultCapacity);
   const [activating, setActivating] = useState<ClassSkill | null>(null);
-  const [facTab, setFacTab] = useState<FacTab>('approvals');
+  const [facTab, setFacTab] = useState<FacTab>('phase');
   const [collapsed, setCollapsed] = useState(false);
   const [msg, setMsg] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const live = config.enabled || isFacilitator;
@@ -157,7 +200,12 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
 
   useEffect(() => {
     if (!config.enabled || isFacilitator) return;
-    return subscribeClassSkillLoadout(currentUserId, setLoadout);
+    const unsubs = [
+      subscribeClassSkillLoadout(currentUserId, setLoadout),
+      subscribeClassSkillEquipped(currentUserId, setRawEquipped),
+      subscribeClassSkillCapacity(setCapacity),
+    ];
+    return () => unsubs.forEach((u) => u());
   }, [config.enabled, isFacilitator, currentUserId]);
 
   // Elemental level comes from the player's own unlocked moves (existing progression).
@@ -205,6 +253,7 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
       const v = res.value;
       if (v?.approved) {
         const skill = skillsById[a.skillId];
+        const results = (v.resolvedEffects || []).filter((r) => r.kind !== 'protection' && r.kind !== 'modifier').map((r) => describeResolvedEffect(r, nameOf));
         announceSkillActivation({
           id: `irl:${a.id}`,
           skill: artInput(a.skillId, a.skillName, a.element),
@@ -213,9 +262,16 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
           side: 'ally',
           targetName: a.targetLabel || null,
           rawName: true,
-          details: skill ? [skill.irlEffect || skill.effects[0]?.behavior || '', `Duration: ${describeDuration(skill)}`].filter(Boolean) : undefined,
+          details: skill
+            ? [
+                skill.irlEffect || (skill.effects[0] ? describeEffect(skill.effects[0]) : ''),
+                ...results.slice(0, 3),
+                skill.effects.some((e) => !isDirectEffectType(e.type)) ? `Duration: ${describeDuration(skill)}` : '',
+                v.cost != null ? `Cost: ${v.cost} Participation Points` : '',
+              ].filter(Boolean)
+            : undefined,
         });
-        flash(true, `${a.skillName} approved${v.blockedUids.length ? ` · blocked for ${v.blockedUids.length} by protection` : ''}.`);
+        flash(true, `${a.skillName} approved${results.length ? ` · ${results.join(' · ')}` : ''}${v.blockedUids.length ? ` · blocked for ${v.blockedUids.length} by protection` : ''}.`);
       } else if (v?.reason) {
         flash(false, `${a.skillName} not approved: ${v.reason}`);
       }
@@ -245,16 +301,96 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
       });
   }, [isFacilitator, rules, clock, ctx]);
 
+  /* ----------------------------- Class Skill Phase ----------------------------- */
+
+  // Open once per completion cycle; the transaction re-checks, so several facilitator screens are safe.
+  const openTried = useRef(new Set<string>());
+  useEffect(() => {
+    if (!isFacilitator || !config.enabled || sessionStatus === 'ended') return;
+    const id = phaseToOpen({ config, sprint: phaseSprint, phase, cycles: [], nowMs });
+    if (!id || openTried.current.has(id)) return;
+    openTried.current.add(id);
+    void openClassSkillPhase(ctx()).then((res) => {
+      if (res.ok) return;
+      flash(false, `Couldn't open the Class Skill Phase: ${res.error}`);
+      window.setTimeout(() => openTried.current.delete(id), 5000);
+    });
+  }, [isFacilitator, config, phaseSprint, phase, nowMs, sessionStatus, ctx, flash]);
+
+  const closeTried = useRef(new Set<string>());
+  useEffect(() => {
+    if (!isFacilitator || !phase) return;
+    const pendingIn = pending.filter((a) => a.phaseId === phase.id).length;
+    const reason = phaseAutoCloseReason(phase, nowMs, pendingIn);
+    if (!reason || closeTried.current.has(`${phase.id}:${reason}`)) return;
+    closeTried.current.add(`${phase.id}:${reason}`);
+    void closeClassSkillPhase(ctx(), phase.id, reason);
+  }, [isFacilitator, phase, pending, nowMs, ctx]);
+
+  // "Until end of sprint" effects chosen in a phase start counting when the next sprint is running.
+  const binding = useRef(new Set<string>());
+  useEffect(() => {
+    if (!isFacilitator || !phaseSprint) return;
+    const state = sprintPhase(phaseSprint.timer, nowMs);
+    if ((state !== 'running' && state !== 'paused') || phase?.sprintId === phaseSprint.id) return;
+    const ids = rules.filter((r) => r.status === 'active' && r.durationKind === 'end_of_sprint' && r.sprintId === null && !binding.current.has(r.id)).map((r) => r.id);
+    if (!ids.length) return;
+    ids.forEach((id) => binding.current.add(id));
+    void bindPhaseRulesToSprint(sessionId, ids, phaseSprint.id);
+  }, [isFacilitator, phaseSprint, phase, rules, nowMs, sessionId]);
+
   if (!live) return null;
 
   const myState = states[currentUserId] || null;
   const myPP = players.find((p) => p.userId === currentUserId)?.movesEarned || 0;
-  const usable = skills.filter((s) => s.status === 'active' && !config.disabledSkillIds.includes(s.id) && s.level <= config.maxLevel);
   const myElements = levels ? CLASS_SKILL_ELEMENTS.filter((el) => (levels[el] || 0) > 0) : [];
   const myLoadout = effectiveClassSkillLoadout(loadout, skills);
-  const mySkills = usable.filter((s) => myElements.includes(s.element) && skillInLoadout(myLoadout, s.id));
   const myPending = pending.filter((a) => a.casterUid === currentUserId);
   const myEffects = activeRules.filter((r) => r.targetUid === currentUserId);
+  const myPendingInPhase = phase ? myPending.filter((a) => a.phaseId === phase.id).length : 0;
+  const phaseStatus = playerPhaseStatus({ config, sprint: phaseSprint, phase, uid: currentUserId, nowMs, pendingInPhase: myPendingInPhase });
+  const equippedIds = parseClassSkillEquipped(rawEquipped, capacity).filter((id) => skillsById[id]);
+  const equippedSkills = equippedIds.map((id) => skillsById[id]);
+  const equipOptions =
+    equippedIds.length < capacity
+      ? skills.filter(
+          (s) =>
+            !equippedIds.includes(s.id) &&
+            !config.disabledSkillIds.includes(s.id) &&
+            s.level <= config.maxLevel &&
+            classSkillUnlockState(s, levels, myLoadout).unlocked
+        )
+      : [];
+  const activatedThisPhase = new Set(
+    phase ? activations.filter((a) => a.casterUid === currentUserId && a.phaseId === phase.id && a.status === 'approved').map((a) => a.skillId) : []
+  );
+  const liveStates = equippedSkills.map((s) =>
+    classSkillLiveState({
+      skill: s,
+      config,
+      phaseStatus,
+      levels,
+      loadout: myLoadout,
+      equipped: equippedIds,
+      casterState: myState,
+      participationPoints: myPP,
+      nowMs,
+      sprintLive: !!liveSprintId,
+      currentUserId,
+      pending: myPending.some((a) => a.skillId === s.id),
+      activated: activatedThisPhase.has(s.id),
+    })
+  );
+  const equip = async (s: ClassSkill) => {
+    const res = await setClassSkillEquipped(currentUserId, [...equippedIds, s.id], capacity);
+    flash(res.ok, res.ok ? `${s.name} equipped.` : res.error);
+  };
+  const pass = async () => {
+    if (!phase) return;
+    const res = await passClassSkillPhase(sessionId, phase.id, currentUserId, Date.now() + offset);
+    flash(res.ok, res.ok ? 'You passed this Class Skill Phase.' : res.error);
+  };
+  const showPrompt = !isFacilitator && config.enabled && phase && phaseStatus.state === 'open' && !activating;
 
   return (
     <div className="cf-root cs-root" data-testid="class-skills-panel">
@@ -325,17 +461,20 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
 
           {!isFacilitator && config.enabled && (
             <PlayerSkills
-              skills={mySkills}
+              phaseStatus={phaseStatus}
+              phaseEndsAtMs={phase?.status === 'open' ? phase.endsAtMs : null}
+              skills={equippedSkills}
+              liveStates={liveStates}
+              equipOptions={equipOptions}
+              capacity={capacity}
               levels={levels}
               hasElement={myElements.length > 0}
-              myState={myState}
-              myPP={myPP}
+              config={config}
               pending={myPending}
               nowMs={nowMs}
-              config={config}
-              sprintLive={!!liveSprintId}
-              currentUserId={currentUserId}
               onActivate={setActivating}
+              onEquip={equip}
+              onPass={pass}
               onCancel={async (a) => {
                 const res = await cancelClassSkillActivation(sessionId, a.id);
                 flash(res.ok, res.ok ? 'Request cancelled. Nothing was charged.' : res.error);
@@ -348,6 +487,7 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
               <div className="cf-tabs" role="tablist">
                 {(
                   [
+                    ['phase', phase?.status === 'open' ? `Phase · ${formatRuleClock(phaseRemainingMs(phase, nowMs))}` : 'Class Skill Phase'],
                     ['approvals', `Pending approvals${pending.length ? ` (${pending.length})` : ''}`],
                     ['active', `Active rules (${activeRules.length})`],
                     ['reports', `Violations${openReports.length ? ` (${openReports.length})` : ''}`],
@@ -360,6 +500,33 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
                   </button>
                 ))}
               </div>
+              {facTab === 'phase' && (
+                <ClassSkillPhaseFacilitator
+                  phase={phase}
+                  sprint={phaseSprint}
+                  config={config}
+                  activations={activations}
+                  nowMs={nowMs}
+                  nameOf={nameOf}
+                  onShowApprovals={() => setFacTab('approvals')}
+                  onOpen={async () => {
+                    const res = await openClassSkillPhase(ctx(), { manual: true });
+                    flash(res.ok, res.ok ? (res.value?.opened ? 'Class Skill Phase opened.' : 'A Class Skill Phase is already open.') : res.error);
+                  }}
+                  onClose={async (id) => {
+                    const res = await closeClassSkillPhase(ctx(), id, 'facilitator');
+                    flash(res.ok, res.ok ? 'Class Skill Phase ended. Pending requests can still be approved or rejected.' : res.error);
+                  }}
+                  onExtend={async (id, s) => {
+                    const res = await extendClassSkillPhase(ctx(), id, s);
+                    flash(res.ok, res.ok ? `Phase extended by ${s}s.` : res.error);
+                  }}
+                  onToggleSprint={async (sprintId, enabled) => {
+                    const res = await setSprintClassSkillsEnabled(ctx(), sprintId, enabled);
+                    flash(res.ok, res.ok ? `Class Skills ${enabled ? 'enabled' : 'disabled'} for this sprint.` : res.error);
+                  }}
+                />
+              )}
               {facTab === 'settings' && (
                 <FacilitatorSettings
                   sessionId={sessionId}
@@ -418,6 +585,20 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
         </>
       )}
 
+      {showPrompt && phase && (
+        <ClassSkillPhasePrompt
+          phase={phase}
+          nowMs={nowMs}
+          participationPoints={myPP}
+          cost={config.costSource === 'event' ? config.classSkillCost : phase.cost}
+          equipped={equippedSkills.map((s, i) => ({ skill: s, cost: effectiveCost(s, config), status: liveStates[i].status, canUse: liveStates[i].canUse }))}
+          equipOptions={equipOptions}
+          onChoose={setActivating}
+          onEquip={equip}
+          onPass={pass}
+        />
+      )}
+
       {activating && (
         <ActivationModal
           skill={activating}
@@ -428,10 +609,17 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
           participationPoints={myPP}
           nowMs={nowMs}
           sprintLive={!!liveSprintId}
+          phaseGate={phaseStatus.gate}
+          equipped={equippedIds}
+          loadout={myLoadout}
           players={players.map((p) => ({ uid: p.userId, name: nameOf(p.userId) }))}
           teams={teams}
           onClose={() => setActivating(null)}
           onConfirm={async (targetUids, targetLabel) => {
+            if (!phaseStatus.gate.ok) {
+              setActivating(null);
+              return flash(false, phaseStatus.gate.reason);
+            }
             const res = await requestClassSkillActivation({
               sessionId,
               skill: activating,
@@ -440,6 +628,7 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
               targetType: activating.targetType,
               targetUids,
               targetLabel,
+              phaseId: phaseStatus.gate.phaseId,
             });
             setActivating(null);
             flash(
@@ -459,23 +648,94 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
 
 /* ---------------------------------- Player ---------------------------------- */
 
-const PlayerSkills: React.FC<{
-  skills: ClassSkill[];
-  levels: Record<string, number> | null;
-  hasElement: boolean;
-  myState: IrlPlayerState | null;
-  myPP: number;
-  pending: IrlActivation[];
-  nowMs: number;
+interface LiveSkillState {
+  status: { label: string; tone: ClassSkillCardTone };
+  canUse: boolean;
+  reason: string | null;
+}
+
+/** Card state for one equipped skill: the same checks the approval transaction runs, plus phase timing. */
+function classSkillLiveState(input: {
+  skill: ClassSkill;
   config: ReturnType<typeof parseIrlEventConfig>;
+  phaseStatus: PlayerPhaseStatus;
+  levels: Record<string, number> | null;
+  loadout: string[];
+  equipped: string[];
+  casterState: IrlPlayerState | null;
+  participationPoints: number;
+  nowMs: number;
   sprintLive: boolean;
   currentUserId: string;
+  pending: boolean;
+  activated: boolean;
+}): LiveSkillState {
+  const { skill, config, phaseStatus } = input;
+  const st = (label: string, tone: ClassSkillCardTone, reason: string | null = null): LiveSkillState => ({ status: { label, tone }, canUse: false, reason });
+  if (config.disabledSkillIds.includes(skill.id)) return st('Disabled by Facilitator', 'muted', 'Your facilitator turned this skill off for this Live Event.');
+  const unlock = classSkillUnlockState(skill, input.levels, input.loadout);
+  if (!unlock.unlocked) return st('Locked', 'locked', unlock.reason);
+  if (input.pending) return st('Pending Approval', 'warn', 'Waiting for the facilitator.');
+  if (input.activated) return st('Activated', 'active', 'Used in this Class Skill Phase.');
+  if (phaseStatus.state === 'awaiting') return st('Awaiting Post-Sprint Phase', 'muted', phaseStatus.message);
+  if (phaseStatus.state === 'disabled') return st('Disabled by Facilitator', 'muted', phaseStatus.message);
+  const ready = input.casterState?.cooldowns[skill.id] || 0;
+  if (ready > input.nowMs) return st(`On Cooldown · ${formatRuleClock(ready - input.nowMs)}`, 'locked', 'This skill is recharging.');
+  const cost = effectiveCost(skill, config);
+  if (input.participationPoints < cost) return st('Insufficient Participation Points', 'warn', `Needs ${cost}; you have ${input.participationPoints}.`);
+  if (!phaseStatus.gate.ok) return st('Equipped', 'muted', phaseStatus.message);
+  const check = checkActivation({
+    skill,
+    loadout: input.loadout,
+    equipped: input.equipped,
+    phase: phaseStatus.gate,
+    config,
+    casterUid: input.currentUserId,
+    casterLevel: input.levels?.[skill.element] || 0,
+    casterState: input.casterState,
+    participationPoints: input.participationPoints,
+    // Target choice happens in the modal; preview only the caster-side checks here.
+    targetUids: skill.targetType === 'self' ? [input.currentUserId] : ['preview'],
+    nowMs: input.nowMs,
+    sprintLive: input.sprintLive,
+  });
+  if (!check.ok) return st('Unavailable', 'warn', check.reason);
+  return { status: { label: 'Available', tone: 'ready' }, canUse: true, reason: null };
+}
+
+const PlayerSkills: React.FC<{
+  phaseStatus: PlayerPhaseStatus;
+  phaseEndsAtMs: number | null;
+  skills: ClassSkill[];
+  liveStates: LiveSkillState[];
+  equipOptions: ClassSkill[];
+  capacity: number;
+  levels: Record<string, number> | null;
+  hasElement: boolean;
+  config: ReturnType<typeof parseIrlEventConfig>;
+  pending: IrlActivation[];
+  nowMs: number;
   onActivate: (s: ClassSkill) => void;
+  onEquip: (s: ClassSkill) => Promise<void>;
+  onPass: () => Promise<void>;
   onCancel: (a: IrlActivation) => void;
-}> = ({ skills, levels, hasElement, myState, myPP, pending, nowMs, config, sprintLive, currentUserId, onActivate, onCancel }) => (
+}> = ({ phaseStatus, phaseEndsAtMs, skills, liveStates, equipOptions, capacity, levels, hasElement, config, pending, nowMs, onActivate, onEquip, onPass, onCancel }) => (
   <div style={{ marginTop: 12 }}>
-    <div className="cf-stat-label" style={{ marginBottom: 6 }}>
-      Your Class Skills
+    <div className={`cs-phase-banner${phaseStatus.state === 'open' ? ' cs-phase-banner--open' : ''}`} data-testid="class-skill-phase-status">
+      <span>
+        <strong>{phaseStatus.state === 'open' ? 'Class Skill Phase' : 'Class Skills'}</strong> · {phaseStatus.message}
+      </span>
+      {phaseStatus.state === 'open' && phaseEndsAtMs != null && (
+        <span className="cf-row" style={{ flexWrap: 'nowrap' }}>
+          <span className="cs-phase-clock">{formatRuleClock(Math.max(0, phaseEndsAtMs - nowMs))}</span>
+          <button type="button" className="cf-btn cf-btn--ghost" onClick={() => void onPass()}>
+            Pass
+          </button>
+        </span>
+      )}
+    </div>
+    <div className="cf-stat-label" style={{ margin: '12px 0 6px' }}>
+      Your equipped Class Skills ({skills.length}/{capacity})
     </div>
     {pending.map((a) => (
       <div key={a.id} className="cf-card cs-pending">
@@ -492,45 +752,38 @@ const PlayerSkills: React.FC<{
     ) : !hasElement ? (
       <div className="cf-empty">Unlock an elemental move to use Class Skills.</div>
     ) : skills.length === 0 ? (
-      <div className="cf-empty">No Class Skills are available for your element in this Live Event.</div>
+      <div className="cf-empty">No Class Skills equipped. Equip them in your Loadout (Class Skills tab){equipOptions.length ? ' or below' : ''}.</div>
     ) : (
       <div className="cs-skill-grid">
-        {skills.map((s) => {
-          const check = checkActivation({
-            skill: s,
-            config,
-            casterUid: currentUserId,
-            casterLevel: levels[s.element] || 0,
-            casterState: myState,
-            participationPoints: myPP,
-            // Target choice happens in the modal; preview only the caster-side checks here.
-            targetUids: s.targetType === 'self' ? [currentUserId] : ['preview'],
-            nowMs,
-            sprintLive,
-          });
-          const waiting = pending.some((a) => a.skillId === s.id);
+        {skills.map((s, i) => {
+          const ls = liveStates[i];
           return (
-            <div key={s.id} className={`cs-skill cs-el-${s.element}${check.ok ? '' : ' cs-skill--locked'}`}>
-              <SkillCardArt skill={artInput(s.id, s.name, s.element)} alt="" className="cs-skill-art" />
-              <div className="cs-skill-body">
-                <div className="cs-skill-name">{s.name}</div>
-                <div className="cf-sub">
-                  {cap(s.element)} · Lv {s.level} · {IRL_TARGET_LABELS[s.targetType]} · {describeDuration(s)}
-                </div>
-                <div className="cs-skill-effect">{s.irlEffect || s.description}</div>
-                <div className="cf-sub">
-                  Cost {s.activationCost} · Cooldown {Math.round(s.cooldownSeconds / 60)} min
-                  {effectiveApproval(s, config) === 'facilitator' ? ' · Needs approval' : ''}
-                </div>
-                {!check.ok && <div className="cs-skill-reason">{check.reason}</div>}
-                <button type="button" className="cf-btn cf-btn--primary" disabled={!check.ok || waiting} onClick={() => onActivate(s)}>
-                  {waiting ? 'Requested' : 'Activate'}
-                </button>
-              </div>
-            </div>
+            <ClassSkillCard key={s.id} skill={s} cost={effectiveCost(s, config)} equipped status={ls.status}>
+              {ls.reason && <div className="cs-skill-reason">{ls.reason}</div>}
+              {effectiveApproval(s, config) === 'facilitator' && <div className="cf-sub">Needs facilitator approval</div>}
+              <button type="button" className="cf-btn cf-btn--primary" disabled={!ls.canUse} onClick={() => onActivate(s)}>
+                Activate
+              </button>
+            </ClassSkillCard>
           );
         })}
       </div>
+    )}
+    {equipOptions.length > 0 && (
+      <>
+        <div className="cf-stat-label" style={{ margin: '12px 0 6px' }}>
+          Unlocked — equip into a free slot
+        </div>
+        <div className="cs-skill-grid">
+          {equipOptions.map((s) => (
+            <ClassSkillCard key={s.id} skill={s} cost={effectiveCost(s, config)} compact status={{ label: 'Unlocked', tone: 'ready' }}>
+              <button type="button" className="cf-btn cf-btn--ghost" onClick={() => void onEquip(s)}>
+                Equip
+              </button>
+            </ClassSkillCard>
+          ))}
+        </div>
+      </>
     )}
   </div>
 );
@@ -544,25 +797,33 @@ const ActivationModal: React.FC<{
   participationPoints: number;
   nowMs: number;
   sprintLive: boolean;
+  phaseGate: PhaseGate;
+  equipped: string[];
+  loadout: string[];
   players: { uid: string; name: string }[];
   teams: IrlTeamOption[];
   onClose: () => void;
   onConfirm: (targetUids: string[], targetLabel: string) => Promise<void>;
-}> = ({ skill, config, casterUid, casterLevel, casterState, participationPoints, nowMs, sprintLive, players, teams, onClose, onConfirm }) => {
+}> = ({ skill, config, casterUid, casterLevel, casterState, participationPoints, nowMs, sprintLive, phaseGate, equipped, loadout, players, teams, onClose, onConfirm }) => {
   const [playerUid, setPlayerUid] = useState('');
+  const [playerUids, setPlayerUids] = useState<string[]>([]);
   const [teamId, setTeamId] = useState('');
   const [busy, setBusy] = useState(false);
-  const restrict = skill.effects.some((e) => e.type === 'restriction');
-  const targetUids = resolveTargetUids(skill, casterUid, { playerUid, teamId }, players.map((p) => p.uid), teams);
-  const check = checkActivation({ skill, config, casterUid, casterLevel, casterState, participationPoints, targetUids, nowMs, sprintLive });
+  const restrict = skillHarmsTargets(skill);
+  const targetUids = resolveTargetUids(skill, casterUid, { playerUid, playerUids, teamId }, players.map((p) => p.uid), teams);
+  const check = checkActivation({ skill, config, casterUid, casterLevel, casterState, participationPoints, targetUids, nowMs, sprintLive, phase: phaseGate, equipped, loadout });
+  const cost = effectiveCost(skill, config);
+  const hasRules = skill.effects.some((e) => !isDirectEffectType(e.type));
   const label =
     skill.targetType === 'self'
       ? 'Self'
       : skill.targetType === 'player'
         ? players.find((p) => p.uid === playerUid)?.name || ''
-        : skill.targetType === 'team'
-          ? teams.find((t) => t.id === teamId)?.name || ''
-          : 'Whole class';
+        : skill.targetType === 'players'
+          ? targetUids.map((u) => players.find((p) => p.uid === u)?.name || 'Player').join(', ').slice(0, 120)
+          : skill.targetType === 'team'
+            ? teams.find((t) => t.id === teamId)?.name || ''
+            : 'Whole class';
 
   return (
     <div className="cf-modal-backdrop" role="dialog" aria-modal="true" aria-label={`Activate ${skill.name}`}>
@@ -582,11 +843,31 @@ const ActivationModal: React.FC<{
             <p style={{ margin: '6px 0' }}>{skill.irlEffect || skill.description}</p>
             {skill.effects.map((e) => (
               <div key={e.id} className="cf-sub">
-                <strong>{IRL_EFFECT_LABELS[e.type]}:</strong> {e.behavior}
+                <strong>{IRL_EFFECT_LABELS[e.type]}:</strong> {isDirectEffectType(e.type) ? describeEffect(e) : e.behavior}
               </div>
             ))}
           </div>
         </div>
+
+        {skill.targetType === 'players' && (
+          <div className="cf-label">
+            Target players ({playerUids.length} chosen)
+            <div className="cs-player-picks">
+              {players
+                .filter((p) => !(restrict && p.uid === casterUid))
+                .map((p) => (
+                  <label key={p.uid} className="cf-check">
+                    <input
+                      type="checkbox"
+                      checked={playerUids.includes(p.uid)}
+                      onChange={(e) => setPlayerUids((cur) => (e.target.checked ? [...cur, p.uid] : cur.filter((u) => u !== p.uid)))}
+                    />
+                    {p.uid === casterUid ? `${p.name} (you)` : p.name}
+                  </label>
+                ))}
+            </div>
+          </div>
+        )}
 
         {skill.targetType === 'player' && (
           <label className="cf-label">
@@ -626,14 +907,16 @@ const ActivationModal: React.FC<{
                 {targetUids.length > 1 ? ` (${targetUids.length} players)` : ''}
               </td>
             </tr>
-            <tr>
-              <th>Duration</th>
-              <td>{describeDuration(skill)}</td>
-            </tr>
+            {hasRules && (
+              <tr>
+                <th>Duration</th>
+                <td>{describeDuration(skill)}</td>
+              </tr>
+            )}
             <tr>
               <th>Cost</th>
               <td>
-                {skill.activationCost} Participation Point{skill.activationCost === 1 ? '' : 's'} (you have {participationPoints}) — only charged if approved
+                {cost} Participation Point{cost === 1 ? '' : 's'} (you have {participationPoints}) — not Vault PP; only charged if it resolves
               </td>
             </tr>
             <tr>
@@ -849,6 +1132,38 @@ const RuleActions: React.FC<{
 
 /* -------------------------------- Facilitator ------------------------------- */
 
+const NumberSetting: React.FC<{ label: string; value: number; min: number; max: number; onSave: (n: number) => void | Promise<void> }> = ({
+  label,
+  value,
+  min,
+  max,
+  onSave,
+}) => {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  const commit = () => {
+    const n = Math.max(min, Math.min(max, Math.floor(Number(draft))));
+    if (!Number.isFinite(n) || n === value) return setDraft(String(value));
+    void onSave(n);
+  };
+  return (
+    <label className="cf-label">
+      {label}
+      <input
+        className="cf-input"
+        type="number"
+        min={min}
+        max={max}
+        value={draft}
+        style={{ width: 110 }}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === 'Enter' && commit()}
+      />
+    </label>
+  );
+};
+
 const FacilitatorSettings: React.FC<{
   sessionId: string;
   config: ReturnType<typeof parseIrlEventConfig>;
@@ -857,6 +1172,8 @@ const FacilitatorSettings: React.FC<{
   onResult: (ok: boolean, text: string) => void;
   onEndAll: () => Promise<void>;
 }> = ({ sessionId, config, skills, activeRules, onResult, onEndAll }) => {
+  const [capacity, setCapacity] = useState<number>(CLASS_SKILL_LIMITS.defaultCapacity);
+  useEffect(() => subscribeClassSkillCapacity(setCapacity), []);
   const save = async (patch: Parameters<typeof updateIrlEventConfig>[1], text: string) => {
     const res = await updateIrlEventConfig(sessionId, patch);
     onResult(res.ok, res.ok ? text : res.error);
@@ -889,6 +1206,66 @@ const FacilitatorSettings: React.FC<{
             ))}
           </select>
         </label>
+      </div>
+      <div className="cf-stat-label" style={{ marginTop: 12 }}>
+        Battle Sprints · Class Skill Phase
+      </div>
+      <div className="cf-row">
+        <label className="cf-check">
+          <input
+            type="checkbox"
+            checked={config.sprintPhaseDefault}
+            onChange={(e) => save({ sprintPhaseDefault: e.target.checked }, `New sprints: Class Skills ${e.target.checked ? 'enabled' : 'disabled'} by default.`)}
+          />
+          Enable Class Skills for new sprints by default
+        </label>
+        <label className="cf-label">
+          Cost
+          <select className="cf-select" value={config.costSource} onChange={(e) => save({ costSource: e.target.value as 'event' | 'skill' }, 'Cost rule updated.')}>
+            <option value="event">Same cost for every Class Skill</option>
+            <option value="skill">Each skill's own cost</option>
+          </select>
+        </label>
+        {config.costSource === 'event' && (
+          <NumberSetting
+            label="Participation Points per use"
+            value={config.classSkillCost}
+            min={0}
+            max={CLASS_SKILL_LIMITS.maxCost}
+            onSave={(n) => save({ classSkillCost: n }, `Class Skill cost set to ${n} Participation Points.`)}
+          />
+        )}
+        <NumberSetting
+          label="Phase length (seconds)"
+          value={config.phaseSeconds}
+          min={CLASS_SKILL_LIMITS.minPhaseSeconds}
+          max={CLASS_SKILL_LIMITS.maxPhaseSeconds}
+          onSave={(n) => save({ phaseSeconds: n }, `Class Skill Phase set to ${n}s.`)}
+        />
+        <NumberSetting
+          label="Activations per player per phase"
+          value={config.activationLimit}
+          min={1}
+          max={CLASS_SKILL_LIMITS.maxActivationLimit}
+          onSave={(n) => save({ activationLimit: n }, `Players can use ${n} Class Skill${n === 1 ? '' : 's'} per phase.`)}
+        />
+        <NumberSetting
+          label="Protected minimum Vault PP"
+          value={config.vaultFloorPP}
+          min={0}
+          max={CLASS_SKILL_LIMITS.maxVaultFloorPP}
+          onSave={(n) => save({ vaultFloorPP: n }, `Direct Vault effects never take a Vault below ${n} PP.`)}
+        />
+        <NumberSetting
+          label="Class Skill slots (all players, admin only)"
+          value={capacity}
+          min={1}
+          max={CLASS_SKILL_LIMITS.maxCapacity}
+          onSave={async (n) => {
+            const res = await setClassSkillCapacity(n);
+            onResult(res.ok, res.ok ? `Players can equip ${n} Class Skills.` : `Only admins can change slots: ${res.error}`);
+          }}
+        />
       </div>
       <div className="cf-stat-label" style={{ marginTop: 12 }}>
         Allowed effect types for this event
@@ -966,7 +1343,7 @@ const PendingApprovals: React.FC<{
                 {a.skillName}
                 <div className="cf-sub">
                   {cap(a.element)}
-                  {skill ? ` · Lv ${skill.level} · Cost ${skill.activationCost}` : ''}
+                  {skill ? ` · Lv ${skill.level} · Cost ${effectiveCost(skill, config)}` : ''}
                   {skill && effectiveApproval(skill, config) === 'auto' ? ' · auto' : ''}
                 </div>
               </td>
@@ -1198,6 +1575,12 @@ const History: React.FC<{
                 <td className={a.status === 'approved' ? 'cf-status-approved' : 'cf-status-rejected'}>
                   {cap(a.status)}
                   {a.reason ? ` — ${a.reason}` : ''}
+                  {a.status === 'approved' && a.costCharged > 0 && <div className="cf-sub">−{a.costCharged} Participation Points</div>}
+                  {a.resolvedEffects.map((r, i) => (
+                    <div key={i} className="cf-sub">
+                      {describeResolvedEffect(r, nameOf)}
+                    </div>
+                  ))}
                 </td>
               </tr>
             ))}

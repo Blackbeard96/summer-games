@@ -95,6 +95,27 @@ const PlanEditor: React.FC<Props> = ({ sessionId, plan, activePlanId, classId, a
                   />
                   min
                 </label>
+                <label className="cf-label" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  Class Skills
+                  <select
+                    className="cf-select"
+                    value={item.classSkillsEnabled === undefined ? 'default' : item.classSkillsEnabled ? 'on' : 'off'}
+                    onChange={(e) =>
+                      update((d) =>
+                        d.map((x, j) => {
+                          if (j !== i) return x;
+                          const { classSkillsEnabled: _drop, ...rest } = x;
+                          return e.target.value === 'default' ? rest : { ...rest, classSkillsEnabled: e.target.value === 'on' };
+                        })
+                      )
+                    }
+                    aria-label="Class Skill Phase after this sprint"
+                  >
+                    <option value="default">Event default</option>
+                    <option value="on">Enabled</option>
+                    <option value="off">Disabled</option>
+                  </select>
+                </label>
               </div>
               <div className="cf-row">
                 <button type="button" className="cf-btn cf-btn--ghost" onClick={() => update((d) => move(d, i, i - 1))} aria-label="Move up">↑</button>
