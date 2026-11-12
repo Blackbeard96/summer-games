@@ -20,7 +20,7 @@ import { getUserRRCandySkills } from './rrCandyService';
 import { getRRCandyStatusAsync } from './rrCandyUtils';
 import { getPlayerSkillState } from './skillStateService';
 import type { ArtifactSkillDefinition, ArtifactStatusEffect } from '../types/artifact';
-import { getElementalAccessElementFromStudent, hasElementalAccessPerkEquipped } from './artifactPerkEffects';
+import { getEarnedSecondElementFromStudent, hasElementalAccessPerkEquipped, resolveSecondaryElement } from './artifactPerkEffects';
 import { DEFAULT_EQUIPPABLE_ARTIFACTS_CATALOG } from '../data/defaultEquippableArtifactsCatalog';
 import {
   getMaxLoadoutSlotsFromEffects,
@@ -734,6 +734,7 @@ export async function getUserUnlockedSkillsForBattle(
               )
                 .toString()
                 .toLowerCase(),
+              secondElement: getEarnedSecondElementFromStudent(studentData as Record<string, unknown>) || '',
             });
           }
         } catch (e) {
@@ -787,14 +788,11 @@ export async function getUserUnlockedSkillsForBattle(
     )
       .toString()
       .toLowerCase();
-    const secondaryRaw = getElementalAccessElementFromStudent(studentData as Record<string, unknown>);
     const secondaryElement =
-      hasElementalAccessPerkEquipped(
-        studentData.equippedArtifacts as Record<string, unknown>,
-        catalogData
-      ) && secondaryRaw
-        ? secondaryRaw
-        : '';
+      resolveSecondaryElement(
+        studentData as Record<string, unknown>,
+        hasElementalAccessPerkEquipped(studentData.equippedArtifacts as Record<string, unknown>, catalogData)
+      ) || '';
 
     // Filter Manifest Skills
     let manifestSkills = allMoves.filter(move => {
@@ -822,6 +820,7 @@ export async function getUserUnlockedSkillsForBattle(
             existingMoves: [],
             canUseElemental: hasElementalMoveAccess(studentData),
             userElement: element,
+            secondElement: getEarnedSecondElementFromStudent(studentData as Record<string, unknown>) || '',
           });
         }
       } catch (e) {

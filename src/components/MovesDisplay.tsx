@@ -35,6 +35,7 @@ import { useBattle } from '../context/BattleContext';
 import {
   effectiveSkillCooldownTurns,
   getElementalAccessElementFromStudent,
+  getEarnedSecondElementFromStudent,
   getSkillsMasteryPerkDisplaySnapshot,
   hasElementalAccessPerkEquipped,
 } from '../utils/artifactPerkEffects';
@@ -130,6 +131,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
   /** students.artifacts map — used to resolve Legendary skills (players cannot read adminSettings). */
   const [studentOwnedArtifacts, setStudentOwnedArtifacts] = useState<Record<string, any>>({});
+  const [earnedSecondElement, setEarnedSecondElement] = useState<string | null>(null);
   const [truthMetal, setTruthMetal] = useState<number>(0);
   /** Sum of `students` + `users` Truth Metal (for spend eligibility). */
   const [truthMetalTotal, setTruthMetalTotal] = useState<number>(0);
@@ -289,6 +291,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         const studentData = studentDoc.data();
         const owned = (studentData.artifacts || {}) as Record<string, any>;
         if (!cancelled) setStudentOwnedArtifacts(owned);
+        if (!cancelled) setEarnedSecondElement(getEarnedSecondElementFromStudent(studentData));
         let equipped = studentData.equippedArtifacts || null;
         if (!equipped || typeof equipped !== 'object') {
           if (!cancelled) {
@@ -538,6 +541,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     return moves.filter((move) => {
       if (move.category !== 'elemental' || !move.unlocked) return false;
       const moveElement = (move.elementalAffinity || '').toLowerCase();
+      if (earnedSecondElement && moveElement === earnedSecondElement) return true;
 
       if (userElement) {
         const userElementLower = userElement.toLowerCase();
@@ -561,6 +565,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     equippedArtifacts,
     equippableCatalogRaw,
     elementalAccessSecondary,
+    earnedSecondElement,
   ]);
   
   // Separate Power Card skills (custom moves from Profile)

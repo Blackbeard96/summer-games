@@ -66,9 +66,9 @@ import {
 } from '../utils/artifactUtils';
 import {
   applyVaultShieldBoostFromEquipped,
-  getElementalAccessElementFromStudent,
   getVaultSiegeFreezeChancePercentFromEquipped,
   hasElementalAccessPerkEquipped,
+  resolveSecondaryElement,
 } from '../utils/artifactPerkEffects';
 import { getPlayerUniversalLawEffects, type UniversalLawBoonEffects } from '../utils/universalLawBoons';
 import { buildInitialActionCardsFromAdmin, mergeUserActionCardsWithAdmin } from '../utils/actionCardAdminMerge';
@@ -754,15 +754,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             )
               .toString()
               .toLowerCase();
-            const secondaryRaw = getElementalAccessElementFromStudent(sd as Record<string, unknown>);
-            const secondaryElement =
-              secondaryRaw &&
-              hasElementalAccessPerkEquipped(
-                sd.equippedArtifacts as Record<string, unknown>,
-                equippableCatalogForPerks
-              )
-                ? secondaryRaw
-                : null;
+            const secondaryElement = resolveSecondaryElement(
+              sd as Record<string, unknown>,
+              hasElementalAccessPerkEquipped(sd.equippedArtifacts as Record<string, unknown>, equippableCatalogForPerks)
+            );
             const canUseElemental = hasElementalMoveAccess(sd as Record<string, unknown>);
             
             console.log('BattleContext: User element for move filtering:', userElement, 'secondary:', secondaryElement, 'elementalAccess:', canUseElemental);

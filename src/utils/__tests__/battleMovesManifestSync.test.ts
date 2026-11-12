@@ -58,4 +58,18 @@ describe('battleMovesManifestSync', () => {
       )
     ).toBe(false);
   });
+
+  it('keeps the earned second Element unlocked alongside the primary', () => {
+    const moves = buildBattleMovesForManifest('creating', {
+      canUseElemental: true,
+      userElement: 'fire',
+      secondElement: 'water',
+    });
+    const unlockedElements = new Set(
+      moves
+        .filter((m) => m.category === 'elemental' && m.unlocked && m.level === 1)
+        .map((m) => (m.elementalAffinity || '').toString().toLowerCase())
+    );
+    expect(Array.from(unlockedElements).sort()).toEqual(['fire', 'water']);
+  });
 });

@@ -9,6 +9,9 @@ import { IRL_TARGET_LABELS, describeDuration, elementalLevelFromMoves } from '..
 import { chooseClassSkills, classSkillArtKey, subscribeClassSkills } from '../../utils/classSkillsService';
 import { loadSkillArtwork } from '../../utils/skillArtwork';
 import { extractElementOrNull } from '../../utils/elementDisplay';
+import { getEarnedSecondElementFromStudent } from '../../utils/artifactPerkEffects';
+import { grantPlayerElement } from '../../utils/elementSelectionService';
+import { useBattle } from '../../context/BattleContext';
 import SkillCardArt from '../skillCard/SkillCardArt';
 
 interface Props {
@@ -20,12 +23,24 @@ interface Props {
 }
 
 interface PlayerContext {
-  /** Elements the player has (awakened affinity or unlocked elemental moves). */
+  /** Elements the player has (primary, second, or unlocked elemental moves). */
   elements: string[];
+  primary: string | null;
+  second: string | null;
   levels: Record<string, number>;
   /** Picks already recorded on this step. */
   previous: string[];
 }
+
+type ElementAccess = 'owned' | 'awaken' | 'second' | 'full';
+
+function elementAccess(ctx: PlayerContext, element: string): ElementAccess {
+  if (ctx.elements.includes(element)) return 'owned';
+  if (!ctx.primary) return 'awaken';
+  return ctx.second ? 'full' : 'second';
+}
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 const ELEMENT_ACCENT: Record<string, string> = {
   fire: '#ea580c',
@@ -45,8 +60,11 @@ const MissionClassSkillChoiceStepPanel: React.FC<Props> = ({
   stepAlreadyComplete,
   onRefreshCompletion,
 }) => {
+  const { unlockElementalMoves } = useBattle();
   const [skills, setSkills] = useState<ClassSkill[] | null>(null);
   const [ctx, setCtx] = useState<PlayerContext | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [picked, setPicked] = useState<string[]>([]);
   const [changing, setChanging] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -64,6 +82,7 @@ const MissionClassSkillChoiceStepPanel: React.FC<Props> = ({
     let cancelled = false;
     (async () => {
       try {
+        setLoadError(false);
         const [userSnap, studentSnap, movesSnap, missionSnap] = await Promise.all([
           getDoc(doc(db, 'users', userId)),
           getDoc(doc(db, 'students', userId)),
@@ -73,50 +92,74 @@ const MissionClassSkillChoiceStepPanel: React.FC<Props> = ({
         const moves = movesSnap?.exists() ? movesSnap.data()?.moves : null;
         const levels: Record<string, number> = {};
         CLASS_SKILL_ELEMENTS.forEach((el) => (levels[el] = elementalLevelFromMoves(moves, el)));
-        const affinity = extractElementOrNull(
-          userSnap.exists() ? userSnap.data() : undefined,
-          studentSnap.exists() ? studentSnap.data() : undefined
-        );
-        const elements = new Set(CLASS_SKILL_ELEMENTS.filter((el) => levels[el] > 0));
-        if (affinity) elements.add(String(affinity).toLowerCase() as (typeof CLASS_SKILL_ELEMENTS)[number]);
+        const studentData = studentSnap.exists() ? studentSnap.data() : undefined;
+        const primary = extractElementOrNull(userSnap.exists() ? userSnap.data() : undefined, studentData);
+        const second = getEarnedSecondElementFromStudent(studentData);
+        const elements = new Set<string>(CLASS_SKILL_ELEMENTS.filter((el) => levels[el] > 0));
+        if (primary) elements.add(primary);
+        if (second) elements.add(second);
         const completion = missionSnap?.exists() ? missionSnap.data()?.sequenceStepCompletion?.[step.id] : null;
         const previous: string[] = Array.isArray(completion?.classSkillIds) ? completion.classSkillIds : [];
         if (cancelled) return;
-        setCtx({ elements: Array.from(elements), levels, previous });
+        setCtx({ elements: Array.from(elements), primary, second, levels, previous });
         setPicked(previous);
       } catch (e) {
         console.error('MissionClassSkillChoiceStepPanel load', e);
-        if (!cancelled) setCtx({ elements: [], levels: {}, previous: [] });
+        if (!cancelled) setLoadError(true);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [userId, playerMissionId, step.id]);
+  }, [userId, playerMissionId, step.id, reloadKey]);
 
   const offered = useMemo(() => {
     if (!skills || !ctx) return null;
     const ids = new Set(step.skillIds || []);
-    return skills.filter((s) => ids.has(s.id) && s.status === 'active' && ctx.elements.includes(s.element));
+    return skills.filter((s) => ids.has(s.id) && s.status === 'active');
   }, [skills, ctx, step.skillIds]);
 
   const needed = Math.max(1, Math.min(step.pickCount || 1, offered?.length || 1));
 
-  // Nothing to choose for this player: record the step so the mission never gets stuck.
+  // The step has no active Class Skills at all: record it so the mission never gets stuck.
   useEffect(() => {
     if (!offered || offered.length > 0 || stepAlreadyComplete || !playerMissionId) return;
     void markMissionSequenceStepComplete(playerMissionId, step.id).then(() => onRefreshCompletion());
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once the offer list resolves
   }, [offered, stepAlreadyComplete, playerMissionId, step.id]);
 
+  /** New Elements the current picks would add (at most one second Element can be granted). */
+  const newElements = (ids: string[]) =>
+    Array.from(new Set((offered || []).filter((s) => ids.includes(s.id) && ctx && !ctx.elements.includes(s.element)).map((s) => s.element)));
+  const newElementLimit = ctx && !ctx.primary ? 2 : ctx?.second ? 0 : 1;
+
   const toggle = (id: string) =>
-    setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : needed === 1 ? [id] : p.length < needed ? [...p, id] : p));
+    setPicked((p) => {
+      if (p.includes(id)) return p.filter((x) => x !== id);
+      const next = needed === 1 ? [id] : p.length < needed ? [...p, id] : p;
+      return newElements(next).length > newElementLimit ? p : next;
+    });
 
   const confirm = async () => {
-    if (saving || picked.length !== needed) return;
+    if (saving || picked.length !== needed || !ctx) return;
     setSaving(true);
     setError(null);
-    const res = await chooseClassSkills(userId, picked, ctx?.previous || []);
+    for (const element of newElements(picked)) {
+      const granted = await grantPlayerElement(userId, element);
+      if (!granted.success) {
+        setError(granted.error || `Could not unlock ${cap(element)}.`);
+        setSaving(false);
+        return;
+      }
+      if (granted.grantedAs === 'primary') {
+        try {
+          await unlockElementalMoves(element);
+        } catch (syncErr) {
+          console.warn('BattleContext unlock after Class Skill awaken', syncErr);
+        }
+      }
+    }
+    const res = await chooseClassSkills(userId, picked, ctx.previous);
     if (!res.ok) {
       setError(res.error);
       setSaving(false);
@@ -126,13 +169,15 @@ const MissionClassSkillChoiceStepPanel: React.FC<Props> = ({
       const done = await markMissionSequenceStepComplete(playerMissionId, step.id, { classSkillIds: picked });
       if (!done.success) setError(done.error || 'Could not save your choice.');
     }
-    setCtx((c) => (c ? { ...c, previous: picked } : c));
     setChanging(false);
     setSaving(false);
+    setReloadKey((k) => k + 1);
     onRefreshCompletion();
   };
 
-  const editable = !stepAlreadyComplete || (allowReselect && changing);
+  // A step completed without a recorded pick (older empty-list bug) stays choosable.
+  const hasRecordedPick = (ctx?.previous.length || 0) > 0;
+  const editable = !stepAlreadyComplete || !hasRecordedPick || (allowReselect && changing);
   const chosenNames = (skills || []).filter((s) => ctx?.previous.includes(s.id)).map((s) => s.name);
 
   return (
@@ -145,17 +190,20 @@ const MissionClassSkillChoiceStepPanel: React.FC<Props> = ({
         <p style={{ fontWeight: 700, marginBottom: '1.25rem', fontSize: '1.1rem', color: '#1f2937' }}>{step.prompt}</p>
       )}
 
-      {offered === null ? (
+      {loadError ? (
+        <p style={{ color: '#b91c1c' }}>
+          Could not load your Elements.{' '}
+          <button type="button" onClick={() => setReloadKey((k) => k + 1)} style={{ fontWeight: 700, textDecoration: 'underline', background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0 }}>
+            Try again
+          </button>
+        </p>
+      ) : offered === null ? (
         <p style={{ color: '#6b7280' }}>Loading Class Skills…</p>
       ) : offered.length === 0 ? (
-        <p style={{ color: '#6b7280' }}>
-          {ctx && ctx.elements.length === 0
-            ? 'Awaken your Element first to unlock Class Skills. You can continue the mission.'
-            : 'There are no Class Skills for your Element on this step. You can continue the mission.'}
-        </p>
+        <p style={{ color: '#6b7280' }}>There are no Class Skills on this step yet. You can continue the mission.</p>
       ) : (
         <>
-          {stepAlreadyComplete && !changing && (
+          {stepAlreadyComplete && hasRecordedPick && !changing && (
             <p style={{ margin: '0 0 1rem', color: '#166534', fontWeight: 600 }}>
               {chosenNames.length ? `You chose: ${chosenNames.join(', ')}.` : 'Your choice is recorded for this step.'}
             </p>
@@ -171,12 +219,24 @@ const MissionClassSkillChoiceStepPanel: React.FC<Props> = ({
             {offered.map((s) => {
               const on = editable ? picked.includes(s.id) : !!ctx?.previous.includes(s.id);
               const accent = ELEMENT_ACCENT[s.element] || '#0f766e';
+              const access = ctx ? elementAccess(ctx, s.element) : 'owned';
+              const blocked = editable && access === 'full';
               const usableNow = (ctx?.levels[s.element] || 0) >= s.level;
+              const elementNote =
+                access === 'awaken'
+                  ? `Choosing this awakens ${cap(s.element)} as your Element.`
+                  : access === 'second'
+                    ? `Choosing this unlocks ${cap(s.element)} as your second Element.`
+                    : access === 'full'
+                      ? `You already have two Elements (${cap(ctx?.primary || '')} and ${cap(ctx?.second || '')}).`
+                      : !usableNow
+                        ? `Usable once you reach ${s.element} level ${s.level}.`
+                        : null;
               return (
                 <button
                   key={s.id}
                   type="button"
-                  disabled={!editable || saving}
+                  disabled={!editable || saving || blocked}
                   aria-pressed={on}
                   onClick={() => toggle(s.id)}
                   style={{
@@ -186,9 +246,9 @@ const MissionClassSkillChoiceStepPanel: React.FC<Props> = ({
                     border: `2px solid ${on ? accent : '#e5e7eb'}`,
                     boxShadow: on ? `0 0 0 3px ${accent}33` : 'none',
                     background: on ? `linear-gradient(135deg, ${accent}14 0%, #fff 100%)` : '#fff',
-                    cursor: editable ? 'pointer' : 'default',
+                    cursor: editable && !blocked ? 'pointer' : 'default',
                     overflow: 'hidden',
-                    opacity: !editable && !on ? 0.55 : 1,
+                    opacity: (!editable && !on) || blocked ? 0.55 : 1,
                   }}
                 >
                   <SkillCardArt
@@ -205,10 +265,8 @@ const MissionClassSkillChoiceStepPanel: React.FC<Props> = ({
                       {s.element} · Lv {s.level} · {IRL_TARGET_LABELS[s.targetType]} · {describeDuration(s)}
                     </div>
                     <div style={{ fontSize: '0.88rem', color: '#374151' }}>{s.irlEffect || s.description}</div>
-                    {!usableNow && (
-                      <div style={{ fontSize: '0.78rem', color: '#92400e', marginTop: 6 }}>
-                        Usable once you reach {s.element} level {s.level}.
-                      </div>
+                    {elementNote && (
+                      <div style={{ fontSize: '0.78rem', color: access === 'full' ? '#6b7280' : '#92400e', marginTop: 6 }}>{elementNote}</div>
                     )}
                   </div>
                 </button>
@@ -262,7 +320,7 @@ const MissionClassSkillChoiceStepPanel: React.FC<Props> = ({
             )
           )}
 
-          {requireSelection && !stepAlreadyComplete && (
+          {requireSelection && (!stepAlreadyComplete || !hasRecordedPick) && (
             <p style={{ margin: '0.75rem 0 0', fontSize: '0.875rem', color: '#92400e' }}>Choose above to continue.</p>
           )}
         </>

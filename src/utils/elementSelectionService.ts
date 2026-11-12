@@ -216,3 +216,83 @@ export async function selectPlayerElement(
     };
   }
 }
+
+export interface GrantElementResult {
+  success: boolean;
+  /** How the player holds the Element now. */
+  grantedAs: 'primary' | 'second' | 'already_owned' | null;
+  primary: ElementType | null;
+  second: ElementType | null;
+  error?: string;
+}
+
+/**
+ * Give the player an Element without replacing the one they have: awakens it as the primary when they
+ * have none, otherwise saves it as their second Element (`students.secondElement`) and unlocks its
+ * Level 1 elemental moves. Players hold at most two Elements.
+ */
+export async function grantPlayerElement(userId: string, elementRaw: string): Promise<GrantElementResult> {
+  const element = normalizeElementType(elementRaw);
+  if (!element || !isValidSelectableElement(element)) {
+    return { success: false, grantedAs: null, primary: null, second: null, error: `Invalid Element. Allowed: ${SELECTABLE_ONBOARDING_ELEMENTS.join(', ')}` };
+  }
+
+  const studentRef = doc(db, 'students', userId);
+  const userRef = doc(db, 'users', userId);
+  const [studentSnap, userSnap] = await Promise.all([getDoc(studentRef), getDoc(userRef)]);
+  const primary = normalizeElementType(
+    (studentSnap.data()?.elementalAffinity as string | undefined) ||
+      (studentSnap.data()?.artifacts?.chosen_element as string | undefined) ||
+      (userSnap.data()?.elementalAffinity as string | undefined)
+  );
+
+  if (!primary) {
+    const res = await selectPlayerElement(userId, element);
+    return res.success
+      ? { success: true, grantedAs: 'primary', primary: res.element || element, second: null }
+      : { success: false, grantedAs: null, primary: null, second: null, error: res.error };
+  }
+
+  const movesRef = doc(db, 'battleMoves', userId);
+  let outcome: GrantElementResult;
+  try {
+    outcome = await runTransaction(db, async (tx) => {
+      const [sSnap, mSnap] = await Promise.all([tx.get(studentRef), tx.get(movesRef)]);
+      const second = normalizeElementType(sSnap.data()?.secondElement as string | undefined);
+      if (element === primary || element === second) {
+        return { success: true, grantedAs: 'already_owned', primary, second } as GrantElementResult;
+      }
+      if (second) {
+        return {
+          success: false,
+          grantedAs: null,
+          primary,
+          second,
+          error: `You already have two Elements (${primary} and ${second}).`,
+        } as GrantElementResult;
+      }
+      tx.set(studentRef, { secondElement: element, lastUpdated: serverTimestamp() }, { merge: true });
+      if (mSnap.exists()) {
+        const currentMoves: Move[] = mSnap.data().moves || [];
+        const unlockSet = new Set(planElementalMoveUnlocks(currentMoves, element).unlockIds);
+        if (unlockSet.size > 0) {
+          tx.update(movesRef, { moves: currentMoves.map((m) => (unlockSet.has(m.id) ? { ...m, unlocked: true } : m)) });
+        }
+      }
+      return { success: true, grantedAs: 'second', primary, second: element } as GrantElementResult;
+    });
+  } catch (error: any) {
+    console.error('grantPlayerElement failed:', error);
+    return { success: false, grantedAs: null, primary, second: null, error: error?.message || 'Failed to unlock Element' };
+  }
+
+  if (outcome.grantedAs === 'second') {
+    try {
+      const { ensureManifestSkillsForBattle } = await import('./battleMovesManifestSync');
+      await ensureManifestSkillsForBattle(userId);
+    } catch (syncErr) {
+      console.warn('[grantPlayerElement] ensureManifestSkillsForBattle failed', syncErr);
+    }
+  }
+  return outcome;
+}

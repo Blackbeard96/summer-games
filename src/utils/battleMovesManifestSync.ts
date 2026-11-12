@@ -7,6 +7,7 @@ import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { MOVE_TEMPLATES, type Move } from '../types/battle';
 import { hasElementalMoveAccess } from './elementalAccess';
+import { getEarnedSecondElementFromStudent } from './artifactPerkEffects';
 import { stripUndefinedDeep } from './firestoreSanitize';
 
 function isTemplateMoveId(id: string | undefined): boolean {
@@ -33,6 +34,8 @@ export type BuildBattleMovesOptions = {
   existingMoves?: Move[];
   canUseElemental?: boolean;
   userElement?: string;
+  /** Earned second Element (`students.secondElement`); its L1 elementals unlock like the primary's. */
+  secondElement?: string;
 };
 
 /**
@@ -49,6 +52,8 @@ export function buildBattleMovesForManifest(
   const existingMoves = options.existingMoves || [];
   const canUseElemental = options.canUseElemental === true;
   const userElement = (options.userElement || '').toString().toLowerCase();
+  const secondElement = (options.secondElement || '').toString().toLowerCase();
+  const ownedElements = [userElement, secondElement].filter(Boolean);
 
   const extraMoves = existingMoves.filter(
     (m) => m && !isTemplateMoveId(m.id) && m.category !== 'manifest'
@@ -73,8 +78,7 @@ export function buildBattleMovesForManifest(
       (canUseElemental &&
         template.category === 'elemental' &&
         template.level === 1 &&
-        !!userElement &&
-        (template.elementalAffinity || '').toString().toLowerCase() === userElement);
+        ownedElements.includes((template.elementalAffinity || '').toString().toLowerCase()));
 
     // Firestore rejects undefined fields, so optional stats are only set when present.
     return omitUndefinedFields({
@@ -185,6 +189,7 @@ export async function syncBattleMovesForManifest(
   let existingMoves: Move[] = [];
   let canUseElemental = false;
   let userElement = '';
+  let secondElement = '';
 
   try {
     const studentSnap = await getDoc(doc(db, 'students', userId));
@@ -197,6 +202,7 @@ export async function syncBattleMovesForManifest(
     )
       .toString()
       .toLowerCase();
+    secondElement = getEarnedSecondElementFromStudent(studentData as Record<string, unknown>) || '';
 
     const movesRef = doc(db, 'battleMoves', userId);
     const movesDoc = await getDoc(movesRef);
@@ -209,6 +215,7 @@ export async function syncBattleMovesForManifest(
     existingMoves,
     canUseElemental,
     userElement,
+    secondElement,
   });
 
   try {

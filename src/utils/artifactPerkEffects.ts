@@ -662,6 +662,22 @@ export function getElementalAccessElementFromStudent(studentData: Record<string,
   return raw.trim().toLowerCase();
 }
 
+/** Permanent second Element earned in missions (`students.secondElement`); needs no perk. */
+export function getEarnedSecondElementFromStudent(studentData: Record<string, unknown> | null | undefined): string | null {
+  if (!studentData || typeof studentData !== 'object') return null;
+  const raw = studentData.secondElement;
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  return raw.trim().toLowerCase();
+}
+
+/** Active secondary Element: the earned second Element, else the Elemental Access perk's pick while equipped. */
+export function resolveSecondaryElement(
+  studentData: Record<string, unknown> | null | undefined,
+  perkEquipped: boolean
+): string | null {
+  return getEarnedSecondElementFromStudent(studentData) || (perkEquipped ? getElementalAccessElementFromStudent(studentData) : null);
+}
+
 /** Apply shield boost to vault snapshot (stored values exclude perk bonus). */
 export function applyVaultShieldBoostFromEquipped<T extends { maxShieldStrength?: number; shieldStrength?: number }>(
   vault: T,
