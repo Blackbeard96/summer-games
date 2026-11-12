@@ -14,6 +14,7 @@ import {
   getPlayerStoryProgress,
   acceptMission,
   redoDemoMission,
+  isReplayableMissionCategory,
   getMissionStatus,
   getActiveStoryMissionForChapter,
   getProfileJourneyContent,
@@ -359,7 +360,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
 
   const handleRedoDemoMission = async (mission: MissionTemplate) => {
     if (!currentUser || redoingMissionId || acceptingMissionId) return;
-    if (mission.missionCategory !== 'DEMO' && mission.missionCategory !== 'SKILL') return;
+    if (!isReplayableMissionCategory(mission.missionCategory)) return;
     if (!(mission.sequence && mission.sequence.length > 0)) {
       alert('This mission has no playable steps yet.');
       return;
@@ -1106,6 +1107,28 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                       borderColor="#3b82f6"
                       expanded={!!expandedCompletedIds[mission.id]}
                       onToggleExpanded={() => toggleCompletedExpanded(mission.id)}
+                      headerExtra={
+                        status === 'completed' && mission.sequence && mission.sequence.length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => void handleRedoDemoMission(mission)}
+                            disabled={redoingMissionId === mission.id || acceptingMissionId === mission.id}
+                            style={{
+                              backgroundColor: '#3b82f6',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '0.35rem',
+                              padding: '0.2rem 0.6rem',
+                              fontSize: '0.72rem',
+                              fontWeight: 700,
+                              cursor: redoingMissionId === mission.id ? 'not-allowed' : 'pointer',
+                              opacity: redoingMissionId === mission.id ? 0.5 : 1,
+                            }}
+                          >
+                            {redoingMissionId === mission.id ? 'Restarting…' : '↻ Replay'}
+                          </button>
+                        ) : undefined
+                      }
                     >
                       <p style={{ color: '#d1d5db', marginBottom: '1rem', fontSize: '0.875rem' }}>
                         {mission.description}

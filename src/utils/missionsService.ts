@@ -568,6 +568,10 @@ export async function acceptMission(
  * Reopen a completed DEMO or SKILL mission for practice
  * (resets sequence progress; does not re-grant first-time rewards if claim ids already used).
  */
+export function isReplayableMissionCategory(category: string | undefined): boolean {
+  return category === 'DEMO' || category === 'SKILL' || category === 'SIDE';
+}
+
 export async function redoDemoMission(
   userId: string,
   missionId: string,
@@ -579,8 +583,8 @@ export async function redoDemoMission(
     if (!mission) {
       return { success: false, error: 'Mission not found' };
     }
-    if (mission.missionCategory !== 'DEMO' && mission.missionCategory !== 'SKILL') {
-      return { success: false, error: 'Only Demo and Skill missions can be replayed.' };
+    if (!isReplayableMissionCategory(mission.missionCategory)) {
+      return { success: false, error: 'Only Demo, Skill, and Side missions can be replayed.' };
     }
 
     const admin =
@@ -621,6 +625,8 @@ export async function redoDemoMission(
       completedAt: deleteField(),
       sequencePlayheadIndex: deleteField(),
       sequenceStepCompletion: deleteField(),
+      // Choice steps (e.g. Class Skill Choice) swap out what the last run picked instead of stacking.
+      replayPreviousStepCompletion: existing.sequenceStepCompletion || deleteField(),
       progress: {},
       missionRewardChoicesPending: deleteField(),
     });

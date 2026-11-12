@@ -307,6 +307,8 @@ export interface PlayerMission {
       visited?: boolean;
     }
   >;
+  /** `sequenceStepCompletion` from the run before the latest replay (see redoDemoMission). */
+  replayPreviousStepCompletion?: PlayerMission['sequenceStepCompletion'];
   /**
    * Saved step index (0-based) while a sequenced mission is active — used so leaving the runner
    * (e.g. optional slide redirect) can resume on the correct step.

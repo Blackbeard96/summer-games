@@ -30,6 +30,8 @@ interface PlayerContext {
   levels: Record<string, number>;
   /** Picks already recorded on this step. */
   previous: string[];
+  /** Picks from the run before a replay; a new choice replaces them in the loadout. */
+  replaced: string[];
 }
 
 type ElementAccess = 'owned' | 'awaken' | 'second' | 'full';
@@ -98,10 +100,13 @@ const MissionClassSkillChoiceStepPanel: React.FC<Props> = ({
         const elements = new Set<string>(CLASS_SKILL_ELEMENTS.filter((el) => levels[el] > 0));
         if (primary) elements.add(primary);
         if (second) elements.add(second);
-        const completion = missionSnap?.exists() ? missionSnap.data()?.sequenceStepCompletion?.[step.id] : null;
+        const missionData = missionSnap?.exists() ? missionSnap.data() : null;
+        const completion = missionData?.sequenceStepCompletion?.[step.id];
         const previous: string[] = Array.isArray(completion?.classSkillIds) ? completion.classSkillIds : [];
+        const lastRun = missionData?.replayPreviousStepCompletion?.[step.id]?.classSkillIds;
+        const replaced: string[] = Array.isArray(lastRun) ? lastRun : [];
         if (cancelled) return;
-        setCtx({ elements: Array.from(elements), primary, second, levels, previous });
+        setCtx({ elements: Array.from(elements), primary, second, levels, previous, replaced });
         setPicked(previous);
       } catch (e) {
         console.error('MissionClassSkillChoiceStepPanel load', e);
@@ -159,7 +164,7 @@ const MissionClassSkillChoiceStepPanel: React.FC<Props> = ({
         }
       }
     }
-    const res = await chooseClassSkills(userId, picked, ctx.previous);
+    const res = await chooseClassSkills(userId, picked, ctx.previous.length ? ctx.previous : ctx.replaced);
     if (!res.ok) {
       setError(res.error);
       setSaving(false);
