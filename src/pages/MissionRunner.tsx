@@ -60,6 +60,7 @@ import MissionChooseManifestStepPanel from '../components/mission/MissionChooseM
 import MissionSkillsMasteryStepPanel from '../components/mission/MissionSkillsMasteryStepPanel';
 import MissionArtifactsStepPanel from '../components/mission/MissionArtifactsStepPanel';
 import MissionElementalSkillsStepPanel from '../components/mission/MissionElementalSkillsStepPanel';
+import MissionClassSkillChoiceStepPanel from '../components/mission/MissionClassSkillChoiceStepPanel';
 import MissionPowerCardStepPanel from '../components/mission/MissionPowerCardStepPanel';
 import { getLevel2ManifestState } from '../services/level2ManifestService';
 import { DEFAULT_MAX_ALLIED_PARTICIPANTS } from '../constants/coopBattle';
@@ -524,6 +525,11 @@ const MissionRunner: React.FC = () => {
     currentStep.requireSelection !== false &&
     !missionStepCompletion[currentStep.id];
 
+  const classSkillChoiceBlocksNext =
+    currentStep?.type === 'CLASS_SKILL_CHOICE' &&
+    currentStep.requireSelection !== false &&
+    !missionStepCompletion[currentStep.id];
+
   const powerCardBlocksNext =
     currentStep?.type === 'POWER_CARD' &&
     currentStep.requireVisit !== false &&
@@ -636,6 +642,10 @@ const MissionRunner: React.FC = () => {
 
     if (currentStep.type === 'ELEMENTAL_SKILLS') {
       if (elementalSkillsBlocksNext) return;
+    }
+
+    if (currentStep.type === 'CLASS_SKILL_CHOICE') {
+      if (classSkillChoiceBlocksNext) return;
     }
 
     if (currentStep.type === 'POWER_CARD') {
@@ -1519,6 +1529,16 @@ const MissionRunner: React.FC = () => {
           />
         )}
 
+        {currentStep.type === 'CLASS_SKILL_CHOICE' && currentUser && (
+          <MissionClassSkillChoiceStepPanel
+            step={currentStep}
+            userId={currentUser.uid}
+            playerMissionId={playerMissionId}
+            stepAlreadyComplete={!!missionStepCompletion[currentStep.id]}
+            onRefreshCompletion={() => void refreshMissionStepProgress()}
+          />
+        )}
+
         {currentStep.type === 'POWER_CARD' && currentUser && (
           <MissionPowerCardStepPanel
             step={currentStep}
@@ -1870,6 +1890,7 @@ const MissionRunner: React.FC = () => {
               choiceGrantBusy ||
               chooseManifestBlocksNext ||
               elementalSkillsBlocksNext ||
+              classSkillChoiceBlocksNext ||
               skillsMasteryBlocksNext ||
               artifactsBlocksNext ||
               powerCardBlocksNext;
@@ -1890,6 +1911,8 @@ const MissionRunner: React.FC = () => {
                     ? 'Choose a manifest'
                     : elementalSkillsBlocksNext
                       ? 'Awaken Elemental Skills'
+                      : classSkillChoiceBlocksNext
+                      ? 'Choose a Class Skill'
                       : skillsMasteryBlocksNext
                         ? 'Open Skills & Mastery'
                         : artifactsBlocksNext

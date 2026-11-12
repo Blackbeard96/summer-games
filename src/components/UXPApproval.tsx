@@ -37,6 +37,7 @@ const UXPApproval: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
   const [classFilter, setClassFilter] = useState<string>('all');
+  const [allClassNames, setAllClassNames] = useState<string[]>([]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -59,15 +60,18 @@ const UXPApproval: React.FC = () => {
       ]);
 
       const classNamesByStudent = new Map<string, string[]>();
+      const classNames = new Set<string>();
       classroomsSnapshot.docs.forEach((classDoc) => {
         const data = classDoc.data();
         const name = String(data.name || classDoc.id);
+        classNames.add(name);
         ((data.students as string[]) || []).filter(Boolean).forEach((studentId) => {
           const list = classNamesByStudent.get(studentId) || [];
           if (!list.includes(name)) list.push(name);
           classNamesByStudent.set(studentId, list);
         });
       });
+      setAllClassNames(Array.from(classNames).sort((a, b) => a.localeCompare(b)));
       const classNamesFor = (userId: string) =>
         [...(classNamesByStudent.get(userId) || [])].sort((a, b) => a.localeCompare(b));
 
@@ -439,7 +443,8 @@ const UXPApproval: React.FC = () => {
     }
   };
 
-  // A student on several rosters is listed under their first class (alphabetical) so each request appears once.
+  // "All classes": a student on several rosters is listed under their first class (alphabetical) so each
+  // request appears once. Picking a class shows every request from anyone on that roster.
   const groups = useMemo(() => {
     const byClass = new Map<string, PendingUXPArtifact[]>();
     pendingArtifacts.forEach((p) => {
@@ -460,7 +465,36 @@ const UXPApproval: React.FC = () => {
       );
   }, [pendingArtifacts]);
 
-  const visibleGroups = classFilter === 'all' ? groups : groups.filter((g) => g.className === classFilter);
+  const itemsInClass = (className: string) =>
+    className === NO_CLASS
+      ? pendingArtifacts.filter((p) => p.classNames.length === 0)
+      : pendingArtifacts.filter((p) => p.classNames.includes(className));
+
+  const classOptions = useMemo(() => {
+    const names = [...allClassNames];
+    if (pendingArtifacts.some((p) => p.classNames.length === 0)) names.push(NO_CLASS);
+    return names.map((name) => ({
+      name,
+      count:
+        name === NO_CLASS
+          ? pendingArtifacts.filter((p) => p.classNames.length === 0).length
+          : pendingArtifacts.filter((p) => p.classNames.includes(name)).length,
+    }));
+  }, [allClassNames, pendingArtifacts]);
+
+  const visibleGroups =
+    classFilter === 'all'
+      ? groups
+      : [
+          {
+            className: classFilter,
+            items: itemsInClass(classFilter).sort(
+              (a, b) =>
+                a.userDisplayName.localeCompare(b.userDisplayName) ||
+                b.purchasedAt.getTime() - a.purchasedAt.getTime()
+            ),
+          },
+        ].filter((g) => g.items.length > 0);
 
   if (!isAdmin) {
     return (
@@ -510,9 +544,9 @@ const UXPApproval: React.FC = () => {
               style={{ padding: '0.4rem 0.6rem', borderRadius: '0.375rem', border: '1px solid #d1d5db', color: '#111827', background: '#fff' }}
             >
               <option value="all">All classes ({pendingArtifacts.length})</option>
-              {groups.map((g) => (
-                <option key={g.className} value={g.className}>
-                  {g.className} ({g.items.length})
+              {classOptions.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name} ({c.count})
                 </option>
               ))}
             </select>

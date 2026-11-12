@@ -1895,6 +1895,10 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({
             return;
           }
         }
+        if (step.type === 'CLASS_SKILL_CHOICE' && !(step.skillIds?.length > 0)) {
+          alert('Class Skill Choice steps need at least one Class Skill to choose from.');
+          return;
+        }
         if (step.type === 'POWER_CARD') {
           const pp = step.grantPP;
           if (typeof pp !== 'number' || !Number.isFinite(pp) || pp < 0) {
@@ -2986,6 +2990,10 @@ const MissionCreateModal: React.FC<{
             alert('Elemental Skills steps need a title, intro, or prompt so players know what to do.');
             return;
           }
+        }
+        if (step.type === 'CLASS_SKILL_CHOICE' && !(step.skillIds?.length > 0)) {
+          alert('Class Skill Choice steps need at least one Class Skill to choose from.');
+          return;
         }
         if (step.type === 'POWER_CARD') {
           const pp = step.grantPP;

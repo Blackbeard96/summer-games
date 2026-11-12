@@ -13,6 +13,7 @@ import { listAssessmentsForMissionLinking, type AssessmentPickItem } from '../ut
 import { fetchCpuOpponentsMergedWithDefaults, type CPUOpponent } from '../utils/cpuOpponentsCatalog';
 import { getAvailableArtifactsAsync, type ArtifactOption } from '../utils/artifactCompensation';
 import { MISSION_STEP_NAVIGATE_OPTIONS } from '../utils/missionStepNavigate';
+import ClassSkillChoiceStepEditor from './mission/ClassSkillChoiceStepEditor';
 
 interface MissionSequenceBuilderProps {
   sequence: MissionSequenceStep[];
@@ -247,6 +248,23 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
     setEditingStep(newStep);
   };
 
+  const addClassSkillChoice = () => {
+    const newStep: MissionSequenceStep = {
+      id: generateStepId(),
+      type: 'CLASS_SKILL_CHOICE',
+      order: sequence.length,
+      title: 'Choose Your Class Skill',
+      bodyText: 'Class Skills shape how you play in the classroom during Live Events. Pick the one that fits you best.',
+      prompt: 'Which Class Skill will you carry into the next Live Event?',
+      skillIds: [],
+      pickCount: 1,
+      requireSelection: true,
+      allowReselect: false,
+    };
+    onChange([...sequence, newStep]);
+    setEditingStep(newStep);
+  };
+
   const addPowerCard = () => {
     const newStep: MissionSequenceStep = {
       id: generateStepId(),
@@ -391,6 +409,10 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
           step.title ||
           'Awaken Elemental Skills'
         );
+      case "CLASS_SKILL_CHOICE": {
+        const n = step.skillIds?.length || 0;
+        return `${step.prompt?.substring(0, 50) || step.title || 'Choose a Class Skill'} · ${n} skill${n === 1 ? '' : 's'} offered`;
+      }
       case "POWER_CARD": {
         const cap = step.captions?.find((c) => c.trim())?.substring(0, 50) || '';
         const pp = Math.max(0, Math.floor(Number(step.grantPP) || 0));
@@ -420,6 +442,7 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
       case "SKILLS_MASTERY": return "🎯 Skills & Mastery";
       case "ARTIFACTS": return "💎 Artifacts";
       case "ELEMENTAL_SKILLS": return "🔥 Elemental Skills";
+      case "CLASS_SKILL_CHOICE": return "🛡️ Class Skill";
       case "POWER_CARD": return "🃏 Power Card";
     }
   };
@@ -653,6 +676,23 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
           </button>
           <button
             type="button"
+            onClick={addClassSkillChoice}
+            title="Players choose Class Skills (IRL) for their element; their picks become the Class Skills they can use in Live Events"
+            style={{
+              padding: '0.5rem 1rem',
+              background: 'linear-gradient(135deg, #0f766e 0%, #ca8a04 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.375rem',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: '600',
+            }}
+          >
+            + Add Class Skill Choice
+          </button>
+          <button
+            type="button"
             onClick={addPowerCard}
             title="Sends players to Profile / Power Card, then return to the mission"
             style={{
@@ -772,6 +812,8 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
                                       ? '#f3e8ff'
                                       : step.type === 'ELEMENTAL_SKILLS'
                                         ? '#ffedd5'
+                                        : step.type === 'CLASS_SKILL_CHOICE'
+                                        ? '#fef3c7'
                                         : step.type === 'POWER_CARD'
                                           ? '#dbeafe'
                                           : '#ccfbf1',
@@ -796,6 +838,8 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
                                       ? '#6b21a8'
                                       : step.type === 'ELEMENTAL_SKILLS'
                                         ? '#c2410c'
+                                        : step.type === 'CLASS_SKILL_CHOICE'
+                                        ? '#0f766e'
                                         : step.type === 'POWER_CARD'
                                           ? '#1e40af'
                                           : '#0f766e',
@@ -3994,6 +4038,10 @@ const StepEditorModal: React.FC<StepEditorModalProps> = ({
         </div>
       </div>
     );
+  }
+
+  if (step.type === 'CLASS_SKILL_CHOICE' && editedStep.type === 'CLASS_SKILL_CHOICE') {
+    return <ClassSkillChoiceStepEditor step={editedStep} onSave={onSave} onCancel={onCancel} />;
   }
 
   if (step.type === 'POWER_CARD' && isPowerCard(editedStep)) {

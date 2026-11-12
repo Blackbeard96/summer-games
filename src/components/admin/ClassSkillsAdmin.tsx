@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import SkillArtworkEditor from './SkillArtworkEditor';
 import type {
@@ -74,29 +74,86 @@ const Field: React.FC<{ title: string; children: React.ReactNode; span?: number 
   </label>
 );
 
+const DRAFT_STORAGE_KEY = 'classSkillsAdmin.draft';
+
+/** The editor can be remounted (admin tree recovery, re-render of the admin page); keep work in progress. */
+function readStoredDraft(): { draft: ClassSkill; dirty: boolean } | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw) as { draft?: ClassSkill; dirty?: boolean };
+    return o.draft && typeof o.draft.id === 'string' ? { draft: o.draft, dirty: !!o.dirty } : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Class Skills (IRL) editor shown under the CLASS SKILLS (IRL) tab of the Elemental Moves Admin. */
 const ClassSkillsAdmin: React.FC<ClassSkillsAdminProps> = ({ element, elementName, elementColor }) => {
   const { currentUser } = useAuth();
+  const [restored] = useState(readStoredDraft);
   const [skills, setSkills] = useState<ClassSkill[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<ClassSkill | null>(null);
+  const [draft, setDraft] = useState<ClassSkill | null>(restored?.draft ?? null);
+  const [dirty, setDirty] = useState(restored?.dirty ?? false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(
+    restored?.dirty ? { tone: 'ok', text: 'Restored your unsaved changes.' } : null
+  );
 
   useEffect(() => subscribeClassSkills(setSkills, (e) => setLoadError(e.message)), []);
 
+  // Switching to another element closes an unchanged editor. Unsaved edits stay open, and an
+  // unselected element (e.g. right after a remount) never closes it.
+  const lastElement = useRef(element);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
   useEffect(() => {
+    if (lastElement.current === element) return;
+    lastElement.current = element;
+    if (!element || dirtyRef.current) return;
     setDraft((d) => (d && d.element !== element ? null : d));
     setMessage(null);
   }, [element]);
+
+  useEffect(() => {
+    try {
+      if (draft) localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ draft, dirty }));
+      else localStorage.removeItem(DRAFT_STORAGE_KEY);
+    } catch {
+      /* storage full or blocked */
+    }
+  }, [draft, dirty]);
+
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
 
   const elementSkills = useMemo(() => skills.filter((s) => s.element === element), [skills, element]);
   const errors = draft ? validateClassSkill(draft) : [];
   const isSaved = !!draft?.id && skills.some((s) => s.id === draft.id);
 
-  const patch = (p: Partial<ClassSkill>) => setDraft((d) => (d ? { ...d, ...p } : d));
-  const patchEffect = (idx: number, p: Partial<IrlRuleEffect>) =>
+  const patch = (p: Partial<ClassSkill>) => {
+    setDraft((d) => (d ? { ...d, ...p } : d));
+    setDirty(true);
+  };
+  const patchEffect = (idx: number, p: Partial<IrlRuleEffect>) => {
     setDraft((d) => (d ? { ...d, effects: d.effects.map((e, i) => (i === idx ? { ...e, ...p } : e)) } : d));
+    setDirty(true);
+  };
+  const openDraft = (next: ClassSkill | null) => {
+    if (dirty && draft && next?.id !== draft.id && !window.confirm('Discard your unsaved changes to this Class Skill?')) return false;
+    setDraft(next);
+    setDirty(false);
+    setMessage(null);
+    return true;
+  };
 
   const save = async () => {
     if (!draft || errors.length || !currentUser) return;
@@ -105,6 +162,7 @@ const ClassSkillsAdmin: React.FC<ClassSkillsAdminProps> = ({ element, elementNam
     setBusy(false);
     if (res.ok) {
       setDraft((d) => (d ? { ...d, id: res.value || d.id } : d));
+      setDirty(false);
       setMessage({ tone: 'ok', text: 'Saved.' });
     } else {
       setMessage({ tone: 'error', text: res.error });
@@ -118,6 +176,7 @@ const ClassSkillsAdmin: React.FC<ClassSkillsAdminProps> = ({ element, elementNam
     setBusy(false);
     if (res.ok) {
       setDraft(null);
+      setDirty(false);
       setMessage({ tone: 'ok', text: 'Deleted.' });
     } else setMessage({ tone: 'error', text: res.error });
   };
@@ -154,8 +213,7 @@ const ClassSkillsAdmin: React.FC<ClassSkillsAdminProps> = ({ element, elementNam
             type="button"
             style={btn('#10b981')}
             onClick={() => {
-              setDraft(newClassSkill(element as ClassSkillElement, newClassSkillId()));
-              setMessage(null);
+              openDraft(newClassSkill(element as ClassSkillElement, newClassSkillId()));
             }}
             disabled={busy}
           >
@@ -180,8 +238,7 @@ const ClassSkillsAdmin: React.FC<ClassSkillsAdminProps> = ({ element, elementNam
             key={s.id}
             type="button"
             onClick={() => {
-              setDraft(s);
-              setMessage(null);
+              openDraft(s);
             }}
             style={{
               ...btn(draft?.id === s.id ? 'rgba(251,191,36,0.18)' : 'rgba(255,255,255,0.05)'),
@@ -456,7 +513,7 @@ const ClassSkillsAdmin: React.FC<ClassSkillsAdminProps> = ({ element, elementNam
                 Delete
               </button>
             )}
-            <button type="button" style={btn('#475569')} onClick={() => setDraft(null)} disabled={busy}>
+            <button type="button" style={btn('#475569')} onClick={() => openDraft(null)} disabled={busy}>
               Close
             </button>
             <button type="button" style={{ ...btn('#10b981'), opacity: errors.length ? 0.5 : 1 }} onClick={save} disabled={busy || errors.length > 0}>

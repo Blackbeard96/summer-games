@@ -300,6 +300,8 @@ export interface PlayerMission {
       manifestId?: string;
       /** Element awakened on an ELEMENTAL_SKILLS step (fire/water/earth/air). */
       element?: string;
+      /** Class Skills chosen on a CLASS_SKILL_CHOICE step. */
+      classSkillIds?: string[];
       /** PP from a SKILLS_MASTERY / ARTIFACTS / POWER_CARD step (idempotent grant). */
       ppGranted?: number;
       visited?: boolean;
@@ -540,6 +542,22 @@ export type MissionSequenceStep =
        * When true, players who finished this step can change Element again
        * (calls selectPlayerElement with allowOverwrite). Default false — affinity is sticky.
        */
+      allowReselect?: boolean;
+    }
+  | {
+      id: string;
+      type: 'CLASS_SKILL_CHOICE';
+      order: number;
+      title?: string;
+      bodyText?: string;
+      prompt?: string;
+      /** Class Skills offered on this step; each player only sees the ones for their element(s). */
+      skillIds: string[];
+      /** How many skills the player picks (default 1). */
+      pickCount?: number;
+      /** When true (default), Next is blocked until the player has chosen. */
+      requireSelection?: boolean;
+      /** When true, players who finished this step can change their pick. */
       allowReselect?: boolean;
     }
   | {

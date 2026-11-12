@@ -2,8 +2,15 @@ import React, { useEffect, useMemo, useState } from 'react';
 import SkillCardArt from '../skillCard/SkillCardArt';
 import type { ClassSkill } from '../../types/classSkills';
 import { CLASS_SKILL_ELEMENTS } from '../../types/classSkills';
-import { IRL_TARGET_LABELS, describeDuration, elementalLevelFromMoves } from '../../utils/classSkillsConfig';
-import { classSkillArtKey, subscribeClassSkills } from '../../utils/classSkillsService';
+import {
+  IRL_TARGET_LABELS,
+  describeDuration,
+  effectiveClassSkillLoadout,
+  elementalLevelFromMoves,
+  skillInLoadout,
+} from '../../utils/classSkillsConfig';
+import { classSkillArtKey, subscribeClassSkillLoadout, subscribeClassSkills } from '../../utils/classSkillsService';
+import { useAuth } from '../../context/AuthContext';
 import '../classFlow/classFlow.css';
 import './classSkills.css';
 
@@ -14,22 +21,30 @@ interface ClassSkillsLoadoutProps {
 
 /** Read-only Class Skills (IRL) list, separate from battle skills. Activation happens in Live Events. */
 const ClassSkillsLoadout: React.FC<ClassSkillsLoadoutProps> = ({ moves }) => {
+  const { currentUser } = useAuth();
+  const uid = currentUser?.uid;
   const [skills, setSkills] = useState<ClassSkill[]>([]);
+  const [loadout, setLoadout] = useState<string[]>([]);
   useEffect(() => subscribeClassSkills(setSkills), []);
+  useEffect(() => (uid ? subscribeClassSkillLoadout(uid, setLoadout) : undefined), [uid]);
 
   const levels = useMemo(() => {
     const out: Record<string, number> = {};
     CLASS_SKILL_ELEMENTS.forEach((el) => (out[el] = elementalLevelFromMoves(moves, el)));
     return out;
   }, [moves]);
-  const mine = skills.filter((s) => s.status === 'active' && (levels[s.element] || 0) > 0);
+  const chosen = effectiveClassSkillLoadout(loadout, skills);
+  const mine = skills.filter((s) => s.status === 'active' && (levels[s.element] || 0) > 0 && skillInLoadout(chosen, s.id));
   if (!mine.length) return null;
 
   return (
     <div className="cf-root cs-root" style={{ marginBottom: '2rem' }} data-testid="class-skills-loadout">
       <h4 className="cf-title">Class Skills (IRL)</h4>
       <div className="cf-sub" style={{ marginBottom: 10 }}>
-        Classroom skills that unlock with your elemental level. Use them in Live Events when your facilitator turns Class Skills on. They never change battle stats.
+        {chosen.length
+          ? 'The classroom skills you chose in missions. '
+          : 'Classroom skills that unlock with your elemental level. '}
+        Use them in Live Events when your facilitator turns Class Skills on. They never change battle stats.
       </div>
       <div className="cs-skill-grid">
         {mine.map((s) => {

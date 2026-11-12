@@ -40,8 +40,10 @@ import {
   consequencePP,
   describeConsequence,
   describeDuration,
+  effectiveClassSkillLoadout,
   elementalLevelFromMoves,
   isRuleEnforceable,
+  parseClassSkillLoadout,
   parseActivation,
   parseActiveRule,
   parseClassSkill,
@@ -82,6 +84,44 @@ export function subscribeClassSkills(cb: (skills: ClassSkill[]) => void, onError
       cb([]);
     }
   );
+}
+
+/* ------------------------------ Player loadout ------------------------------- */
+
+const studentRef = (uid: string) => doc(db, 'students', uid);
+
+export async function getClassSkillLoadout(uid: string): Promise<string[]> {
+  if (!uid) return [];
+  try {
+    const snap = await getDoc(studentRef(uid));
+    return parseClassSkillLoadout(snap.exists() ? snap.data()?.classSkillLoadout : null);
+  } catch {
+    return [];
+  }
+}
+
+export function subscribeClassSkillLoadout(uid: string, cb: (loadout: string[]) => void) {
+  return onSnapshot(
+    studentRef(uid),
+    (snap) => cb(parseClassSkillLoadout(snap.exists() ? snap.data()?.classSkillLoadout : null)),
+    () => cb([])
+  );
+}
+
+/** Player's own pick from a mission step: drops `replace` (their previous pick on that step), then adds `add`. */
+export async function chooseClassSkills(uid: string, add: string[], replace: string[] = []): Promise<Result<string[]>> {
+  try {
+    const next = await runTransaction(db, async (tx) => {
+      const snap = await tx.get(studentRef(uid));
+      const current = parseClassSkillLoadout(snap.exists() ? snap.data()?.classSkillLoadout : null);
+      const merged = Array.from(new Set([...current.filter((id) => !replace.includes(id)), ...add]));
+      tx.set(studentRef(uid), { classSkillLoadout: merged }, { merge: true });
+      return merged;
+    });
+    return { ok: true, value: next };
+  } catch (e) {
+    return fail(e);
+  }
 }
 
 /** Reserves a doc id locally so artwork can be uploaded before the skill's first save. */
@@ -279,13 +319,20 @@ export async function approveClassSkillActivation(
     // Elemental level comes from the player's existing unlocked moves (no separate leveling system).
     // Read outside the transaction: it only changes through progression, never during an approval.
     let casterMoves: unknown = undefined;
+    let casterLoadout: string[] = [];
     const pre = await getDoc(actRef);
     if (pre.exists()) {
+      const casterUid = String(pre.data().casterUid || '');
       try {
-        const movesSnap = await getDoc(doc(db, 'battleMoves', String(pre.data().casterUid || '')));
+        const movesSnap = await getDoc(doc(db, 'battleMoves', casterUid));
         casterMoves = movesSnap.exists() ? movesSnap.data()?.moves ?? null : null;
       } catch {
         casterMoves = undefined;
+      }
+      casterLoadout = await getClassSkillLoadout(casterUid);
+      if (casterLoadout.length) {
+        const all = await getDocs(skillsCol());
+        casterLoadout = effectiveClassSkillLoadout(casterLoadout, all.docs.map((d) => ({ id: d.id })));
       }
     }
     const out = await runTransaction(db, async (tx) => {
@@ -329,6 +376,7 @@ export async function approveClassSkillActivation(
       if (casterMoves === undefined) throw new Error("Couldn't verify the player's elemental level from this account. An admin account can approve this request.");
       const check = checkActivation({
         skill,
+        loadout: casterLoadout,
         config,
         casterUid: act.casterUid,
         casterLevel: elementalLevelFromMoves(casterMoves, skill.element),

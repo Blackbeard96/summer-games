@@ -205,6 +205,7 @@
 }
 .mst-mission-panel[data-step-type='SKILLS_MASTERY'],
 .mst-mission-panel[data-step-type='ELEMENTAL_SKILLS'],
+.mst-mission-panel[data-step-type='CLASS_SKILL_CHOICE'],
 .mst-mission-panel[data-step-type='POWER_CARD'],
 .mst-mission-panel[data-step-type='ARTIFACTS'],
 .mst-mission-panel[data-step-type='LEVEL2_MANIFEST'],

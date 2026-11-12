@@ -905,7 +905,7 @@ export async function setPlayerMissionSequencePlayheadIndex(
 export async function markMissionSequenceStepComplete(
   playerMissionId: string,
   stepId: string,
-  extras?: { skillId?: string; manifestId?: string; element?: string }
+  extras?: { skillId?: string; manifestId?: string; element?: string; classSkillIds?: string[] }
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const ref = doc(db, 'playerMissions', playerMissionId);
@@ -919,6 +919,7 @@ export async function markMissionSequenceStepComplete(
         ...(extras?.skillId ? { skillId: extras.skillId } : {}),
         ...(extras?.manifestId ? { manifestId: extras.manifestId } : {}),
         ...(extras?.element ? { element: extras.element } : {}),
+        ...(extras?.classSkillIds?.length ? { classSkillIds: extras.classSkillIds } : {}),
       },
     });
     return { success: true };

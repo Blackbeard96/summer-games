@@ -52,8 +52,21 @@ const ELEMENTAL_TYPES: Array<{ id: string; name: string; color: string }> = [
 ];
 
 const ElementalMovesAdmin: React.FC<ElementalMovesAdminProps> = ({ isOpen, onClose }) => {
-  const [selectedElement, setSelectedElement] = useState<string | null>(null);
-  const [skillsTab, setSkillsTab] = useState<'in_game' | 'irl'>('in_game');
+  // Remembered for the browser session so a remount of the admin page lands back where the admin was working.
+  const [selectedElement, setSelectedElement] = useState<string | null>(
+    () => sessionStorage.getItem('elementalMovesAdmin.element') || null
+  );
+  const [skillsTab, setSkillsTab] = useState<'in_game' | 'irl'>(() =>
+    sessionStorage.getItem('elementalMovesAdmin.tab') === 'irl' ? 'irl' : 'in_game'
+  );
+  useEffect(() => {
+    try {
+      if (selectedElement) sessionStorage.setItem('elementalMovesAdmin.element', selectedElement);
+      sessionStorage.setItem('elementalMovesAdmin.tab', skillsTab);
+    } catch {
+      /* storage blocked */
+    }
+  }, [selectedElement, skillsTab]);
   const [editingMoves, setEditingMoves] = useState<boolean>(false);
   const [moveEdits, setMoveEdits] = useState<{ [key: string]: MoveEditData }>({});
   const [existingOverrides, setExistingOverrides] = useState<{ [key: string]: MoveEditData }>({});

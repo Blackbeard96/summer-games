@@ -28,7 +28,9 @@ import {
   describeDuration,
   describeReward,
   effectiveApproval,
+  effectiveClassSkillLoadout,
   elementalLevelFromMoves,
+  skillInLoadout,
   formatRuleClock,
   groupRulesByActivation,
   isRuleEnforceable,
@@ -52,6 +54,7 @@ import {
   rejectClassSkillActivation,
   reportPossibleViolation,
   requestClassSkillActivation,
+  subscribeClassSkillLoadout,
   subscribeClassSkills,
   subscribeIrlActivations,
   subscribeIrlPlayerStates,
@@ -114,6 +117,7 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
   const [states, setStates] = useState<Record<string, IrlPlayerState>>({});
   const [teams, setTeams] = useState<IrlTeamOption[]>([]);
   const [levels, setLevels] = useState<Record<string, number> | null>(null);
+  const [loadout, setLoadout] = useState<string[]>([]);
   const [activating, setActivating] = useState<ClassSkill | null>(null);
   const [facTab, setFacTab] = useState<FacTab>('approvals');
   const [collapsed, setCollapsed] = useState(false);
@@ -150,6 +154,11 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
     ];
     return () => unsubs.forEach((u) => u());
   }, [live, sessionId, isFacilitator, currentUserId]);
+
+  useEffect(() => {
+    if (!config.enabled || isFacilitator) return;
+    return subscribeClassSkillLoadout(currentUserId, setLoadout);
+  }, [config.enabled, isFacilitator, currentUserId]);
 
   // Elemental level comes from the player's own unlocked moves (existing progression).
   useEffect(() => {
@@ -242,7 +251,8 @@ const ClassSkillsLivePanel: React.FC<ClassSkillsLivePanelProps> = ({
   const myPP = players.find((p) => p.userId === currentUserId)?.movesEarned || 0;
   const usable = skills.filter((s) => s.status === 'active' && !config.disabledSkillIds.includes(s.id) && s.level <= config.maxLevel);
   const myElements = levels ? CLASS_SKILL_ELEMENTS.filter((el) => (levels[el] || 0) > 0) : [];
-  const mySkills = usable.filter((s) => myElements.includes(s.element));
+  const myLoadout = effectiveClassSkillLoadout(loadout, skills);
+  const mySkills = usable.filter((s) => myElements.includes(s.element) && skillInLoadout(myLoadout, s.id));
   const myPending = pending.filter((a) => a.casterUid === currentUserId);
   const myEffects = activeRules.filter((r) => r.targetUid === currentUserId);
 

@@ -7,7 +7,10 @@ import {
   computeRewardPP,
   consequencePP,
   effectiveApproval,
+  effectiveClassSkillLoadout,
   elementalLevelFromMoves,
+  parseClassSkillLoadout,
+  skillInLoadout,
   groupRulesByActivation,
   isRuleEnforceable,
   newClassSkill,
@@ -283,5 +286,22 @@ describe('Class Skills — analytics (Phase 9)', () => {
       [rule({ skillId: 's1', status: 'violated' }), rule({ skillId: 's1', status: 'completed' })]
     );
     expect(rows).toEqual([{ skillId: 's1', skillName: 'Silent Ember', requested: 2, approved: 1, rejected: 1, completed: 1, violated: 1, ended: 0, blocked: 0 }]);
+  });
+});
+
+describe('Class Skills — mission loadout', () => {
+  it('players with no picks keep every skill; picks restrict activation to the chosen skills', () => {
+    const wall = tpl(CLASS_SKILL_TEMPLATES[0].templateKey!);
+    expect(skillInLoadout([], wall.id)).toBe(true);
+    expect(baseCheck(wall, { loadout: [] }).ok).toBe(baseCheck(wall).ok);
+    expect(baseCheck(wall, { loadout: ['other'] })).toEqual({ ok: false, reason: "You haven't chosen this Class Skill." });
+    expect(baseCheck(wall, { loadout: [wall.id] }).ok).toBe(baseCheck(wall).ok);
+  });
+
+  it('ignores deleted skills and junk in the stored loadout', () => {
+    expect(parseClassSkillLoadout(['a', 'a', '', 3, null, 'b'])).toEqual(['a', 'b']);
+    expect(parseClassSkillLoadout('a')).toEqual([]);
+    expect(effectiveClassSkillLoadout(['gone', 'b'], [{ id: 'b' }])).toEqual(['b']);
+    expect(effectiveClassSkillLoadout(['gone'], [{ id: 'b' }])).toEqual([]);
   });
 });

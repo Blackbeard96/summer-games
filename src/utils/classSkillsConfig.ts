@@ -401,10 +401,33 @@ export function elementalLevelFromMoves(moves: unknown, element: string): number
   return level;
 }
 
+/* ------------------------------ Player loadout -------------------------------- */
+
+/** `students/{uid}.classSkillLoadout`: Class Skills the player chose in missions. */
+export function parseClassSkillLoadout(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return Array.from(new Set(raw.filter((x): x is string => typeof x === 'string' && x.length > 0)));
+}
+
+/**
+ * Chosen skills that still exist in the library. Empty means the player has not chosen any (or all their
+ * picks were deleted), so every skill for their element stays available.
+ */
+export function effectiveClassSkillLoadout(loadout: readonly string[], skills: readonly Pick<ClassSkill, 'id'>[]): string[] {
+  const known = new Set(skills.map((s) => s.id));
+  return loadout.filter((id) => known.has(id));
+}
+
+export function skillInLoadout(loadout: readonly string[] | null | undefined, skillId: string): boolean {
+  return !loadout || loadout.length === 0 || loadout.includes(skillId);
+}
+
 /* -------------------------------- Validation --------------------------------- */
 
 export interface ActivationCheckInput {
   skill: ClassSkill;
+  /** Effective loadout (see effectiveClassSkillLoadout); empty = no restriction. */
+  loadout?: readonly string[] | null;
   config: IrlEventConfig;
   casterUid: string;
   casterLevel: number;
@@ -427,6 +450,7 @@ export function checkActivation(input: ActivationCheckInput): ActivationCheck {
   const { skill, config, casterState, nowMs } = input;
   if (!config.enabled) return { ok: false, reason: 'Class Skills are off for this Live Event.' };
   if (skill.status !== 'active') return { ok: false, reason: 'This skill is not active.' };
+  if (!skillInLoadout(input.loadout, skill.id)) return { ok: false, reason: "You haven't chosen this Class Skill." };
   if (config.disabledSkillIds.includes(skill.id)) return { ok: false, reason: 'This skill is disabled for this Live Event.' };
   if (skill.level > config.maxLevel) return { ok: false, reason: `Only level ${config.maxLevel} and below are allowed in this Live Event.` };
   const blockedType = skill.effects.find((e) => !config.allowedEffectTypes.includes(e.type));
